@@ -36,11 +36,28 @@ function PMS_publicConfig_() {
   };
 }
 
+/**
+ * Serializes an API response as a JSON string.
+ *
+ * google.script.run's structured serializer silently delivers null to the
+ * success handler when a response is large enough to defeat it, which the
+ * client then reads as an empty object. A live section can expose over a
+ * thousand assets plus metrics and config, which crosses that threshold.
+ *
+ * Returning a string bypasses the structured serializer; the client already
+ * JSON-parses string responses in parseServerValue(). JSON.stringify also
+ * throws on a circular structure instead of failing silently, so a real error
+ * surfaces through publicError() rather than an empty payload.
+ */
+function PMS_jsonResponse_(payload) {
+  return JSON.stringify(payload);
+}
+
 function PMS_apiBootstrap() {
   try {
-    return PMS_buildBootstrap_();
+    return PMS_jsonResponse_(PMS_buildBootstrap_());
   } catch (error) {
-    return PMS.Util.publicError(error);
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
   }
 }
 
@@ -83,7 +100,7 @@ function PMS_buildBootstrap_() {
 function PMS_apiRegister(registration) {
   try {
     var context = PMS.Auth.register(registration);
-    return {
+    return PMS_jsonResponse_({
       ok: true,
       registered: true,
       user: {
@@ -100,45 +117,48 @@ function PMS_apiRegister(registration) {
         registeredAt: context.registeredAt,
         lastLoginAt: context.lastLoginAt
       }
-    };
+    });
   } catch (error) {
-    return PMS.Util.publicError(error);
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
   }
 }
 
 function PMS_apiRefreshAssets() {
   var context = PMS.Auth.requireProfile();
-  return { ok: true, assets: PMS.Assets.listEligible(context.section, true) };
+  return PMS_jsonResponse_({ ok: true, assets: PMS.Assets.listEligible(context.section, true) });
 }
 
 function PMS_apiDashboard(filters) {
   PMS.Auth.requireProfile();
   PMS.Records.ensureTrackerBaseline();
-  return { ok: true, metrics: PMS.Metrics.dashboard(filters || {}, PMS.Records.dashboardRecords()) };
+  return PMS_jsonResponse_({
+    ok: true,
+    metrics: PMS.Metrics.dashboard(filters || {}, PMS.Records.dashboardRecords())
+  });
 }
 
 function PMS_apiSaveRecord(payload, mode) {
-  return PMS.Records.save(payload, mode);
+  return PMS_jsonResponse_(PMS.Records.save(payload, mode));
 }
 
 function PMS_apiGetRecord(recordId) {
-  return PMS.Records.clientRecord(recordId);
+  return PMS_jsonResponse_(PMS.Records.clientRecord(recordId));
 }
 
 function PMS_apiRolloverDryRun(nextYear) {
-  return PMS.Rollover.dryRun(nextYear);
+  return PMS_jsonResponse_(PMS.Rollover.dryRun(nextYear));
 }
 
 function PMS_apiExecuteRollover(nextYear, confirmationToken) {
-  return PMS.Rollover.execute(nextYear, confirmationToken);
+  return PMS_jsonResponse_(PMS.Rollover.execute(nextYear, confirmationToken));
 }
 
 function PMS_apiRetryReconciliation(year) {
-  return PMS.Rollover.retryReconciliation(year);
+  return PMS_jsonResponse_(PMS.Rollover.retryReconciliation(year));
 }
 
 function PMS_apiAdminSetUserSection(userEmail, sectionKey) {
-  return PMS.Auth.adminSetUserSection(userEmail, sectionKey);
+  return PMS_jsonResponse_(PMS.Auth.adminSetUserSection(userEmail, sectionKey));
 }
 
 function PMS_adminSetup() {
@@ -223,7 +243,11 @@ function PMS_logSignInReport() {
       assetCount: (bootstrap.assets || []).length,
       recentRecordCount: (bootstrap.recentRecords || []).length,
       hasConfig: Boolean(bootstrap.config),
-      hasMetrics: Boolean(bootstrap.metrics)
+      hasMetrics: Boolean(bootstrap.metrics),
+      serializedBytes: JSON.stringify(bootstrap).length,
+      assetBytes: JSON.stringify(bootstrap.assets || []).length,
+      metricsBytes: JSON.stringify(bootstrap.metrics || null).length,
+      configBytes: JSON.stringify(bootstrap.config || null).length
     };
   } catch (error) {
     report.bootstrap = {
