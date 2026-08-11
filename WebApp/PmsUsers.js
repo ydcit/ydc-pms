@@ -623,6 +623,66 @@ PMS.Users = (function () {
     return allProfilesUnlocked(usersSheet(false));
   }
 
+  /**
+   * Read-only troubleshooting snapshot of the roster.
+   *
+   * Reports which workbook and tab the server actually reads, every email it
+   * can see, and any row it had to skip. Never throws and never writes, so it
+   * stays usable while sign-in is broken.
+   */
+  function directoryDiagnostics() {
+    var result = {
+      spreadsheetId: PMS.CONFIG.SPREADSHEET_ID,
+      spreadsheetName: '',
+      expectedTab: SHEET_NAME,
+      tabExists: false,
+      tabNames: [],
+      lastRow: 0,
+      rosterEmails: [],
+      skippedRows: []
+    };
+    var book;
+    try {
+      book = spreadsheet();
+      result.spreadsheetName = book.getName();
+      result.tabNames = book.getSheets().map(function (tab) { return tab.getName(); });
+    } catch (error) {
+      result.error = 'Could not open the spreadsheet: ' + error.message;
+      return result;
+    }
+    var sheet = book.getSheetByName(SHEET_NAME);
+    if (!sheet) {
+      result.error = 'No tab named "' + SHEET_NAME + '" exists in this spreadsheet.';
+      return result;
+    }
+    result.tabExists = true;
+    result.lastRow = sheet.getLastRow();
+    if (result.lastRow < 2) {
+      result.error = 'The "' + SHEET_NAME + '" tab has no data rows.';
+      return result;
+    }
+    var width = Math.min(sheet.getLastColumn(), COLUMNS.length);
+    var values = sheet.getRange(2, 1, result.lastRow - 1, COLUMNS.length).getValues();
+    result.headerRow = sheet.getRange(1, 1, 1, width).getDisplayValues()[0];
+    values.forEach(function (row, index) {
+      var rowNumber = index + 2;
+      var rawEmail = String(row[0] === undefined || row[0] === null ? '' : row[0]).trim();
+      if (!rawEmail) return;
+      try {
+        var profile = rowToProfile(row, rowNumber, true);
+        result.rosterEmails.push({
+          row: rowNumber,
+          email: profile.email,
+          section: profile.section || '(none)',
+          active: profile.active
+        });
+      } catch (error) {
+        result.skippedRows.push({ row: rowNumber, rawEmail: rawEmail, reason: error.message });
+      }
+    });
+    return result;
+  }
+
   function touchLogin(email, access) {
     var details = access || {};
     var timestamp = PMS.Util.nowIso();
@@ -660,6 +720,7 @@ PMS.Users = (function () {
     migrateLegacyProfiles: migrateLegacyProfiles,
     findByEmail: findByEmail,
     listProfiles: listProfiles,
+    directoryDiagnostics: directoryDiagnostics,
     upsert: upsert,
     update: update,
     touchLogin: touchLogin,

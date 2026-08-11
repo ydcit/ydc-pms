@@ -287,6 +287,16 @@ PMS.Auth = (function () {
         profile = { lookupError: error.message };
       }
     }
+    var directory;
+    try {
+      directory = PMS.Users.directoryDiagnostics();
+    } catch (error) {
+      directory = { error: error.message };
+    }
+    var administrators = configuredAdminEmails();
+    var canRunSetup = resolved
+      ? PMS.CONFIG.ADMIN_EMAILS.map(PMS.Util.normalizeEmail).indexOf(resolved) >= 0
+      : false;
     return {
       activeUserEmail: active,
       effectiveUserEmail: effective,
@@ -297,7 +307,10 @@ PMS.Auth = (function () {
       rosterSection: profile && profile.section ? profile.section : '',
       rosterActive: profile ? profile.active !== false : null,
       isConfiguredAdmin: resolved ? isAdmin(resolved) : false,
-      administrators: configuredAdminEmails()
+      canRunSetupDeployment: canRunSetup,
+      staticBootstrapAdmins: PMS.CONFIG.ADMIN_EMAILS.slice(),
+      administrators: administrators,
+      directory: directory
     };
   }
 
