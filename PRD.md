@@ -101,27 +101,37 @@ All authorization is enforced again on the server. The browser must never be tru
 ### 6.1 Required behavior
 
 1. The deployment is restricted to the YDC Google Workspace organization.
-2. The server first reads the active user's email and rejects an email outside the configured domain, `ydc.com.ph`. If Google returns a blank email, the user must prove control of an exact `@ydc.com.ph` mailbox with a short-lived email code before the server binds that mailbox to the current temporary Google user key. An unverified email is never trusted, and a fallback session never receives administrator privileges.
-3. The user's email is editable only in the pre-authentication email-code challenge; it becomes read-only immediately after verification and cannot be changed during profile registration.
-4. The user's name is resolved automatically and displayed as read-only.
-5. A first-time user confirms a display name and chooses one IT section in a registration screen. The resulting profile is stored in `PMS Users` and subsequent visits go directly to the dashboard.
-6. The chosen section is persisted and subsequently auto-filled.
-7. The server uses the persisted section, not a submitted browser value, when loading and validating assets.
+2. The server reads the signed-in Google account email from the Apps Script `Session` and rejects an email outside the configured domain, `ydc.com.ph`.
+3. The email must already exist in the `PMS Users` sheet. A user who is not on that roster is refused with an actionable message and no profile is created. A configured administrator is always permitted so the deployment owner can never be locked out of an empty or damaged roster.
+4. There is no email code, one-time password, or second factor. Signing in to the domain-restricted web app with a rostered YDC account is the whole authentication step.
+5. The user's email is never accepted from the browser and is always read-only in the interface.
+6. The user's name is resolved automatically and displayed as read-only.
+7. A rostered user whose row has no IT section yet confirms a display name and chooses one section in a registration screen. The section is written to `PMS Users` and subsequent visits go directly to the dashboard.
+8. The chosen section is persisted and subsequently auto-filled.
+9. The server uses the persisted section, not a submitted browser value, when loading and validating assets.
 
 ### 6.2 Google Apps Script identity constraint
 
-`Session.getActiveUser().getEmail()` can return a blank value when the web app executes as its owner, even for a signed-in Workspace user. The app therefore retains owner execution to keep the workbook private and uses a six-digit, ten-minute, single-use mailbox challenge when Session identity is unavailable.
+`Session.getActiveUser().getEmail()` returns a blank value unless two conditions hold: the visitor belongs to the same Workspace domain as the script owner, and the script has been granted the `https://www.googleapis.com/auth/userinfo.email` scope. Apps Script does not reliably infer that scope from source code, so the manifest declares it explicitly. `Session.getEffectiveUser().getEmail()` is used as a secondary source so owner-side editor setup always resolves.
 
-Google Apps Script can expose the active user's email, but not the user's full name. The registration screen therefore pre-fills an email-derived display label and lets the user confirm or correct that name once. The authoritative email comes either directly from Google Session or from a successfully verified YDC mailbox challenge.
+Google Apps Script can expose the active user's email, but not the user's full name. The registration screen therefore pre-fills an email-derived display label and lets the user confirm or correct that name once.
 
-The recommended deployment model is:
+The deployment model is:
 
 - execute as the deploying owner so technicians do not need direct edit access to the workbook;
 - allow access only within the YDC Workspace organization;
-- use Session email when available and the verified-mailbox fallback otherwise;
-- enforce the allowed domain in server code even when the deployment is domain-restricted.
+- declare `userinfo.email` in the manifest so Session identity is actually populated;
+- enforce the allowed domain and the `PMS Users` roster in server code even when the deployment is domain-restricted.
+
+Because identity now comes only from the signed-in Google account, no session can be established without a live Google email. The former blank-email fallback, its temporary-key binding, and its administrator downgrade rule are therefore obsolete.
 
 Official references: [Apps Script web apps](https://developers.google.com/apps-script/guides/web) and [Apps Script Session identity](https://developers.google.com/apps-script/reference/base/session).
+
+### 6.3 Access provisioning
+
+Adding a technician is a single administrator action: add the person's `@ydc.com.ph` address to a new row in `PMS Users`. Leaving `Active` blank means active; only an explicit `FALSE` disables an account. The technician then picks their IT section once on first sign-in.
+
+A malformed row must never block sign-in for anyone else, so the directory reader skips unreadable rows with a logged warning instead of failing the whole lookup.
 
 ## 7. Primary user flow
 
@@ -429,7 +439,9 @@ Headers are created once and validated before any append. Writes use a script lo
 
 ### 11.1 Registration storage decision
 
-Registration profiles are stored in the dedicated `PMS Users` tab, one row per normalized YDC email. It contains the saved display name, locked IT section, role, active state, audit timestamps, and a hidden hash of Google's temporary user key. Existing Script Property profiles are migrated once and retained only as rollback evidence. An explicitly configured administrator can change a user's section through the server API.
+Registration profiles are stored in the dedicated `PMS Users` tab, one row per normalized YDC email. It contains the saved display name, locked IT section, role, active state, and audit timestamps. The tab doubles as the access roster: presence of an email is what authorizes sign-in.
+
+The hidden hash of Google's temporary user key is retained as an audit value only. It is no longer a credential and is never used to resolve or authenticate a profile. Existing Script Property profiles are migrated once and retained only as rollback evidence. An explicitly configured administrator can change a user's section through the server API.
 
 ## 12. UX and visual design
 
@@ -447,7 +459,7 @@ Registration profiles are stored in the dedicated `PMS Users` tab, one row per n
 
 ### Security and privacy
 
-- Domain restriction and server-side domain validation.
+- Domain restriction, server-side domain validation, and server-side roster validation.
 - Identity, section, and role never accepted from the browser as authoritative.
 - Output escaped before rendering.
 - Spreadsheet ID and allowed sections kept in server configuration.
@@ -476,9 +488,12 @@ The workbook remains on its existing time zone. The application logic and Apps S
 
 ## 14. Edge cases
 
-- Blank signed-in email → resolve through an existing unique temporary-key binding or require a six-digit code sent to an exact `@ydc.com.ph` mailbox. Preserve the existing profile and section; downgrade every fallback administrator session to technician permissions until live identity returns.
+- Blank signed-in email → refuse with an `IDENTITY_UNAVAILABLE` message telling the user to open the domain-restricted deployment and approve access. No session is created and no data is written.
 - Non-YDC email → access denied.
-- Unregistered user → registration screen only.
+- YDC email that is not on the `PMS Users` roster → refuse with `ACCESS_NOT_PROVISIONED` and instructions to ask an administrator to add the email.
+- Roster row explicitly marked `Active = FALSE` → refuse with `ACCOUNT_DISABLED`.
+- Malformed roster row → skipped with a logged warning; other users are unaffected.
+- Rostered user with no section yet → registration screen only.
 - Wrong-section asset supplied manually → server rejection.
 - Asset no longer `INPROD` at submit → refresh and require a new selection.
 - Blank master location → require observed location and flag the record.
@@ -492,29 +507,30 @@ The workbook remains on its existing time zone. The application logic and Apps S
 
 ## 15. Acceptance criteria
 
-1. A signed-in allowed-domain user is identified without entering an email.
-2. A first-time user can register exactly one IT section.
-3. A registered Service Desk user cannot retrieve or submit an Infrastructure & Security asset, and vice versa.
-4. The asset combobox contains only nonblank tags whose current column-B status is `INPROD`.
-5. Status and master location come from the authoritative PMS tab and cannot be edited directly.
-6. Maintenance date accepts valid past dates, rejects future dates, and derives the correct year/cycle at boundary dates.
-7. Every listed peripheral field and checklist item is represented in the response schema.
-8. N/A checklist items are explicit and excluded from progress; below 100% saves as `INCOMPLETE`, while completion requires 100% of applicable items.
-9. Assessment result, findings, action, and recommendation follow the stated conditional rules.
-10. A saved draft creates or updates exactly one validated response row and sets the last column to an `INCOMPLETE` progress status.
-11. Only a 100% valid record can become `COMPLETED`.
-12. Completion writes the full Findings, Action Taken, and Recommendation block to the correct cycle Remarks cell, preserving existing content.
-13. Completion then checks the paired T1/T2/T3 checkbox on the asset's exact section row.
-14. A normal completion modifies no existing workbook cell other than that matched checkbox and paired remarks cell; annual D2/D:I changes require the separate administrator rollover confirmation.
-15. A tracker synchronization failure cannot leave the response row marked `COMPLETED`.
-16. Dashboard counts unique eligible assets rather than rows or total inventory.
-17. Repeat maintenance does not inflate compliance or duplicate the same remarks block.
-18. Modal, searchable dropdown, and checklist are usable by keyboard and on mobile.
-19. The existing `Code.js` file remains unchanged.
-20. A maintenance date of January 1, 2027 derives `2027-T1` without a deployment or code change.
-21. A new-year completion submitted before rollover is safely stored as `SYNC REQUIRED` and never changes the prior year's tracker.
-22. The administrator rollover preserves prior-year history, updates the tracker year, resets only D:I term cells, and reconciles waiting new-year records.
-23. Repeating an already completed rollover is rejected and cannot clear the active year twice.
+1. A signed-in allowed-domain user on the `PMS Users` roster is identified without entering an email, a code, or any second factor.
+2. A YDC user who is not on the roster is refused with a clear provisioning message and creates no profile row.
+3. A first-time rostered user can register exactly one IT section.
+4. A registered Service Desk user cannot retrieve or submit an Infrastructure & Security asset, and vice versa.
+5. The asset combobox contains only nonblank tags whose current column-B status is `INPROD`.
+6. Status and master location come from the authoritative PMS tab and cannot be edited directly.
+7. Maintenance date accepts valid past dates, rejects future dates, and derives the correct year/cycle at boundary dates.
+8. Every listed peripheral field and checklist item is represented in the response schema.
+9. N/A checklist items are explicit and excluded from progress; below 100% saves as `INCOMPLETE`, while completion requires 100% of applicable items.
+10. Assessment result, findings, action, and recommendation follow the stated conditional rules.
+11. A saved draft creates or updates exactly one validated response row and sets the last column to an `INCOMPLETE` progress status.
+12. Only a 100% valid record can become `COMPLETED`.
+13. Completion writes the full Findings, Action Taken, and Recommendation block to the correct cycle Remarks cell, preserving existing content.
+14. Completion then checks the paired T1/T2/T3 checkbox on the asset's exact section row.
+15. A normal completion modifies no existing workbook cell other than that matched checkbox and paired remarks cell; annual D2/D:I changes require the separate administrator rollover confirmation.
+16. A tracker synchronization failure cannot leave the response row marked `COMPLETED`.
+17. Dashboard counts unique eligible assets rather than rows or total inventory.
+18. Repeat maintenance does not inflate compliance or duplicate the same remarks block.
+19. Modal, searchable dropdown, and checklist are usable by keyboard and on mobile.
+20. The existing `Code.js` file remains unchanged.
+21. A maintenance date of January 1, 2027 derives `2027-T1` without a deployment or code change.
+22. A new-year completion submitted before rollover is safely stored as `SYNC REQUIRED` and never changes the prior year's tracker.
+23. The administrator rollover preserves prior-year history, updates the tracker year, resets only D:I term cells, and reconciles waiting new-year records.
+24. Repeating an already completed rollover is rejected and cannot clear the active year twice.
 
 ## 16. Implemented decisions
 

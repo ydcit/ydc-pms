@@ -36,9 +36,8 @@ Server-side Apps Script:
 
 - `PmsConfig.js` — workbook ID, allowed domain, section-to-tab mapping, cycles, checklist schema.
 - `PmsWebApp.js` — web-app entry point and HTML partial loader.
-- `PmsAuth.js` — identity, domain checks, registration, role checks.
-- `PmsIdentity.js` — short-lived verified-mailbox fallback, rate limits, and temporary-key binding.
-- `PmsUsers.js` — persistent user directory, legacy-profile migration, and identity continuity binding.
+- `PmsAuth.js` — Google-account identity, domain checks, roster gating, registration, role checks.
+- `PmsUsers.js` — persistent user directory, access roster, and legacy-profile migration.
 - `PmsAssets.js` — bounded asset reads, normalization, section filtering, revalidation.
 - `PmsRecords.js` — response schema, append, idempotency, duplicate/reinspection logic.
 - `PmsTracker.js` — controlled term-checkbox and full-assessment remarks synchronization.
@@ -78,17 +77,20 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 ### Work
 
 - Configure a test deployment restricted to the YDC Workspace organization.
-- Prove active-user email behavior with at least two non-owner YDC accounts.
+- Declare `userinfo.email` in the manifest so Session identity is populated, and prove active-user email behavior with at least two non-owner YDC accounts.
 - Enforce the allowed domain on the server.
+- Require the signed-in email to exist in `PMS Users`, always permitting configured administrators.
 - Resolve the display name using the approved approach.
 - Implement first-use display-name and section registration backed by `PMS Users`.
-- Bind a hashed temporary Google user key so returning technicians survive blank-email sessions; when the key is unmapped, verify an exact YDC mailbox with a short-lived single-use code before binding it.
 - Lock section changes behind administrator authorization.
-- Add access-denied, identity-unavailable, and authorization-required states.
+- Add access-denied, not-provisioned, account-disabled, identity-unavailable, and authorization-required states.
 
 ### Test cases
 
-- Allowed YDC account.
+- Allowed YDC account on the roster.
+- Allowed YDC account absent from the roster.
+- Roster row explicitly marked inactive.
+- Malformed roster row alongside a valid one.
 - Non-YDC account.
 - Blank/unavailable active email.
 - First-time registration for each section.
@@ -97,7 +99,8 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 
 ### Exit criteria
 
-- Two test users are reliably identified.
+- Two test users are reliably identified from their Google account alone, with no code prompt.
+- A non-rostered YDC account is refused with an actionable provisioning message.
 - Cross-section server calls are rejected.
 - No technician needs direct workbook edit access under the selected deployment model.
 
@@ -306,8 +309,10 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 
 | Risk | Mitigation |
 | --- | --- |
-| Active user email unavailable in chosen deployment mode | Domain test deployment before building persistence; block rather than guess identity |
+| Active user email unavailable in chosen deployment mode | Declare `userinfo.email` in the manifest, fall back to `getEffectiveUser()`, and block rather than guess identity; `PMS_diagnoseSignIn` reports what Google actually returned |
 | Full Google account name unavailable from Session | Let the user confirm an email-derived display name once and persist it in `PMS Users` |
+| Unapproved domain account opens the deployment | Require a `PMS Users` roster row before any session is created |
+| One malformed roster row blocks all sign-ins | Skip unreadable rows with a logged warning; validate strictly only for the email being looked up |
 | User self-registers to the wrong section | One-time locked registration plus administrator reset and server enforcement |
 | Most IT-IS locations are blank | Conditional observed-location capture and data-quality flag |
 | Existing dashboard includes non-production assets | New metric definitions filter eligibility and de-duplicate assets |

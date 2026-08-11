@@ -44,28 +44,8 @@ function PMS_apiBootstrap() {
   }
 }
 
-function PMS_apiRequestIdentityCode(payload) {
-  try {
-    return PMS.Identity.requestCode(payload);
-  } catch (error) {
-    return PMS.Util.publicError(error);
-  }
-}
-
-function PMS_apiVerifyIdentityCode(payload) {
-  try {
-    PMS.Identity.verifyCode(payload);
-    return { ok: true, bootstrap: PMS_buildBootstrap_() };
-  } catch (error) {
-    return PMS.Util.publicError(error);
-  }
-}
-
 function PMS_buildBootstrap_() {
   var context = PMS.Auth.getContext();
-  if (context.active === false) {
-    PMS.Util.fail('Your PMS account is inactive. Ask a PMS administrator for access.', 'ACCOUNT_DISABLED');
-  }
   var response = {
     ok: true,
     registered: context.registered,
@@ -75,7 +55,7 @@ function PMS_buildBootstrap_() {
       isAdmin: context.isAdmin,
       role: context.role,
       active: context.active,
-      identitySource: context.identitySource || 'GOOGLE_ACCOUNT'
+      identitySource: 'GOOGLE_ACCOUNT'
     },
     profile: {
       section: context.section,
@@ -196,16 +176,24 @@ function PMS_setupDeployment_() {
   var admins = PMS.Auth.configuredAdminEmails();
   if (admins.indexOf(email) < 0) admins.push(email);
   PropertiesService.getScriptProperties().setProperty(PMS.CONFIG.ADMIN_EMAILS_PROPERTY, admins.join(','));
-  var identityReadiness = PMS.Identity.readiness();
   var userMigration = PMS.Users.migrateLegacyProfiles();
   return {
     ok: true,
     administrator: email,
     administrators: admins,
-    identityVerification: identityReadiness,
+    identity: PMS.Auth.diagnostics(),
     userDirectory: userMigration,
     message: 'Deployment administrator configured. Deploy the web app to execute as the owner and restrict access to ydc.com.ph.'
   };
+}
+
+/**
+ * Read-only sign-in troubleshooting helper. Run from the Apps Script editor to
+ * confirm that Google exposes the account email and that the email is on the
+ * PMS Users roster. Changes no data.
+ */
+function PMS_diagnoseSignIn() {
+  return PMS.Auth.diagnostics();
 }
 
 function PMS_continueReconciliation_() {

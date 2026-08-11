@@ -6,33 +6,53 @@
 - Current deployment: version 6, `AKfycbwLz_VBuTj_ats0vqlhQ_9VBMtfC_cLpwFDl7T07wrXa1Y0fQLeZQZcKNu0cF8PpWkrCA`
 - Web app: `https://script.google.com/macros/s/AKfycbwLz_VBuTj_ats0vqlhQ_9VBMtfC_cLpwFDl7T07wrXa1Y0fQLeZQZcKNu0cF8PpWkrCA/exec`
 
-HEAD contains the verified-email fallback and is waiting for owner MailApp authorization plus the next versioned deployment. Version 6 does not yet include that fallback.
+HEAD replaces the email-code fallback with Google-account-only sign-in and needs a new versioned deployment plus one re-authorization, because the manifest now declares OAuth scopes explicitly. The `MailApp` scope is no longer requested, so "Send email as you" is no longer part of consent.
 
 The endpoint has been verified to require Google sign-in. The isolated project intentionally contains no legacy `Code.js`, so its public `updateDropdown()` function is not exposed by this web app.
 
 `PMS Users` must remain a normal cell range, not a native Google Sheets Table with typed columns. The app applies classic dropdown, checkbox, and text-format rules through `SpreadsheetApp`; typed table columns reject those cell-level operations. Version 6 also allocates new profiles from the first blank Email row so placeholder or manually formatted rows cannot force registrations to the bottom of the sheet.
 
+## Sign-in model
+
+A user is allowed in when all three are true:
+
+1. they are signed in to a `@ydc.com.ph` Google account;
+2. they can open the domain-restricted deployment;
+3. their email exists as a row in the `PMS Users` sheet and is not explicitly marked `Active = FALSE`.
+
+There is no verification code, one-time password, or second factor. Provisioning a technician means adding their email to `PMS Users`; leaving `Active` blank counts as active. The technician picks their IT section once on first sign-in.
+
+Configured administrators in `PMS_ADMIN_EMAILS` are always allowed even when absent from the roster, so the owner cannot be locked out of an empty or damaged sheet.
+
+To let any domain account self-register instead of requiring a roster row, set `REQUIRE_DIRECTORY_ENTRY: false` in `PmsConfig.js`.
+
 ## One-time owner setup
 
 1. Open the Apps Script project as the intended deployment owner.
-2. Run `PMS_setupDeployment` from the editor and approve every requested scope, including **Send email as you**. This guarded entry point writes the configured `@ydc.com.ph` deployment administrator to the private `PMS_ADMIN_EMAILS` Script Property, initializes the OTP secret, reports the remaining MailApp quota, verifies `PMS Users`, and migrates any legacy Script Property profiles.
-3. Deploy a test web app that **executes as the deployment owner** and is accessible **only to users in the YDC Workspace organization**.
+2. Run `PMS_setupDeployment` from the editor and approve the requested scopes. Consent must include **See your primary Google Account email address** — that is the `userinfo.email` scope that makes `Session.getActiveUser().getEmail()` return a value instead of an empty string. This guarded entry point writes the configured `@ydc.com.ph` deployment administrator to the private `PMS_ADMIN_EMAILS` Script Property, verifies `PMS Users`, migrates any legacy Script Property profiles, and reports identity diagnostics.
+3. Deploy a **new version** of the web app that **executes as the deployment owner** and is accessible **only to users in the YDC Workspace organization**. A new version is required for the manifest scope change to take effect.
 4. Open the deployment as the owner, confirm the display name, register the owner's actual IT section once, and confirm later visits open the dashboard without registration. The first authorized bootstrap creates the one-time legacy baseline in `PMS Records`; it does not change an existing tracker tab.
+
+## Troubleshooting sign-in
+
+Run `PMS_diagnoseSignIn` from the Apps Script editor. It changes no data and reports:
+
+- `activeUserEmail` / `effectiveUserEmail` — what Google actually exposes. If `activeUserEmail` is empty for a domain user, the `userinfo.email` scope was not granted, or the running deployment predates the manifest change; re-authorize and deploy a new version.
+- `onRoster` / `rosterActive` / `rosterSection` — whether the resolved email is provisioned in `PMS Users`.
+- `isConfiguredAdmin` / `administrators` — the effective administrator allowlist.
+
+Error codes surfaced to the browser map directly to a cause: `IDENTITY_UNAVAILABLE` (Google gave no email), `ACCESS_DENIED` (wrong domain), `ACCESS_NOT_PROVISIONED` (not on the roster), `ACCOUNT_DISABLED` (`Active = FALSE`).
 
 ## Required identity and authorization pilot
 
 Test with at least two non-owner `@ydc.com.ph` accounts, one from each IT section:
 
-- when Google exposes the active visitor email, it is used directly;
-- when Google returns a blank email, the user receives and verifies a six-digit code at the entered `@ydc.com.ph` mailbox;
-- each user can register only once and sees only the registered section's current `INPROD` assets;
+- each account is added to `PMS Users` first, then signs in with no code prompt;
+- each user can register a section only once and sees only that section's current `INPROD` assets;
+- a YDC account that is not on the roster is refused with the provisioning message;
 - manually changing a browser payload cannot select the other section or a non-`INPROD` asset;
 - neither technician sees administrator rollover controls;
 - the configured owner is the only administrator unless another email is explicitly added to the `PMS_ADMIN_EMAILS` Script Property.
-
-The email-code fallback binds only the current server-derived temporary Google user key. Codes expire after ten minutes, are single-use, and do not grant administrator access. Returning users normally open the saved profile directly; Google rotates temporary keys periodically, so a user may need to verify the mailbox again without repeating section registration. Administrator actions still require a live Google email.
-
-Current product policy allows any verified `@ydc.com.ph` mailbox that can open the domain deployment to self-register and choose one IT section. If access must be limited to an IT-only roster, add a pre-approved email/group check before wider rollout.
 
 ## Controlled functional pilot
 

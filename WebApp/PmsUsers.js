@@ -13,6 +13,9 @@ PMS.Users = (function () {
   var PRESENTATION_PROPERTY = 'PMS_USERS_PRESENTATION_V2';
   var LOCK_TIMEOUT_MS = 30000;
   var LAST_LOGIN_WRITE_INTERVAL_MS = 5 * 60 * 1000;
+  // EMAIL_OTP and TEMPORARY_KEY are retired sign-in sources. They remain
+  // accepted values so historical rows written before the email-only sign-in
+  // change still parse instead of failing validation.
   var IDENTITY_SOURCES = ['GOOGLE_ACCOUNT', 'EMAIL_OTP', 'TEMPORARY_KEY', 'LEGACY_MIGRATION', 'ADMIN_UPDATE'];
   var COLUMNS = Object.freeze([
     Object.freeze({ key: 'email', label: 'Email' }),
@@ -289,7 +292,7 @@ PMS.Users = (function () {
     return IDENTITY_SOURCES.indexOf(source) >= 0 ? source : '';
   }
 
-  function rowToProfile(row, rowNumber) {
+  function rowToProfile(row, rowNumber, lenient) {
     var raw = {};
     COLUMNS.forEach(function (column, index) { raw[column.key] = row[index]; });
     var email = normalizeAndValidateEmail(raw.email);
@@ -298,16 +301,18 @@ PMS.Users = (function () {
       _rowNumber: rowNumber,
       email: email,
       name: cleanStoredText(raw.name, 250) || displayNameFromEmail(email),
-      section: normalizeSection(raw.section, true),
+      section: normalizeSection(raw.section, !lenient),
       role: admin ? 'ADMIN' : 'TECHNICIAN',
       isAdmin: admin,
-      active: booleanValue(raw.active, false),
+      // A row added by hand normally leaves Active blank. Only an explicit
+      // FALSE disables access, so a manually provisioned user is not locked out.
+      active: booleanValue(raw.active, true),
       registeredAt: cleanStoredText(raw.registeredAt, 100),
       createdAt: cleanStoredText(raw.createdAt, 100),
       updatedAt: cleanStoredText(raw.updatedAt, 100),
       lastLoginAt: cleanStoredText(raw.lastLoginAt, 100),
       updatedBy: cleanStoredText(raw.updatedBy, 320),
-      identityKeyHash: normalizeIdentityHash(raw.identityKeyHash, true),
+      identityKeyHash: normalizeIdentityHash(raw.identityKeyHash, false),
       identityBoundAt: cleanStoredText(raw.identityBoundAt, 100),
       identitySource: normalizeIdentitySource(raw.identitySource)
     };
@@ -353,7 +358,13 @@ PMS.Users = (function () {
       .getDisplayValues();
     var rows = [];
     values.forEach(function (row, index) {
-      if (PMS.Util.normalizeEmail(row[0]) === email) rows.push(index + 2);
+      var candidate = '';
+      try {
+        candidate = PMS.Util.normalizeEmail(row[0]);
+      } catch (error) {
+        return;
+      }
+      if (candidate === email) rows.push(index + 2);
     });
     return rows;
   }
@@ -374,16 +385,38 @@ PMS.Users = (function () {
     return matches.length ? profileAtRow(sheet, matches[0]) : null;
   }
 
+  /**
+   * Reads every usable profile row.
+   *
+   * A single malformed row must never break sign-in for the whole directory, so
+   * unreadable rows are skipped with a warning instead of throwing. A specific
+   * lookup by email still validates strictly through findByEmailUnlocked().
+   */
   function allProfilesUnlocked(sheet) {
     if (!sheet || sheet.getLastRow() < 2) return [];
     var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, COLUMNS.length).getValues();
     var profiles = [];
     var seen = {};
     values.forEach(function (row, index) {
-      if (!PMS.Util.cleanText(row[0], 320)) return;
-      var profile = rowToProfile(row, index + 2);
+      var rowNumber = index + 2;
+      var hasEmail = false;
+      try {
+        hasEmail = Boolean(PMS.Util.cleanText(row[0], 320));
+      } catch (error) {
+        console.warn('Skipping PMS Users row ' + rowNumber + ' with an unreadable email: ' + error.message);
+        return;
+      }
+      if (!hasEmail) return;
+      var profile;
+      try {
+        profile = rowToProfile(row, rowNumber, true);
+      } catch (error) {
+        console.warn('Skipping malformed PMS Users row ' + rowNumber + ': ' + error.message);
+        return;
+      }
       if (seen[profile.email]) {
-        PMS.Util.fail('Duplicate PMS Users rows exist for ' + profile.email + '.', 'DATA_INTEGRITY_ERROR');
+        console.warn('Skipping duplicate PMS Users row ' + rowNumber + ' for ' + profile.email + '.');
+        return;
       }
       seen[profile.email] = true;
       profiles.push(profile);
@@ -450,18 +483,6 @@ PMS.Users = (function () {
     sheet.getRange(targetRow, 1, 1, COLUMNS.length).setValues([profileToRow(profile)]);
     profile._rowNumber = targetRow;
     return profile;
-  }
-
-  function enforceUniqueIdentityUnlocked(sheet, profile) {
-    if (!profile.identityKeyHash) return;
-    allProfilesUnlocked(sheet).forEach(function (candidate) {
-      if (candidate.email !== profile.email && candidate.identityKeyHash === profile.identityKeyHash) {
-        PMS.Util.fail(
-          'The signed-in identity is already bound to another PMS user.',
-          'IDENTITY_CONFLICT'
-        );
-      }
-    });
   }
 
   function legacyProfileKey(email) {
@@ -578,7 +599,6 @@ PMS.Users = (function () {
       if (!changed) return null;
       changed.email = email;
       var normalized = normalizeForWrite(changed, existing);
-      enforceUniqueIdentityUnlocked(sheet, normalized);
       return writeProfileUnlocked(sheet, normalized, existing ? existing._rowNumber : 0);
     });
   }
@@ -598,36 +618,9 @@ PMS.Users = (function () {
     return findByEmailUnlocked(usersSheet(false), email);
   }
 
-  function findByIdentityKey(hashValue) {
-    var hash = normalizeIdentityHash(hashValue, false);
-    if (!hash) return null;
+  function listProfiles() {
     ensureLegacyMigration();
-    var matches = allProfilesUnlocked(usersSheet(false)).filter(function (profile) {
-      return profile.active && profile.identityKeyHash === hash;
-    });
-    if (matches.length > 1) {
-      PMS.Util.fail(
-        'The signed-in identity is bound to more than one active PMS user.',
-        'IDENTITY_CONFLICT'
-      );
-    }
-    return matches.length ? matches[0] : null;
-  }
-
-  function findAnyByIdentityKey(hashValue) {
-    var hash = normalizeIdentityHash(hashValue, false);
-    if (!hash) return null;
-    ensureLegacyMigration();
-    var matches = allProfilesUnlocked(usersSheet(false)).filter(function (profile) {
-      return profile.identityKeyHash === hash;
-    });
-    if (matches.length > 1) {
-      PMS.Util.fail(
-        'The signed-in identity is bound to more than one PMS user.',
-        'IDENTITY_CONFLICT'
-      );
-    }
-    return matches.length ? matches[0] : null;
+    return allProfilesUnlocked(usersSheet(false));
   }
 
   function touchLogin(email, access) {
@@ -666,8 +659,7 @@ PMS.Users = (function () {
     },
     migrateLegacyProfiles: migrateLegacyProfiles,
     findByEmail: findByEmail,
-    findByIdentityKey: findByIdentityKey,
-    findAnyByIdentityKey: findAnyByIdentityKey,
+    listProfiles: listProfiles,
     upsert: upsert,
     update: update,
     touchLogin: touchLogin,

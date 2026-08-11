@@ -21,14 +21,6 @@
       dirty: false,
       modalOpen: false,
       busy: false,
-      identityUnavailable: false,
-      identityRecovery: {
-        requestedEmail: '',
-        sending: false,
-        verifying: false,
-        cooldownUntil: 0,
-        cooldownTimer: null
-      },
       lastFocus: null,
       dryRun: null,
       submittedCompletion: ''
@@ -180,11 +172,6 @@
       return code.toUpperCase();
     }
 
-    function isIdentityUnavailable(error) {
-      if (errorCode(error) === 'IDENTITY_UNAVAILABLE') return true;
-      return /email could not be identified|could not verify which google account|unable to identify.*account/i.test(errorMessage(error));
-    }
-
     function unwrapServerResponse(value) {
       var parsed = parseServerValue(value);
       if (parsed && parsed.ok === false) {
@@ -276,264 +263,20 @@
       }, duration || 6500);
     }
 
-    function ydcEmail(value) {
-      return normalizeText(value).toLowerCase();
-    }
-
-    function isValidYdcEmail(value) {
-      var email = ydcEmail(value);
-      return /^[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@ydc\.com\.ph$/i.test(email) && email.length <= 254;
-    }
-
-    function setIdentityNotice(message, type) {
-      var notice = byId('identity-recovery-notice');
-      var detail = byId('identity-recovery-message');
-      var text = normalizeText(message);
-      detail.textContent = text;
-      notice.hidden = !text;
-      notice.className = 'identity-recovery__notice identity-recovery__notice--' + (type || 'info');
-      notice.setAttribute('role', type === 'danger' ? 'alert' : 'status');
-    }
-
-    function clearIdentityMessages() {
-      clearFieldError('identity-email', 'identity-email-error');
-      clearFieldError('identity-code', 'identity-code-error');
-      setIdentityNotice('', 'info');
-    }
-
-    function showIdentityRecovery(error) {
-      var wasHidden = byId('identity-recovery-view').hidden;
-      state.identityUnavailable = true;
-      byId('boot-screen').hidden = true;
-      byId('fatal-state').hidden = true;
-      byId('register-view').hidden = true;
-      byId('dashboard-view').hidden = true;
-      byId('topbar').hidden = true;
-      byId('identity-recovery-view').hidden = false;
-
-      if (wasHidden) {
-        stopIdentityCooldown();
-        state.identityRecovery.requestedEmail = '';
-        clearIdentityMessages();
-        byId('identity-email-form').hidden = false;
-        byId('identity-code-form').hidden = true;
-        byId('identity-code').value = '';
-        byId('identity-code').disabled = false;
-        byId('identity-verify-code').disabled = false;
-        byId('identity-change-email').disabled = false;
-        setIdentityNotice(
-          'Google account detection was unavailable. Verify access using a code sent to your YDC mailbox.',
-          'info'
-        );
-      } else if (error && !isIdentityUnavailable(error)) {
-        setIdentityNotice(errorMessage(error), 'danger');
-      }
-
-      window.setTimeout(function () {
-        var target = byId('identity-code-form').hidden ? byId('identity-email') : byId('identity-code');
-        if (target) target.focus();
-      }, 0);
-    }
-
-    function setIdentityButtonBusy(buttonId, busy, busyText, defaultText) {
-      var button = byId(buttonId);
-      var label = button.querySelector('.button__label');
-      button.disabled = Boolean(busy);
-      button.setAttribute('aria-busy', busy ? 'true' : 'false');
-      if (label) label.textContent = busy ? busyText : defaultText;
-    }
-
-    function stopIdentityCooldown() {
-      if (state.identityRecovery.cooldownTimer) {
-        window.clearInterval(state.identityRecovery.cooldownTimer);
-        state.identityRecovery.cooldownTimer = null;
-      }
-      state.identityRecovery.cooldownUntil = 0;
-      var resend = byId('identity-resend-code');
-      resend.disabled = false;
-      resend.textContent = 'Resend code';
-    }
-
-    function updateIdentityCooldown() {
-      var remaining = Math.max(0, Math.ceil((state.identityRecovery.cooldownUntil - Date.now()) / 1000));
-      var resend = byId('identity-resend-code');
-      if (remaining > 0) {
-        resend.disabled = true;
-        resend.textContent = 'Resend code in ' + remaining + 's';
-        return;
-      }
-      stopIdentityCooldown();
-    }
-
-    function startIdentityCooldown(seconds) {
-      stopIdentityCooldown();
-      var duration = Math.max(1, Math.min(600, Math.round(asNumber(seconds, 60))));
-      state.identityRecovery.cooldownUntil = Date.now() + (duration * 1000);
-      updateIdentityCooldown();
-      state.identityRecovery.cooldownTimer = window.setInterval(updateIdentityCooldown, 1000);
-    }
-
-    function requestIdentityCode(email, isResend) {
-      var normalizedEmail = ydcEmail(email || state.identityRecovery.requestedEmail || byId('identity-email').value);
-      clearFieldError('identity-email', 'identity-email-error');
-      clearFieldError('identity-code', 'identity-code-error');
-      setIdentityNotice('', 'info');
-
-      if (!isValidYdcEmail(normalizedEmail)) {
-        byId('identity-email-form').hidden = false;
-        byId('identity-code-form').hidden = true;
-        setFieldError('identity-email', 'identity-email-error', 'Enter a valid @ydc.com.ph work email address.');
-        byId('identity-email').focus();
-        return Promise.resolve();
-      }
-      if (state.identityRecovery.sending) return Promise.resolve();
-
-      state.identityRecovery.sending = true;
-      byId('identity-email').value = normalizedEmail;
-      if (isResend) {
-        byId('identity-resend-code').disabled = true;
-        byId('identity-resend-code').textContent = 'Sending code\u2026';
-      } else {
-        setIdentityButtonBusy('identity-send-code', true, 'Sending code\u2026', 'Send verification code');
-        byId('identity-email').disabled = true;
-      }
-
-      return serverCall('PMS_apiRequestIdentityCode', { email: normalizedEmail })
-        .then(function (result) {
-          state.identityRecovery.requestedEmail = normalizedEmail;
-          byId('identity-code-email').textContent = normalizedEmail;
-          byId('identity-email-form').hidden = true;
-          byId('identity-code-form').hidden = false;
-          byId('identity-code').value = '';
-          var expiresInSeconds = Math.max(0, Math.round(asNumber(result.expiresInSeconds, 0)));
-          var expiryMessage = expiresInSeconds
-            ? ' It expires in about ' + Math.max(1, Math.ceil(expiresInSeconds / 60)) + ' minute' + (expiresInSeconds > 60 ? 's.' : '.')
-            : '';
-          setIdentityNotice(
-            (normalizeText(result.message) || ('A 6-digit verification code was sent to ' + normalizedEmail + '.')) + expiryMessage,
-            'success'
-          );
-          startIdentityCooldown(pick(result, ['cooldownSeconds', 'retryAfterSeconds'], 60));
-          window.setTimeout(function () { byId('identity-code').focus(); }, 0);
-        })
-        .catch(function (error) {
-          if (isResend) {
-            setIdentityNotice(errorMessage(error), 'danger');
-          } else {
-            setFieldError('identity-email', 'identity-email-error', errorMessage(error));
-            byId('identity-email').focus();
-          }
-        })
-        .finally(function () {
-          state.identityRecovery.sending = false;
-          byId('identity-email').disabled = false;
-          setIdentityButtonBusy('identity-send-code', false, 'Sending code\u2026', 'Send verification code');
-          if (isResend && state.identityRecovery.cooldownUntil <= Date.now()) {
-            byId('identity-resend-code').disabled = false;
-            byId('identity-resend-code').textContent = 'Resend code';
-          }
-        });
-    }
-
-    function verifyIdentityCode(event) {
-      event.preventDefault();
-      var email = state.identityRecovery.requestedEmail;
-      var code = normalizeText(byId('identity-code').value).replace(/\s+/g, '');
-      clearFieldError('identity-code', 'identity-code-error');
-      setIdentityNotice('', 'info');
-
-      if (!isValidYdcEmail(email)) {
-        changeIdentityEmail();
-        setFieldError('identity-email', 'identity-email-error', 'Enter your YDC work email and request a new code.');
-        return;
-      }
-      if (!/^\d{6}$/.test(code)) {
-        setFieldError('identity-code', 'identity-code-error', 'Enter the complete 6-digit verification code.');
-        byId('identity-code').focus();
-        return;
-      }
-      if (state.identityRecovery.verifying) return;
-
-      var verificationAccepted = false;
-      state.identityRecovery.verifying = true;
-      setIdentityButtonBusy('identity-verify-code', true, 'Verifying\u2026', 'Verify and continue');
-      byId('identity-code').disabled = true;
-      byId('identity-change-email').disabled = true;
-      byId('identity-resend-code').disabled = true;
-
-      serverCall('PMS_apiVerifyIdentityCode', { email: email, code: code })
-        .then(function (result) {
-          if (result && result.verified === false) {
-            throw clientError(result.message || 'The verification code could not be accepted.', result.code || 'INVALID_CODE');
-          }
-          verificationAccepted = true;
-          byId('identity-code').value = '';
-          setIdentityNotice('Email verified. Loading your PMS workspace\u2026', 'success');
-          var bootstrap = result && (result.bootstrap || result.context);
-          if (bootstrap) {
-            applyBootstrap(bootstrap);
-            return bootstrap;
-          }
-          return serverCall('PMS_apiBootstrap').then(function (data) {
-            applyBootstrap(data);
-            return data;
-          });
-        })
-        .then(function () {
-          stopIdentityCooldown();
-          showToast('Identity verified', 'Your YDC mailbox was verified securely.', 'success');
-          byId('main-content').focus();
-        })
-        .catch(function (error) {
-          byId('identity-recovery-view').hidden = false;
-          byId('boot-screen').hidden = true;
-          byId('fatal-state').hidden = true;
-          if (verificationAccepted) {
-            setIdentityNotice('Your email was verified, but the workspace could not load. Use retry below to continue. ' + errorMessage(error), 'danger');
-          } else if (isIdentityUnavailable(error)) {
-            setIdentityNotice('Verification could not be completed. Request a new code and try again.', 'danger');
-          } else {
-            setFieldError('identity-code', 'identity-code-error', errorMessage(error));
-          }
-          var errorTarget = byId('identity-code-form').hidden ? byId('identity-email') : byId('identity-code');
-          if (errorTarget) errorTarget.focus();
-        })
-        .finally(function () {
-          state.identityRecovery.verifying = false;
-          byId('identity-change-email').disabled = false;
-          setIdentityButtonBusy('identity-verify-code', false, 'Verifying\u2026', 'Verify and continue');
-          var waitingForWorkspaceRetry = verificationAccepted && !byId('identity-recovery-view').hidden;
-          byId('identity-code').disabled = waitingForWorkspaceRetry;
-          byId('identity-verify-code').disabled = waitingForWorkspaceRetry;
-          updateIdentityCooldown();
-        });
-    }
-
-    function changeIdentityEmail() {
-      stopIdentityCooldown();
-      state.identityRecovery.requestedEmail = '';
-      byId('identity-code').value = '';
-      byId('identity-code').disabled = false;
-      byId('identity-verify-code').disabled = false;
-      byId('identity-code-form').hidden = true;
-      byId('identity-email-form').hidden = false;
-      clearIdentityMessages();
-      byId('identity-email').focus();
-    }
+    var FATAL_TITLES = {
+      ACCESS_NOT_PROVISIONED: 'Your account is not on the PMS access list',
+      ACCOUNT_DISABLED: 'Your PMS account is inactive',
+      ACCESS_DENIED: 'Access denied',
+      IDENTITY_UNAVAILABLE: 'We could not read your Google account'
+    };
 
     function showFatal(error) {
-      var identityUnavailable = isIdentityUnavailable(error);
-      if (identityUnavailable) {
-        showIdentityRecovery(error);
-        return;
-      }
-      state.identityUnavailable = identityUnavailable;
+      var code = errorCode(error);
       byId('boot-screen').hidden = true;
-      byId('identity-recovery-view').hidden = true;
       byId('register-view').hidden = true;
       byId('dashboard-view').hidden = true;
       byId('topbar').hidden = true;
-      byId('fatal-title').textContent = "We couldn't load your workspace";
+      byId('fatal-title').textContent = FATAL_TITLES[code] || "We couldn't load your workspace";
       byId('fatal-message').textContent = errorMessage(error) || 'Please refresh and try again.';
       byId('retry-bootstrap').textContent = 'Try again';
       byId('fatal-state').hidden = false;
@@ -704,14 +447,16 @@
       state.profile = state.bootstrap.profile || {};
       state.config = state.bootstrap.config || {};
       if (!userEmail()) {
-        throw clientError('The signed-in Google account could not be verified.', 'IDENTITY_UNAVAILABLE');
+        throw clientError(
+          'PMS loaded but the server did not return your account email. Reload the page, and if this continues ask ' +
+            'a PMS administrator to re-authorize the deployment.',
+          'IDENTITY_UNAVAILABLE'
+        );
       }
       initializeSchema();
       renderIdentity();
       byId('boot-screen').hidden = true;
       byId('fatal-state').hidden = true;
-      byId('identity-recovery-view').hidden = true;
-      state.identityUnavailable = false;
 
       var registered = state.bootstrap.registered === true || Boolean(sectionKey());
       if (!registered) {
@@ -726,14 +471,6 @@
       byId('topbar').hidden = false;
       byId('dashboard-view').hidden = false;
       renderDashboard();
-      if (normalizeText(state.user.identitySource).toUpperCase() === 'TEMPORARY_KEY') {
-        showToast(
-          'Saved profile restored',
-          'Google did not provide your email for this request, so PMS securely restored your registered section. Administrator tools require a live Google identity.',
-          'info',
-          9000
-        );
-      }
     }
 
     function loadBootstrap(options) {
@@ -742,7 +479,6 @@
         byId('boot-screen').hidden = false;
         byId('boot-screen').setAttribute('aria-busy', 'true');
         byId('fatal-state').hidden = true;
-        byId('identity-recovery-view').hidden = true;
       }
       return serverCall('PMS_apiBootstrap')
         .then(function (data) {
@@ -750,7 +486,7 @@
           return data;
         })
         .catch(function (error) {
-          if (settings.silent && !isIdentityUnavailable(error)) {
+          if (settings.silent) {
             showToast('Refresh failed', errorMessage(error), 'danger');
           } else {
             showFatal(error);
@@ -808,11 +544,6 @@
         byId('register-section').focus();
         return;
       }
-      if (!userEmail()) {
-        showFatal(clientError('The signed-in Google account could not be verified.', 'IDENTITY_UNAVAILABLE'));
-        return;
-      }
-
       byId('register-name').value = displayName;
       setBusy(true, 'Saving your profile…');
       serverCall('PMS_apiRegister', { displayName: displayName, section: section })
@@ -822,7 +553,8 @@
           byId('main-content').focus();
         })
         .catch(function (error) {
-          if (isIdentityUnavailable(error)) {
+          var fatalCodes = ['IDENTITY_UNAVAILABLE', 'ACCESS_NOT_PROVISIONED', 'ACCOUNT_DISABLED', 'ACCESS_DENIED'];
+          if (fatalCodes.indexOf(errorCode(error)) >= 0) {
             showFatal(error);
             return;
           }
@@ -2062,29 +1794,6 @@
     function bindEvents() {
       byId('retry-bootstrap').addEventListener('click', function () {
         loadBootstrap();
-      });
-      byId('identity-email-form').addEventListener('submit', function (event) {
-        event.preventDefault();
-        requestIdentityCode(byId('identity-email').value, false);
-      });
-      byId('identity-code-form').addEventListener('submit', verifyIdentityCode);
-      byId('identity-resend-code').addEventListener('click', function () {
-        if (state.identityRecovery.cooldownUntil > Date.now()) return;
-        requestIdentityCode(state.identityRecovery.requestedEmail, true);
-      });
-      byId('identity-change-email').addEventListener('click', changeIdentityEmail);
-      byId('identity-retry-google').addEventListener('click', function () {
-        clearIdentityMessages();
-        loadBootstrap();
-      });
-      byId('identity-email').addEventListener('input', function () {
-        clearFieldError('identity-email', 'identity-email-error');
-        setIdentityNotice('', 'info');
-      });
-      byId('identity-code').addEventListener('input', function (event) {
-        event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '').slice(0, 6);
-        clearFieldError('identity-code', 'identity-code-error');
-        setIdentityNotice('', 'info');
       });
       byId('register-form').addEventListener('submit', onRegister);
       byId('brand-home').addEventListener('click', function (event) {

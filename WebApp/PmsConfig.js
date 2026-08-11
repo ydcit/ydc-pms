@@ -13,12 +13,10 @@ PMS.CONFIG = {
   TRACKER_YEAR_COLUMN: 4,
   CACHE_SECONDS: 300,
   ROLLOVER_TOKEN_SECONDS: 300,
-  IDENTITY_CODE_TTL_SECONDS: 600,
-  IDENTITY_CODE_COOLDOWN_SECONDS: 60,
-  IDENTITY_CODE_REQUEST_WINDOW_SECONDS: 3600,
-  IDENTITY_CODE_MAX_REQUESTS_PER_WINDOW: 5,
-  IDENTITY_CODE_MAX_SENDS_PER_DAY: 250,
-  IDENTITY_CODE_MAX_VERIFY_ATTEMPTS: 5,
+  // Sign-in requires the signed-in Google account email to exist in the
+  // "PMS Users" sheet. Set to false to allow any allowed-domain account to
+  // self-register instead.
+  REQUIRE_DIRECTORY_ENTRY: true,
   MAX_TEXT_LENGTH: 5000,
   MAX_REMARKS_CELL_LENGTH: 49000,
   // Static bootstrap allowlist. Additional administrators may be stored in the
