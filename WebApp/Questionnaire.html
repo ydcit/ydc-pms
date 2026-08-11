@@ -1,0 +1,275 @@
+<div class="modal-layer" id="questionnaire-modal" hidden>
+  <div class="modal-backdrop" data-close-modal aria-hidden="true"></div>
+  <section class="questionnaire" role="dialog" aria-modal="true" aria-labelledby="questionnaire-title" aria-describedby="questionnaire-description">
+    <header class="questionnaire__header">
+      <div class="questionnaire__title-row">
+        <div>
+          <p class="eyebrow">Preventive maintenance record</p>
+          <h1 id="questionnaire-title">New maintenance record</h1>
+          <p class="sr-only" id="questionnaire-description">Four-step preventive maintenance questionnaire.</p>
+        </div>
+        <button class="icon-button" id="close-questionnaire" type="button" aria-label="Close questionnaire">
+          <span aria-hidden="true">×</span>
+        </button>
+      </div>
+
+      <nav class="stepper" aria-label="Questionnaire steps">
+        <button class="stepper__item is-current" type="button" data-step-target="1" aria-current="step">
+          <span class="stepper__number">1</span>
+          <span class="stepper__label">Asset &amp; date</span>
+        </button>
+        <span class="stepper__line" aria-hidden="true"></span>
+        <button class="stepper__item" type="button" data-step-target="2">
+          <span class="stepper__number">2</span>
+          <span class="stepper__label">Peripherals</span>
+        </button>
+        <span class="stepper__line" aria-hidden="true"></span>
+        <button class="stepper__item" type="button" data-step-target="3">
+          <span class="stepper__number">3</span>
+          <span class="stepper__label">Checklist</span>
+        </button>
+        <span class="stepper__line" aria-hidden="true"></span>
+        <button class="stepper__item" type="button" data-step-target="4">
+          <span class="stepper__number">4</span>
+          <span class="stepper__label">Assessment</span>
+        </button>
+      </nav>
+
+      <div class="modal-progress">
+        <div>
+          <span>Checklist progress</span>
+          <strong id="modal-progress-label">0 of 20 complete</strong>
+        </div>
+        <div class="progress-track" role="progressbar" id="modal-progress" aria-label="Questionnaire checklist progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span class="progress-fill" id="modal-progress-fill" style="width: 0%"></span>
+        </div>
+      </div>
+    </header>
+
+    <form class="questionnaire__form" id="questionnaire-form" novalidate>
+      <div class="questionnaire__body" id="questionnaire-body">
+        <div class="form-alert" id="form-alert" hidden tabindex="-1" role="alert">
+          <span class="form-alert__icon" aria-hidden="true">!</span>
+          <div>
+            <strong>Please review the highlighted fields</strong>
+            <p id="form-alert-message"></p>
+          </div>
+        </div>
+
+        <section class="form-step" id="form-step-1" data-step="1" aria-labelledby="step-1-title">
+          <div class="form-step__heading">
+            <span class="form-step__icon" aria-hidden="true">01</span>
+            <div>
+              <p class="eyebrow">Step 1 of 4</p>
+              <h2 id="step-1-title">Asset and maintenance date</h2>
+              <p>Confirm when the work was performed and select the production asset.</p>
+            </div>
+          </div>
+
+          <div class="identity-strip" aria-label="Technician details">
+            <div>
+              <span>Technician</span>
+              <strong id="form-technician-name">—</strong>
+              <small id="form-technician-email">—</small>
+            </div>
+            <div>
+              <span>IT section</span>
+              <strong id="form-technician-section">—</strong>
+              <small>Assigned at registration</small>
+            </div>
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="maintenance-date">Maintenance Performed On <span class="required-mark" aria-hidden="true">*</span></label>
+              <input id="maintenance-date" name="maintenanceDate" type="date" required aria-describedby="maintenance-date-help maintenance-date-error">
+              <p class="field-help" id="maintenance-date-help">Past dates are allowed. Future dates are not.</p>
+              <p class="field-error" id="maintenance-date-error" hidden></p>
+            </div>
+
+            <div class="derived-cycle" aria-live="polite">
+              <div>
+                <span>Maintenance year</span>
+                <strong id="form-maintenance-year">—</strong>
+              </div>
+              <div>
+                <span>PMS cycle</span>
+                <strong id="form-cycle">—</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="field field--asset">
+            <label for="asset-tag">Asset tag <span class="required-mark" aria-hidden="true">*</span></label>
+            <div class="search-input">
+              <span aria-hidden="true">⌕</span>
+              <input id="asset-tag" name="assetTag" type="text" list="asset-options" autocomplete="off" placeholder="Search by asset tag" required role="combobox" aria-autocomplete="list" aria-controls="asset-options" aria-describedby="asset-help asset-error">
+              <datalist id="asset-options"></datalist>
+            </div>
+            <p class="field-help" id="asset-help">Only current INPROD assets in your registered section are available.</p>
+            <p class="field-error" id="asset-error" hidden></p>
+          </div>
+
+          <div class="asset-snapshot" id="asset-snapshot" hidden aria-live="polite">
+            <div class="asset-snapshot__header">
+              <div>
+                <span>Selected asset</span>
+                <strong id="selected-asset-tag">—</strong>
+              </div>
+              <span class="status-chip status-chip--success" id="selected-asset-status">INPROD</span>
+            </div>
+            <dl>
+              <div>
+                <dt>Master location</dt>
+                <dd id="selected-asset-location">—</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd id="selected-asset-source">Section asset master</dd>
+              </div>
+            </dl>
+
+            <label class="check-control check-control--boxed" id="location-incorrect-control" for="location-incorrect">
+              <input id="location-incorrect" type="checkbox">
+              <span>The asset is currently at a different location</span>
+            </label>
+
+            <div class="field" id="observed-location-wrap" hidden>
+              <label for="observed-location">Observed location <span class="required-mark" aria-hidden="true">*</span></label>
+              <input id="observed-location" name="observedLocation" type="text" maxlength="200" autocomplete="off" placeholder="Enter the asset's current physical location" aria-describedby="observed-location-help observed-location-error">
+              <p class="field-help" id="observed-location-help">This records the discrepancy; it does not change the asset master.</p>
+              <p class="field-error" id="observed-location-error" hidden></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="form-step" id="form-step-2" data-step="2" aria-labelledby="step-2-title" hidden>
+          <div class="form-step__heading">
+            <span class="form-step__icon" aria-hidden="true">02</span>
+            <div>
+              <p class="eyebrow">Step 2 of 4</p>
+              <h2 id="step-2-title">Included peripheral asset tags</h2>
+              <p>Add every tagged peripheral included in this maintenance. These fields are optional.</p>
+            </div>
+          </div>
+
+          <div class="notice notice--info">
+            <span class="notice__icon" aria-hidden="true">i</span>
+            <div>
+              <strong>Multiple tags are supported</strong>
+              <p>Type a tag and press Enter or comma. Unrecognized tags are saved with a verification flag.</p>
+            </div>
+          </div>
+
+          <div class="peripheral-grid" id="peripheral-grid"></div>
+        </section>
+
+        <section class="form-step" id="form-step-3" data-step="3" aria-labelledby="step-3-title" hidden>
+          <div class="form-step__heading">
+            <span class="form-step__icon" aria-hidden="true">03</span>
+            <div>
+              <p class="eyebrow">Step 3 of 4</p>
+              <h2 id="step-3-title">Maintenance checklist</h2>
+              <p>Complete every applicable check. Use N/A only where the checklist explicitly allows it.</p>
+            </div>
+          </div>
+
+          <div class="checklist-groups" id="checklist-groups"></div>
+        </section>
+
+        <section class="form-step" id="form-step-4" data-step="4" aria-labelledby="step-4-title" hidden>
+          <div class="form-step__heading">
+            <span class="form-step__icon" aria-hidden="true">04</span>
+            <div>
+              <p class="eyebrow">Step 4 of 4</p>
+              <h2 id="step-4-title">Assessment and review</h2>
+              <p>Document the technician’s full assessment. These details are written to the cycle remarks when completed.</p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="assessment-result">Assessment result <span class="required-mark" aria-hidden="true">*</span></label>
+            <select id="assessment-result" name="assessmentResult" required aria-describedby="assessment-result-error">
+              <option value="">Select an assessment result</option>
+              <option value="No findings">No findings</option>
+              <option value="Findings resolved">Findings resolved</option>
+              <option value="Follow-up required">Follow-up required</option>
+            </select>
+            <p class="field-error" id="assessment-result-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <div class="field__label-row">
+              <label for="asset-findings">Asset findings <span class="required-mark" aria-hidden="true">*</span></label>
+              <button class="text-button" type="button" id="fill-no-findings">Use “No findings”</button>
+            </div>
+            <textarea id="asset-findings" name="assetFindings" rows="4" maxlength="4000" placeholder="Describe the condition observed, issues found, or write No findings." aria-describedby="asset-findings-error"></textarea>
+            <p class="field-error" id="asset-findings-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <div class="field__label-row">
+              <label for="action-taken">Action taken <span class="required-mark" aria-hidden="true">*</span></label>
+              <button class="text-button" type="button" id="fill-no-action">Use “No action required”</button>
+            </div>
+            <textarea id="action-taken" name="actionTaken" rows="4" maxlength="4000" placeholder="Describe cleaning, repairs, updates, tests, or other work completed." aria-describedby="action-taken-error"></textarea>
+            <p class="field-error" id="action-taken-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <div class="field__label-row">
+              <label for="recommendation">Recommendation <span class="required-mark" aria-hidden="true">*</span></label>
+              <button class="text-button" type="button" id="fill-no-recommendation">Use “None”</button>
+            </div>
+            <textarea id="recommendation" name="recommendation" rows="4" maxlength="4000" placeholder="State the recommended next step, monitoring need, replacement, or None." aria-describedby="recommendation-error"></textarea>
+            <p class="field-error" id="recommendation-error" hidden></p>
+          </div>
+
+          <section class="review-card" aria-labelledby="review-title">
+            <div class="review-card__header">
+              <div>
+                <p class="eyebrow">Final review</p>
+                <h3 id="review-title">PMS completion decision</h3>
+              </div>
+              <span class="status-chip status-chip--warning" id="review-status-chip">INCOMPLETE</span>
+            </div>
+            <dl class="review-grid">
+              <div>
+                <dt>Asset</dt>
+                <dd id="review-asset">Not selected</dd>
+              </div>
+              <div>
+                <dt>Cycle</dt>
+                <dd id="review-cycle">Not selected</dd>
+              </div>
+              <div>
+                <dt>Checklist</dt>
+                <dd id="review-checklist">0 of 20 complete</dd>
+              </div>
+              <div>
+                <dt>Final status</dt>
+                <dd id="review-final-status">0% — INCOMPLETE</dd>
+              </div>
+            </dl>
+            <div class="progress-track progress-track--large" role="progressbar" id="review-progress" aria-label="Final PMS completion" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <span class="progress-fill" id="review-progress-fill" style="width: 0%"></span>
+            </div>
+            <p class="review-card__hint" id="review-hint">Complete all applicable checklist items before finalizing PMS.</p>
+          </section>
+        </section>
+      </div>
+
+      <footer class="questionnaire__footer">
+        <div class="questionnaire__footer-left">
+          <button class="button button--quiet" id="previous-step" type="button" hidden>← Back</button>
+          <span class="save-state" id="record-save-state" aria-live="polite"></span>
+        </div>
+        <div class="questionnaire__footer-actions">
+          <button class="button button--secondary" id="save-progress" type="button">Save progress</button>
+          <button class="button button--primary" id="next-step" type="button">Continue</button>
+          <button class="button button--primary" id="complete-pms" type="submit" disabled hidden>Complete PMS</button>
+        </div>
+      </footer>
+    </form>
+  </section>
+</div>

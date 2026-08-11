@@ -1,0 +1,528 @@
+# Preventive Maintenance Web App — Product Requirements Document
+
+**Status:** Draft for review — no implementation approved  
+**Version:** 0.1  
+**Date:** 2026-08-11  
+**Source workbook:** [PMS - All Asset](https://docs.google.com/spreadsheets/d/1T33Z8JFRdL9oFZ-6XT_lz-tNIAFKXF2ekp-e-cYm7uc/edit)  
+**Workbook handling during discovery:** Read-only. No tab, value, formula, format, validation, or metadata has been changed.
+
+## 1. Product summary
+
+Build a Google Apps Script web app for YDC's preventive-maintenance process. A signed-in YDC technician sees a section-specific dashboard and opens the maintenance questionnaire in a modal. The app automatically identifies the technician, limits asset choices to the technician's registered IT section, and only offers assets whose current equipment status is `INPROD`.
+
+Each questionnaire becomes an auditable record in a new response tab. Existing workbook data is read-only except for the controlled write that marks the matched asset's correct cycle checkbox and stores the completed technician assessment in its paired Remarks cell. The dashboard tracks whether all eligible assets receive PMS within each four-month maintenance cycle:
+
+- T1: January 1–April 30
+- T2: May 1–August 31
+- T3: September 1–December 31
+
+The recommended product term is **PMS Cycle** or **Maintenance Cycle**, rather than “trimester,” because each period is four months. The operational target is **PMS compliance**: 100% of eligible assets completed by the cycle deadline. This is similar to an SLA target, but it is more accurately described as a compliance target.
+
+## 2. Workbook review
+
+### 2.1 Relevant tabs and observed data
+
+| Tab | Current role | Populated assets | `INPROD` | Data-quality observation |
+| --- | --- | ---: | ---: | --- |
+| `IT-SD PMS` | Service Desk asset master and legacy T1/T2/T3 tracker | 1,365 | 1,113 | 170 blank locations |
+| `IT-IS PMS` | Infrastructure & Security asset master and legacy T1/T2/T3 tracker | 153 | 120 | 151 blank locations |
+| `Source IT-SD` | Formula mirror of `IT-SD PMS!A3:C` | 1,365 | 1,113 | Not an independent source |
+| `Source IT-IS` | Formula mirror of `IT-IS PMS!A3:C` | 153 | 120 | Not an independent source |
+| `PM Dashboard` | Existing generated summary | 1,518 total | Not filtered | Counts every status, not only `INPROD` |
+
+The source tabs use `ARRAYFORMULA` to mirror the first three columns of the PMS tabs. Therefore the web app's authoritative runtime source should be:
+
+- Service Desk → `IT-SD PMS`
+- Infrastructure & Security → `IT-IS PMS`
+
+Both PMS tabs currently use:
+
+- Row 2, column D: tracker year (`2026`)
+- Row 3: headers
+- Column A: `TAGGING`
+- Column B: `STATUS OF EQUIPMENT`
+- Column C: `LOCATION OF ASSET`
+- Columns D/E: T1 checkbox and remarks
+- Columns F/G: T2 checkbox and remarks
+- Columns H/I: T3 checkbox and remarks
+
+No duplicate asset tags or discrepancies between each PMS tab and its source mirror were found in the read-only review.
+
+### 2.2 Current metric implications
+
+The current eligible population, using the requested `INPROD` rule, is 1,233 assets: 1,113 Service Desk and 120 Infrastructure & Security.
+
+The existing `PM Dashboard` currently reports 1,518 total assets because it includes `SPARE`, `DEFECTIVE`, and other statuses. It reports 242 Service Desk T2 completions; two of those assets are currently non-production (`YDC-NU-765`, status `SPARE`, and `YDC-NU-803`, status `DEFECTIVE`). A new dashboard must use unique eligible `INPROD` assets as its compliance denominator and must not let non-production completions inflate the compliance rate.
+
+As of the review snapshot, a live-eligibility interpretation would show 240 completed of 1,233 eligible assets for 2026 T2, or approximately 19.5%. This is a discovery observation, not a workbook change or a final audited figure.
+
+## 3. Goals
+
+1. Make completing a PMS record fast and difficult to enter incorrectly.
+2. Ensure a technician can view and select assets only from the technician's registered IT section.
+3. Enforce the `INPROD` eligibility rule in both the interface and the server.
+4. Capture a complete, searchable maintenance audit trail.
+5. Show progress toward 100% completion for every PMS cycle.
+6. Preserve the asset-master content and legacy script while allowing only the explicitly approved T1/T2/T3 checkbox-and-remarks synchronization.
+
+## 4. Non-goals for version 1
+
+- Editing asset tags, equipment status, or master locations from the web app.
+- Replacing the asset-management process that populates the PMS tabs.
+- Modifying the existing `Code.js` legacy Google Form updater.
+- Writing anywhere in an existing tab except the matched asset's cycle checkbox and paired remarks cell in `IT-SD PMS` or `IT-IS PMS` after a completed PMS record.
+- Editing `Source IT-SD`, `Source IT-IS`, `PM Dashboard`, or `OVERALL SCHEDULE` from the web app.
+- Automatic ticket creation, email reminders, or escalation workflows.
+- Public or non-YDC access.
+
+## 5. Users and permissions
+
+### 5.1 Technician
+
+- Must sign in with an allowed YDC Google Workspace account.
+- Registers an IT section on first use: `Service Desk` or `Infrastructure & Security`.
+- After registration, sees only the registered section's assets and metrics.
+- Cannot change the stored section without an administrator-approved reset.
+- Can create maintenance records and view the technician's recent submissions.
+
+### 5.2 PMS administrator
+
+- Can view combined and section-level dashboard metrics.
+- Can correct a technician's registered section.
+- Can inspect submission records and data-quality flags.
+- Administrator identities must come from a configuration allowlist, not from a client-side control.
+
+### 5.3 Authorization rules
+
+All authorization is enforced again on the server. The browser must never be trusted for email, section, role, asset status, asset location, cycle, or completion calculations.
+
+## 6. Authentication and registration
+
+### 6.1 Required behavior
+
+1. The deployment is restricted to the YDC Google Workspace organization.
+2. The server first reads the active user's email and rejects an email outside the configured domain, `ydc.com.ph`. If Google returns a blank email, the user must prove control of an exact `@ydc.com.ph` mailbox with a short-lived email code before the server binds that mailbox to the current temporary Google user key. An unverified email is never trusted, and a fallback session never receives administrator privileges.
+3. The user's email is editable only in the pre-authentication email-code challenge; it becomes read-only immediately after verification and cannot be changed during profile registration.
+4. The user's name is resolved automatically and displayed as read-only.
+5. A first-time user confirms a display name and chooses one IT section in a registration screen. The resulting profile is stored in `PMS Users` and subsequent visits go directly to the dashboard.
+6. The chosen section is persisted and subsequently auto-filled.
+7. The server uses the persisted section, not a submitted browser value, when loading and validating assets.
+
+### 6.2 Google Apps Script identity constraint
+
+`Session.getActiveUser().getEmail()` can return a blank value when the web app executes as its owner, even for a signed-in Workspace user. The app therefore retains owner execution to keep the workbook private and uses a six-digit, ten-minute, single-use mailbox challenge when Session identity is unavailable.
+
+Google Apps Script can expose the active user's email, but not the user's full name. The registration screen therefore pre-fills an email-derived display label and lets the user confirm or correct that name once. The authoritative email comes either directly from Google Session or from a successfully verified YDC mailbox challenge.
+
+The recommended deployment model is:
+
+- execute as the deploying owner so technicians do not need direct edit access to the workbook;
+- allow access only within the YDC Workspace organization;
+- use Session email when available and the verified-mailbox fallback otherwise;
+- enforce the allowed domain in server code even when the deployment is domain-restricted.
+
+Official references: [Apps Script web apps](https://developers.google.com/apps-script/guides/web) and [Apps Script Session identity](https://developers.google.com/apps-script/reference/base/session).
+
+## 7. Primary user flow
+
+1. Technician opens the web-app URL and signs in with a YDC account.
+2. The server validates identity and domain.
+3. On first use, the technician registers a section.
+4. The dashboard loads with the technician's name, section, current PMS cycle, and section-scoped metrics.
+5. The technician selects **New maintenance record**.
+6. A responsive modal opens with a short stepper:
+   1. Asset and date
+   2. Included peripherals
+   3. Checklist
+   4. Assessment and review
+7. The technician may **Save progress** while the checklist is incomplete or select **Complete PMS** after every applicable item is resolved.
+8. The server revalidates the user, asset, status, section, date, cycle, and payload.
+9. The app creates or updates the auditable response row and computes the final `PMS Completion` value in the last column.
+10. An incomplete record stops there and does not affect a tracker checkbox.
+11. A completed record writes the full assessment to the correct T1/T2/T3 Remarks cell and then checks the paired term checkbox.
+12. The app finalizes the response row as `COMPLETED`, refreshes the dashboard, and displays the record ID.
+
+## 8. Questionnaire requirements
+
+### 8.1 Identity, cycle, and asset
+
+| Field | UI and behavior | Required |
+| --- | --- | --- |
+| Technician name | Auto-detected; read-only | Yes |
+| Technician email | Auto-detected; read-only | Yes |
+| IT section | Loaded from registration; read-only | Yes |
+| Maintenance Performed On | Date picker; past dates permitted; future dates rejected | Yes |
+| Maintenance year | Derived from maintenance date; read-only | Yes |
+| PMS cycle | Derived as T1, T2, or T3; read-only | Yes |
+| Asset tag | Searchable dropdown from the user's PMS tab; only current `INPROD` rows | Yes |
+| Equipment status | Auto-populated from column B; read-only | Yes |
+| Master location | Auto-populated from column C; read-only | No when source is blank |
+| Observed location | Shown and required only when the master location is blank or marked incorrect | Conditional |
+
+Because the section lists contain up to 1,113 eligible tags, “dropdown” should be implemented as a keyboard-accessible searchable combobox rather than a long native select.
+
+### 8.2 Included peripheral asset tags
+
+Show a fixed, compact table with one optional tag input per peripheral type. Each input supports one or more tags as removable chips so dual monitors or multiple adaptors can be recorded without comma-parsing ambiguity.
+
+1. NUC
+2. NUC adaptor
+3. Monitor
+4. Keyboard
+5. Mouse
+6. UPS
+7. Power adaptor
+8. Headset
+9. Type-C adaptor
+10. Webcam
+
+Peripheral entries are optional because not every maintained asset has every listed peripheral. Values are trimmed and normalized to uppercase. Version 1 warns when an entered tag is not found in the technician's section but permits the entry with an `Unverified peripheral tag` flag; this supports discovery of missing inventory without silently losing the observation.
+
+### 8.3 Checklist
+
+#### Hardware inspection
+
+- Physical inspection completed
+- Display checked
+- Keyboard and mouse checked
+- Ports tested
+- Battery and charger checked, if applicable
+- Camera and audio checked
+
+#### System health
+
+- Operating system updated
+- Storage checked
+- Performance checked
+- Startup verified
+
+#### Security controls
+
+- Antivirus verified
+- Firewall verified
+- Disk encryption verified, if applicable
+- Screen lock verified
+
+#### Network connectivity
+
+- Ethernet port tested
+- Wi-Fi adapter checked
+
+#### Required applications
+
+- Required software verified
+
+#### Maintenance and cleaning
+
+- Temporary files cleaned
+- Device cleaned
+- Health check completed
+
+“Maintenance and Cleaning” is the recommended replacement for a second section also named “Preventive Maintenance.”
+
+Each category shows `completed/applicable` and a progress bar. The modal also shows overall progress. The two “if applicable” checks support **Not applicable**. An N/A item is excluded from the denominator and must store an explicit reason or applicability state; silently leaving it unchecked does not count as complete.
+
+**Save progress** is available below 100% and stores the record as `INCOMPLETE`; it never changes a PMS tracker checkbox. **Complete PMS** is enabled only when 100% of applicable checklist items have been completed.
+
+### 8.4 Assessment
+
+| Field | Behavior | Required |
+| --- | --- | --- |
+| Assessment result | `No findings`, `Findings resolved`, or `Follow-up required` | Yes |
+| Asset findings | Multiline text; may use explicit `No findings` only when result is `No findings` | Yes |
+| Action taken | Multiline text; may use explicit `No action required` | Yes |
+| Recommendation | Multiline text; may use explicit `None` | Yes |
+
+The explicit assessment result is needed for reliable dashboard metrics; free-text interpretation alone is not dependable.
+
+## 9. PMS cycle and compliance rules
+
+### 9.1 Cycle derivation
+
+| Cycle | Start | Deadline |
+| --- | --- | --- |
+| T1 | January 1 | April 30 |
+| T2 | May 1 | August 31 |
+| T3 | September 1 | December 31 |
+
+The cycle and year always come from **Maintenance Performed On**, not the submission timestamp. A technician may submit an older maintenance date. Dates after the current date are rejected.
+
+Every record also receives a derived, immutable cycle ID such as `2026-T1`, `2026-T2`, or `2027-T1`. Years are never hardcoded into the application, so January 1 of a new year automatically derives the new year's T1 without a code change.
+
+### 9.2 Completion rules
+
+- Eligibility: the asset exists in the user's section master and its status is exactly `INPROD` at submission time.
+- A compliance completion is a successfully synchronized record with 100% applicable checklist completion and final-column status `COMPLETED`.
+- Any record below 100% is `INCOMPLETE`, remains resumable by record ID, and does not alter a term checkbox or remarks cell.
+- Completion metrics count unique asset tag + maintenance year + PMS cycle combinations.
+- Multiple records for the same asset and cycle never inflate completion counts.
+- If a completed record already exists for the asset/cycle, the UI warns the technician and records the next submission as a reinspection. The latest record is shown in activity, while compliance remains one completed asset.
+- A status change between modal load and submit causes the server to reject or refresh the submission rather than accepting stale eligibility.
+
+### 9.3 Final-column completion decision
+
+The last column of the new response tab is exactly `PMS Completion`. It is system-managed, visually formatted as an in-cell progress indicator, and is the authoritative completion decision for that response row.
+
+Examples:
+
+- `██████░░░░ 60% — INCOMPLETE`
+- `██████████ 100% — COMPLETED`
+- `██████████ 100% — SYNC REQUIRED`
+- `██████████ 100% — SYNC FAILED`
+
+The server calculates this value from completed versus applicable checklist items; a user cannot type or edit it. Only the exact `COMPLETED` state counts toward compliance. A 100% record is not finalized as `COMPLETED` until its tracker remarks and checkbox have both been synchronized successfully.
+
+### 9.4 PMS tracker synchronization
+
+When the final checklist reaches 100%, the server finds the selected asset in the PMS tab assigned to the registered section and uses the maintenance date to choose the exact pair:
+
+| PMS cycle | Checkbox | Remarks |
+| --- | --- | --- |
+| T1 | Column D | Column E (`T1 Remarks`) |
+| T2 | Column F | Column G (`T2 Remarks`) |
+| T3 | Column H | Column I (`T3 Remarks`) |
+
+The server must verify all of the following immediately before writing:
+
+- signed-in user and registered section are still authorized;
+- asset tag still belongs to that section;
+- asset status is still `INPROD`;
+- the asset tag resolves to exactly one row;
+- the maintenance year matches the tracker year in row 2;
+- the response row is at 100% and has all required assessment fields.
+
+For a valid completion, the write sequence under one script lock is:
+
+1. Save or update the response row as `SYNCING`.
+2. Append the assessment block to the correct Remarks cell while preserving any existing remarks.
+3. Set the paired T1/T2/T3 checkbox to `TRUE`.
+4. Verify both tracker cells.
+5. Set the last response-sheet column to `██████████ 100% — COMPLETED`.
+
+The remarks block must contain the technician's complete assessment, not a shortened summary:
+
+```text
+[PMS Record: <record ID>]
+Technician: <name> <email>
+Maintenance Performed On: <date>
+Assessment Result: <result>
+Asset Findings: <complete technician entry>
+Action Taken: <complete technician entry>
+Recommendation: <complete technician entry>
+[End PMS Record: <record ID>]
+```
+
+If the Remarks cell already contains text, the new block is appended below a clear separator. A retry with the same record ID must update or recognize the existing block rather than append it twice. The checkbox is written after the remarks so a checked asset cannot be left without its assessment.
+
+Backdated maintenance remains valid. If its year is older than the operational tracker year, the app finalizes it as a historical `COMPLETED` record with `HISTORICAL_NO_TRACKER_WRITE` and does not change the current-year D:I projection. A record dated ahead of the tracker year remains `SYNC REQUIRED` until that year is opened. The app never checks a term for the wrong year.
+
+### 9.5 Legacy completion compatibility
+
+On first authorized use for each tracker year and section, the app performs a one-time, read-only baseline scan of the operational tracker and batch-imports pre-existing checkboxes/remarks into `PMS Records` as `LEGACY` records. After that baseline is committed, the final `PMS Completion` column is authoritative: the dashboard never treats later raw/manual checkbox changes as completion evidence. This preserves launch-day progress while preventing a partially synchronized or manually changed checkbox from bypassing the response decision.
+
+### 9.6 Live compliance versus audit-grade compliance
+
+Using the current `INPROD` list as the denominator produces a **live compliance** view. If an asset changes status later, historical denominators can change. An audit-grade historical SLA needs a per-cycle eligibility snapshot.
+
+Recommended version-1 behavior: show live compliance and label it clearly. A future approved `PMS Cycle Scope` store can freeze the eligible roster at cycle start and record later additions/removals with reasons.
+
+### 9.7 Annual rollover and new-year scalability
+
+`PMS Records` is the permanent multi-year source of truth. It uses a long-form structure: each record carries its own maintenance year and cycle ID. The design must never add another six response columns for every new year.
+
+The D:I term columns in `IT-SD PMS` and `IT-IS PMS` are treated as a **current-year operational projection**, not the historical database. Row 2 identifies the year currently projected there. At the end of 2026, an administrator uses a controlled **Start New PMS Year** action to prepare 2027.
+
+The rollover is manual and administrator-only; it must not run automatically at midnight. The action first presents a dry-run report, requires explicit confirmation, and performs these steps under a script lock:
+
+1. Verify the current tracker year and reject a duplicate or skipped-year rollover.
+2. Verify that the one-time legacy baseline exists for both closing-year sections.
+3. Block rollover while any closing-year `SYNCING`, `SYNC FAILED`, or `SYNC REQUIRED` record remains; the administrator must use the recovery control and resolve any permanent failure first.
+4. Reconcile completed, pending, findings, and follow-up counts from authoritative records for both sections and all three cycles.
+5. Write a `YEAR_CLOSE` audit event into `PMS Records` containing the old year, counts, administrator, and timestamp.
+6. Change the tracker year in row 2 to the new year.
+7. Reset only the D/F/H term checkboxes and E/G/I term remarks for the new operational year; columns A:C and all other cells remain untouched.
+8. Verify the reset and write a `YEAR_OPEN` audit event into `PMS Records`.
+9. Reconcile any already-saved new-year records that were waiting as `SYNC REQUIRED`, using persisted 50-row cursors and scheduled continuation until every queued row has been attempted.
+
+A new-year record submitted before rollover is still accepted into `PMS Records`. It remains `SYNC REQUIRED` and cannot be counted as tracker-synchronized until the administrator opens that year. This avoids writing a 2027 T1 result into the 2026 tracker.
+
+The dashboard obtains its year choices dynamically from stored maintenance years. Historical 2026 results continue to be available after the visible PMS tracker has moved to 2027.
+
+### 9.8 Capacity and performance outlook
+
+At the current eligible population of 1,233 assets, full three-cycle coverage produces approximately 3,699 completed asset-cycle records per year before drafts and reinspections. With the implemented 70-column audit schema, that is about 258,930 cells per year.
+
+The reviewed workbook currently allocates approximately 2.57 million grid cells. Google Sheets supports up to 10 million cells per spreadsheet, leaving roughly 7.43 million cells at the review snapshot. At the current asset volume, raw storage is sufficient for many years, although practical performance must be managed well before the hard limit. See [Google Drive file limits](https://support.google.com/drive/answer/37603).
+
+Scalability requirements:
+
+- never scan the entire workbook or call `getDataRange()` during an interactive request;
+- read only the selected year, cycle, section, and required columns;
+- batch-import the launch baseline and reuse one record read for dashboard metrics plus recent activity;
+- cache large section asset lists in integrity-checked chunks below Cache Service per-key limits;
+- monitor workbook cell count, Apps Script latency, failures, and quotas;
+- issue an administrator capacity warning at 70% of the spreadsheet cell limit;
+- define a reviewed archive process for closed years before the workbook reaches the warning threshold.
+
+Apps Script currently limits an individual execution to six minutes, so rollover, reconciliation, and archive work must use bounded batches with resumable checkpoints rather than one unbounded job. See [Apps Script quotas and limits](https://developers.google.com/apps-script/guides/services/quotas).
+
+## 10. Dashboard requirements
+
+### 10.1 Technician dashboard
+
+- Current maintenance year and PMS cycle, including the cycle deadline and days remaining.
+- Eligible `INPROD` assets.
+- Completed unique assets.
+- Pending assets.
+- Compliance percentage.
+- Assets with findings.
+- Follow-up required.
+- “My completed this cycle.”
+- Overall progress bar toward 100%.
+- Completion by location.
+- Recent submissions table with record ID, date performed, asset, result, and status.
+- Primary **New maintenance record** button that opens the questionnaire modal.
+
+### 10.2 Administrator dashboard
+
+- All technician metrics.
+- Section selector: all, Service Desk, Infrastructure & Security.
+- Filters for year, PMS cycle, location, technician, result, and completion source.
+- Year options are discovered from stored cycle IDs and are never hardcoded to 2026.
+- Comparison of section compliance.
+- Pending assets by location.
+- Findings and follow-up queue.
+- Data-quality indicators: blank master locations, unverified peripheral tags, and rejected/stale submissions.
+
+### 10.3 Metric definitions
+
+| Metric | Definition |
+| --- | --- |
+| Eligible | Unique current `INPROD` asset tags in scope |
+| Completed | Unique eligible asset tags with a completed new record or eligible legacy flag for the selected year/cycle |
+| Pending | `max(Eligible - Completed, 0)` |
+| Compliance % | `Completed / Eligible × 100`; show N/A if Eligible is zero |
+| With findings | Unique assets whose latest completed record is not `No findings` |
+| Follow-up required | Unique assets whose latest completed record result is `Follow-up required` |
+| Overdue | Pending assets after the selected cycle deadline |
+
+Metrics must never count submissions, rows, or repeat inspections as extra completed assets.
+
+## 11. New response storage
+
+The approved response tab is `PMS Records`. It has been created with the exact schema below, while all pre-existing tabs remained unchanged during setup. A saved incomplete record is updated by its server-issued record ID until completion; a later reinspection receives a new record ID. Existing asset-master columns remain read-only, and the only normal runtime writes to an existing tab are the matched cycle checkbox and paired remarks cell described in section 9.4 (plus the explicit administrator rollover of D2 and D:I).
+
+Proposed column groups:
+
+1. Audit: record ID, submission timestamp, idempotency key, record type, schema version.
+2. Identity: technician name, technician email, registered section.
+3. Cycle: maintenance date, maintenance year, cycle, immutable cycle ID, and cycle deadline.
+4. Asset snapshot: source tab, source row, asset tag, status, master location, observed location, location discrepancy.
+5. Peripherals: one column for each of the ten listed peripheral types; multiple tags serialized as a stable delimiter-separated value.
+6. Checklist: one boolean/applicability field per checklist item, category counts, total completed, total applicable, completion percentage.
+7. Assessment: result, asset findings, action taken, recommendation.
+8. Tracker synchronization: target PMS tab/row/year/cycle, prior checkbox value, prior remarks snapshot, sync timestamp, and sync error if any.
+9. System: legacy completion used, duplicate/reinspection reference, data-quality flags, created-at and updated-at time zone.
+10. **Final column:** `PMS Completion`, containing the system-generated progress indicator and decisive status.
+
+Headers are created once and validated before any append. Writes use a script lock, a unique record ID, an idempotency key, and a final server-side asset lookup to prevent duplicate or inconsistent rows.
+
+### 11.1 Registration storage decision
+
+Registration profiles are stored in the dedicated `PMS Users` tab, one row per normalized YDC email. It contains the saved display name, locked IT section, role, active state, audit timestamps, and a hidden hash of Google's temporary user key. Existing Script Property profiles are migrated once and retained only as rollback evidence. An explicitly configured administrator can change a user's section through the server API.
+
+## 12. UX and visual design
+
+- Minimalist SaaS layout with a neutral background, one accent color, compact cards, generous spacing, and clear type hierarchy.
+- Responsive desktop and mobile layout.
+- Persistent top bar showing user, section, current cycle, and sign-in state.
+- Dashboard first; questionnaire appears as a large modal on desktop and a full-screen sheet on mobile.
+- Stepper and overall progress remain visible while scrolling.
+- **Save progress** persists an incomplete record without synchronizing the tracker; closing a dirty modal still requires confirmation.
+- Clear loading, empty, success, warning, and error states.
+- Keyboard-operable combobox, checkboxes, modal focus trap, visible focus states, sufficient contrast, and semantic labels.
+- No color-only status communication.
+
+## 13. Non-functional requirements
+
+### Security and privacy
+
+- Domain restriction and server-side domain validation.
+- Identity, section, and role never accepted from the browser as authoritative.
+- Output escaped before rendering.
+- Spreadsheet ID and allowed sections kept in server configuration.
+- No OAuth tokens or sensitive server errors returned to the browser.
+- Store only business identity and maintenance data required for the workflow.
+
+### Reliability
+
+- Lock concurrent writes.
+- Idempotent submission retries.
+- Revalidate asset eligibility immediately before append.
+- Return a stable record ID only after the row is confirmed.
+- Log server errors with correlation IDs.
+- Existing asset and dashboard tabs remain untouched if the new-record append fails.
+
+### Performance
+
+- Load only the signed-in user's section asset list.
+- Cache read-only asset lists and summary metrics briefly, then invalidate after a successful submission.
+- Search asset options locally after the scoped list is returned.
+- Target initial dashboard load under three seconds on a normal corporate connection, subject to Apps Script cold starts.
+
+### Time zone
+
+The workbook remains on its existing time zone. The application logic and Apps Script manifest use `Asia/Manila`, making the business boundary for dates and trimester derivation explicit.
+
+## 14. Edge cases
+
+- Blank signed-in email → resolve through an existing unique temporary-key binding or require a six-digit code sent to an exact `@ydc.com.ph` mailbox. Preserve the existing profile and section; downgrade every fallback administrator session to technician permissions until live identity returns.
+- Non-YDC email → access denied.
+- Unregistered user → registration screen only.
+- Wrong-section asset supplied manually → server rejection.
+- Asset no longer `INPROD` at submit → refresh and require a new selection.
+- Blank master location → require observed location and flag the record.
+- Duplicate submit caused by retry/double-click → one record through idempotency.
+- Prior completion for the same asset/cycle → reinspection warning; no double count.
+- Backdated record in the current tracker year → accepted and synchronized to its derived cycle.
+- Backdated record outside the tracker year → accepted as `SYNC REQUIRED`; no wrong-year checkbox is changed.
+- Future maintenance date → rejected.
+- No eligible assets → dashboard empty state, not an error.
+- Partial checklist → may be saved as `INCOMPLETE`; no tracker checkbox or remarks cell is changed.
+
+## 15. Acceptance criteria
+
+1. A signed-in allowed-domain user is identified without entering an email.
+2. A first-time user can register exactly one IT section.
+3. A registered Service Desk user cannot retrieve or submit an Infrastructure & Security asset, and vice versa.
+4. The asset combobox contains only nonblank tags whose current column-B status is `INPROD`.
+5. Status and master location come from the authoritative PMS tab and cannot be edited directly.
+6. Maintenance date accepts valid past dates, rejects future dates, and derives the correct year/cycle at boundary dates.
+7. Every listed peripheral field and checklist item is represented in the response schema.
+8. N/A checklist items are explicit and excluded from progress; below 100% saves as `INCOMPLETE`, while completion requires 100% of applicable items.
+9. Assessment result, findings, action, and recommendation follow the stated conditional rules.
+10. A saved draft creates or updates exactly one validated response row and sets the last column to an `INCOMPLETE` progress status.
+11. Only a 100% valid record can become `COMPLETED`.
+12. Completion writes the full Findings, Action Taken, and Recommendation block to the correct cycle Remarks cell, preserving existing content.
+13. Completion then checks the paired T1/T2/T3 checkbox on the asset's exact section row.
+14. A normal completion modifies no existing workbook cell other than that matched checkbox and paired remarks cell; annual D2/D:I changes require the separate administrator rollover confirmation.
+15. A tracker synchronization failure cannot leave the response row marked `COMPLETED`.
+16. Dashboard counts unique eligible assets rather than rows or total inventory.
+17. Repeat maintenance does not inflate compliance or duplicate the same remarks block.
+18. Modal, searchable dropdown, and checklist are usable by keyboard and on mobile.
+19. The existing `Code.js` file remains unchanged.
+20. A maintenance date of January 1, 2027 derives `2027-T1` without a deployment or code change.
+21. A new-year completion submitted before rollover is safely stored as `SYNC REQUIRED` and never changes the prior year's tracker.
+22. The administrator rollover preserves prior-year history, updates the tracker year, resets only D:I term cells, and reconciles waiting new-year records.
+23. Repeating an already completed rollover is rejected and cannot clear the active year twice.
+
+## 16. Implemented decisions
+
+1. **Application storage:** `PMS Records` stores maintenance history and `PMS Users` stores persistent registration profiles; pre-existing workbook tabs remain otherwise unchanged.
+2. **Full name source:** one-time user-confirmed display name, initially derived from email, with the validated Google-account email as the authoritative identity.
+3. **Historical denominator:** live current-`INPROD` compliance in version 1; cycle-scope snapshots remain a later enhancement.
+4. **Tracker-year mismatch:** complete archived past-year evidence in `PMS Records` without changing D:I; retain ahead-of-tracker records as `SYNC REQUIRED` until rollover. Never write to the wrong tracker year.
+5. **Blank locations:** require observed location without changing the asset master.
+6. **Peripheral validation:** capture normalized peripheral tags as technician-entered evidence; they are not used to determine main-asset eligibility.
+7. **Legacy progress:** batch-import pre-existing tracker flags once, then use `PMS Records` as the sole completion authority.
+8. **Annual rollover:** treat D:I as the current-year operational view and preserve multi-year history in `PMS Records`.

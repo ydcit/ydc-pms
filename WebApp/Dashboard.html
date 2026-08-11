@@ -1,0 +1,230 @@
+<section class="dashboard-view" id="dashboard-view" hidden aria-labelledby="dashboard-title">
+  <div class="page-container">
+    <div class="page-heading">
+      <div>
+        <p class="eyebrow" id="dashboard-eyebrow">PMS workspace</p>
+        <h1 id="dashboard-title">Maintenance overview</h1>
+        <p id="dashboard-welcome">Track preventive maintenance coverage for your section.</p>
+      </div>
+      <button class="button button--primary button--new-record" id="new-record-button" type="button">
+        <span class="button__icon" aria-hidden="true">＋</span>
+        <span>New maintenance record</span>
+      </button>
+    </div>
+
+    <section class="cycle-banner" aria-labelledby="cycle-banner-title">
+      <div class="cycle-banner__content">
+        <span class="cycle-badge" id="cycle-badge">T1</span>
+        <div>
+          <p class="eyebrow">Current PMS cycle</p>
+          <h2 id="cycle-banner-title">Loading cycle…</h2>
+          <p id="cycle-date-range"></p>
+        </div>
+      </div>
+      <div class="cycle-banner__deadline">
+        <span class="cycle-banner__days" id="cycle-days">—</span>
+        <span id="cycle-days-label">days remaining</span>
+      </div>
+    </section>
+
+    <section aria-labelledby="coverage-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Live compliance</p>
+          <h2 id="coverage-title">Cycle coverage</h2>
+        </div>
+        <p class="section-note">Based on current INPROD assets</p>
+      </div>
+
+      <div class="metric-grid" id="metric-grid">
+        <article class="metric-card">
+          <div class="metric-card__top">
+            <span class="metric-icon metric-icon--neutral" aria-hidden="true">▦</span>
+            <span class="metric-card__label">Eligible assets</span>
+          </div>
+          <strong class="metric-card__value" id="metric-eligible">—</strong>
+          <span class="metric-card__detail">INPROD in your scope</span>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-card__top">
+            <span class="metric-icon metric-icon--success" aria-hidden="true">✓</span>
+            <span class="metric-card__label">Completed</span>
+          </div>
+          <strong class="metric-card__value" id="metric-completed">—</strong>
+          <span class="metric-card__detail">Unique assets this cycle</span>
+        </article>
+
+        <article class="metric-card">
+          <div class="metric-card__top">
+            <span class="metric-icon metric-icon--warning" aria-hidden="true">○</span>
+            <span class="metric-card__label">Pending</span>
+          </div>
+          <strong class="metric-card__value" id="metric-pending">—</strong>
+          <span class="metric-card__detail" id="pending-detail">Assets remaining</span>
+        </article>
+
+        <article class="metric-card metric-card--accent">
+          <div class="metric-card__top">
+            <span class="metric-icon metric-icon--accent" aria-hidden="true">↗</span>
+            <span class="metric-card__label">Compliance</span>
+          </div>
+          <strong class="metric-card__value" id="metric-compliance">—</strong>
+          <span class="metric-card__detail">Goal: 100% by deadline</span>
+        </article>
+      </div>
+
+      <div class="progress-card">
+        <div class="progress-card__header">
+          <div>
+            <strong>Overall cycle progress</strong>
+            <span id="coverage-ratio">0 of 0 eligible assets</span>
+          </div>
+          <strong id="coverage-percent">0%</strong>
+        </div>
+        <div class="progress-track progress-track--large" role="progressbar" id="coverage-progress" aria-label="Overall cycle progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span class="progress-fill" id="coverage-progress-fill" style="width: 0%"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="insight-grid" aria-label="Maintenance insights">
+      <article class="panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Work distribution</p>
+            <h2>Completion by location</h2>
+          </div>
+          <span class="panel__meta" id="location-count"></span>
+        </div>
+        <div class="location-list" id="location-list"></div>
+        <div class="empty-state empty-state--compact" id="location-empty" hidden>
+          <span aria-hidden="true">⌖</span>
+          <p>No location data is available for this cycle.</p>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel__header">
+          <div>
+            <p class="eyebrow">Attention</p>
+            <h2>Findings overview</h2>
+          </div>
+        </div>
+        <div class="attention-list">
+          <div class="attention-item">
+            <span class="attention-item__icon attention-item__icon--amber" aria-hidden="true">!</span>
+            <div>
+              <strong id="metric-findings">—</strong>
+              <span>Assets with findings</span>
+            </div>
+          </div>
+          <div class="attention-item">
+            <span class="attention-item__icon attention-item__icon--red" aria-hidden="true">↻</span>
+            <div>
+              <strong id="metric-follow-up">—</strong>
+              <span>Follow-up required</span>
+            </div>
+          </div>
+          <div class="attention-item">
+            <span class="attention-item__icon attention-item__icon--blue" aria-hidden="true">◎</span>
+            <div>
+              <strong id="metric-mine">—</strong>
+              <span>Completed by me this cycle</span>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel recent-panel" aria-labelledby="recent-title">
+      <div class="panel__header">
+        <div>
+          <p class="eyebrow">Activity</p>
+          <h2 id="recent-title">Recent submissions</h2>
+        </div>
+        <button class="button button--quiet button--small" id="refresh-dashboard" type="button">Refresh</button>
+      </div>
+
+      <div class="table-wrap" id="recent-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Record</th>
+              <th scope="col">Performed on</th>
+              <th scope="col">Asset tag</th>
+              <th scope="col">Assessment</th>
+              <th scope="col">PMS completion</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="recent-records-body"></tbody>
+        </table>
+      </div>
+
+      <div class="empty-state" id="recent-empty" hidden>
+        <span class="empty-state__art" aria-hidden="true">◇</span>
+        <h3>No submissions yet</h3>
+        <p>Your saved and completed maintenance records will appear here.</p>
+        <button class="button button--secondary button--small" id="empty-new-record" type="button">Create first record</button>
+      </div>
+    </section>
+
+    <section class="panel rollover-panel" id="rollover-panel" hidden aria-labelledby="rollover-title">
+      <div class="panel__header panel__header--rollover">
+        <div>
+          <p class="eyebrow">Administrator control</p>
+          <h2 id="rollover-title">Start a new PMS year</h2>
+          <p>Preserve the closing year, reset only the operational T1–T3 fields, and reconcile waiting records.</p>
+        </div>
+        <span class="status-chip status-chip--neutral" id="tracker-year-chip"></span>
+      </div>
+
+      <div class="sync-recovery" id="sync-recovery" aria-live="polite">
+        <div class="sync-recovery__content">
+          <div class="sync-recovery__heading">
+            <div>
+              <p class="eyebrow">Tracker synchronization</p>
+              <h3 id="sync-recovery-title">Checking synchronization status…</h3>
+            </div>
+            <span class="status-chip status-chip--neutral" id="sync-status-chip">Checking</span>
+          </div>
+          <p id="sync-recovery-detail">Checking for completed records that still need to update the operational tracker.</p>
+        </div>
+        <button class="button button--secondary button--small" id="retry-pending-sync" type="button" hidden>
+          Retry pending sync
+        </button>
+      </div>
+
+      <div class="rollover-form" id="rollover-form">
+        <div class="field">
+          <label for="rollover-year">New tracker year</label>
+          <input id="rollover-year" type="number" min="2000" max="9999" inputmode="numeric">
+        </div>
+        <button class="button button--secondary" id="rollover-dry-run" type="button">Run safety check</button>
+      </div>
+
+      <div class="rollover-review" id="rollover-review" hidden>
+        <div class="notice notice--warning">
+          <span class="notice__icon" aria-hidden="true">!</span>
+          <div>
+            <strong>Review the dry-run report</strong>
+            <p id="rollover-summary">No changes have been made.</p>
+          </div>
+        </div>
+        <dl class="rollover-stats" id="rollover-stats"></dl>
+        <div class="confirmation-box">
+          <label class="check-control" for="rollover-reviewed">
+            <input id="rollover-reviewed" type="checkbox">
+            <span>I reviewed the dry-run report and understand this resets the operational tracker for the new year.</span>
+          </label>
+          <div class="field">
+            <label for="rollover-confirmation">Type <strong id="rollover-confirmation-phrase"></strong> to confirm</label>
+            <input id="rollover-confirmation" type="text" autocomplete="off" spellcheck="false">
+          </div>
+          <button class="button button--danger" id="rollover-execute" type="button" disabled>Start new PMS year</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</section>

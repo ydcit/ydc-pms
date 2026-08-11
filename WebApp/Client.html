@@ -1,0 +1,2158 @@
+<script>
+  (function () {
+    'use strict';
+
+    var state = {
+      bootstrap: null,
+      user: {},
+      profile: {},
+      config: {},
+      sections: [],
+      assets: [],
+      assetMap: new Map(),
+      peripherals: [],
+      checklistGroups: [],
+      peripheralValues: {},
+      checklistValues: {},
+      currentStep: 1,
+      recordId: '',
+      idempotencyKey: '',
+      selectedAsset: null,
+      dirty: false,
+      modalOpen: false,
+      busy: false,
+      identityUnavailable: false,
+      identityRecovery: {
+        requestedEmail: '',
+        sending: false,
+        verifying: false,
+        cooldownUntil: 0,
+        cooldownTimer: null
+      },
+      lastFocus: null,
+      dryRun: null,
+      submittedCompletion: ''
+    };
+
+    var FALLBACK_SECTIONS = [
+      { key: 'INFRA_SECURITY', label: 'Infrastructure & Security' },
+      { key: 'SERVICE_DESK', label: 'Service Desk' }
+    ];
+
+    var FALLBACK_PERIPHERALS = [
+      { key: 'nuc', label: 'NUC' },
+      { key: 'nucAdaptor', label: 'NUC adaptor' },
+      { key: 'monitor', label: 'Monitor' },
+      { key: 'keyboard', label: 'Keyboard' },
+      { key: 'mouse', label: 'Mouse' },
+      { key: 'ups', label: 'UPS' },
+      { key: 'powerAdaptor', label: 'Power adaptor' },
+      { key: 'headset', label: 'Headset' },
+      { key: 'typeCAdaptor', label: 'Type-C adaptor' },
+      { key: 'webcam', label: 'Webcam' }
+    ];
+
+    var FALLBACK_CHECKLIST = [
+      {
+        key: 'hardware',
+        label: 'Hardware inspection',
+        description: 'Physical components and connected hardware',
+        items: [
+          { key: 'physicalInspection', label: 'Physical inspection completed' },
+          { key: 'displayChecked', label: 'Display checked' },
+          { key: 'keyboardMouseChecked', label: 'Keyboard and mouse checked' },
+          { key: 'portsTested', label: 'Ports tested' },
+          { key: 'batteryChargerChecked', label: 'Battery and charger checked', allowsNa: true },
+          { key: 'cameraAudioChecked', label: 'Camera and audio checked' }
+        ]
+      },
+      {
+        key: 'system',
+        label: 'System health',
+        description: 'Operating system, storage, and performance',
+        items: [
+          { key: 'osUpdated', label: 'Operating system updated' },
+          { key: 'storageChecked', label: 'Storage checked' },
+          { key: 'performanceChecked', label: 'Performance checked' },
+          { key: 'startupVerified', label: 'Startup verified' }
+        ]
+      },
+      {
+        key: 'security',
+        label: 'Security controls',
+        description: 'Endpoint protection and access controls',
+        items: [
+          { key: 'antivirusVerified', label: 'Antivirus verified' },
+          { key: 'firewallVerified', label: 'Firewall verified' },
+          { key: 'diskEncryptionVerified', label: 'Disk encryption verified', allowsNa: true },
+          { key: 'screenLockVerified', label: 'Screen lock verified' }
+        ]
+      },
+      {
+        key: 'network',
+        label: 'Network connectivity',
+        description: 'Wired and wireless connectivity',
+        items: [
+          { key: 'ethernetTested', label: 'Ethernet port tested' },
+          { key: 'wifiChecked', label: 'Wi-Fi adapter checked' }
+        ]
+      },
+      {
+        key: 'applications',
+        label: 'Required applications',
+        description: 'Business software readiness',
+        items: [
+          { key: 'requiredSoftwareVerified', label: 'Required software verified' }
+        ]
+      },
+      {
+        key: 'maintenance',
+        label: 'Maintenance and cleaning',
+        description: 'Housekeeping and final health checks',
+        items: [
+          { key: 'temporaryFilesCleaned', label: 'Temporary files cleaned' },
+          { key: 'deviceCleaned', label: 'Device cleaned' },
+          { key: 'healthCheckCompleted', label: 'Health check completed' }
+        ]
+      }
+    ];
+
+    function byId(id) {
+      return document.getElementById(id);
+    }
+
+    function toArray(value) {
+      return Array.isArray(value) ? value : [];
+    }
+
+    function pick(source, keys, fallback) {
+      var object = source || {};
+      for (var i = 0; i < keys.length; i += 1) {
+        if (object[keys[i]] !== undefined && object[keys[i]] !== null) {
+          return object[keys[i]];
+        }
+      }
+      return fallback;
+    }
+
+    function asNumber(value, fallback) {
+      var number = Number(value);
+      return Number.isFinite(number) ? number : (fallback || 0);
+    }
+
+    function clampPercent(value) {
+      return Math.max(0, Math.min(100, Math.round(asNumber(value, 0))));
+    }
+
+    function normalizeText(value) {
+      return String(value === undefined || value === null ? '' : value).trim();
+    }
+
+    function normalizeTag(value) {
+      return normalizeText(value).toUpperCase();
+    }
+
+    function parseServerValue(value) {
+      var parsed = value;
+      if (typeof parsed === 'string') {
+        try {
+          parsed = JSON.parse(parsed);
+        } catch (ignore) {
+          return parsed;
+        }
+      }
+      return parsed;
+    }
+
+    function clientError(message, code) {
+      var error = new Error(normalizeText(message) || 'The request could not be completed.');
+      error.code = normalizeText(code) || 'PMS_ERROR';
+      return error;
+    }
+
+    function errorCode(error) {
+      if (!error) return '';
+      var code = normalizeText(error.code || error.errorCode);
+      if (!code && error.name && error.name !== 'Error') code = normalizeText(error.name);
+      if (!code && /IDENTITY_UNAVAILABLE/i.test(normalizeText(error.message || error))) {
+        code = 'IDENTITY_UNAVAILABLE';
+      }
+      return code.toUpperCase();
+    }
+
+    function isIdentityUnavailable(error) {
+      if (errorCode(error) === 'IDENTITY_UNAVAILABLE') return true;
+      return /email could not be identified|could not verify which google account|unable to identify.*account/i.test(errorMessage(error));
+    }
+
+    function unwrapServerResponse(value) {
+      var parsed = parseServerValue(value);
+      if (parsed && parsed.ok === false) {
+        throw clientError(parsed.message || parsed.error, parsed.code);
+      }
+      if (parsed && parsed.data !== undefined && parsed.ok === true) {
+        return parsed.data;
+      }
+      return parsed || {};
+    }
+
+    function errorMessage(error) {
+      if (!error) return 'Something went wrong. Please try again.';
+      var message = normalizeText(error.message || error);
+      return message || 'Something went wrong. Please try again.';
+    }
+
+    function serverCall(functionName) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return new Promise(function (resolve, reject) {
+        if (!window.google || !google.script || !google.script.run) {
+          reject(new Error('This page must be opened from the deployed Google Apps Script web app.'));
+          return;
+        }
+
+        var runner = google.script.run
+          .withSuccessHandler(function (response) {
+            try {
+              resolve(unwrapServerResponse(response));
+            } catch (error) {
+              reject(error);
+            }
+          })
+          .withFailureHandler(function (error) {
+            reject(clientError(errorMessage(error), errorCode(error)));
+          });
+
+        if (typeof runner[functionName] !== 'function') {
+          reject(new Error('The requested server function is unavailable: ' + functionName));
+          return;
+        }
+
+        runner[functionName].apply(runner, args);
+      });
+    }
+
+    function setBusy(isBusy, message) {
+      state.busy = Boolean(isBusy);
+      var overlay = byId('busy-overlay');
+      overlay.hidden = !state.busy;
+      byId('busy-message').textContent = normalizeText(message) || 'Working…';
+      document.querySelectorAll('button').forEach(function (button) {
+        if (button.closest('#busy-overlay')) return;
+        if (state.busy) {
+          button.dataset.wasDisabled = button.disabled ? 'true' : 'false';
+          button.disabled = true;
+        } else if (button.dataset.wasDisabled !== undefined) {
+          button.disabled = button.dataset.wasDisabled === 'true';
+          delete button.dataset.wasDisabled;
+        }
+      });
+      if (!state.busy) updateFooterActions();
+    }
+
+    function showToast(title, message, type, duration) {
+      var toast = document.createElement('div');
+      toast.className = 'toast toast--' + (type || 'info');
+      toast.setAttribute('role', type === 'danger' ? 'alert' : 'status');
+
+      var content = document.createElement('div');
+      var heading = document.createElement('strong');
+      var detail = document.createElement('span');
+      heading.textContent = normalizeText(title);
+      detail.textContent = normalizeText(message);
+      content.appendChild(heading);
+      if (detail.textContent) content.appendChild(detail);
+
+      var close = document.createElement('button');
+      close.type = 'button';
+      close.setAttribute('aria-label', 'Dismiss notification');
+      close.textContent = '×';
+      close.addEventListener('click', function () { toast.remove(); });
+
+      toast.appendChild(content);
+      toast.appendChild(close);
+      byId('toast-region').appendChild(toast);
+      window.setTimeout(function () {
+        if (toast.isConnected) toast.remove();
+      }, duration || 6500);
+    }
+
+    function ydcEmail(value) {
+      return normalizeText(value).toLowerCase();
+    }
+
+    function isValidYdcEmail(value) {
+      var email = ydcEmail(value);
+      return /^[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@ydc\.com\.ph$/i.test(email) && email.length <= 254;
+    }
+
+    function setIdentityNotice(message, type) {
+      var notice = byId('identity-recovery-notice');
+      var detail = byId('identity-recovery-message');
+      var text = normalizeText(message);
+      detail.textContent = text;
+      notice.hidden = !text;
+      notice.className = 'identity-recovery__notice identity-recovery__notice--' + (type || 'info');
+      notice.setAttribute('role', type === 'danger' ? 'alert' : 'status');
+    }
+
+    function clearIdentityMessages() {
+      clearFieldError('identity-email', 'identity-email-error');
+      clearFieldError('identity-code', 'identity-code-error');
+      setIdentityNotice('', 'info');
+    }
+
+    function showIdentityRecovery(error) {
+      var wasHidden = byId('identity-recovery-view').hidden;
+      state.identityUnavailable = true;
+      byId('boot-screen').hidden = true;
+      byId('fatal-state').hidden = true;
+      byId('register-view').hidden = true;
+      byId('dashboard-view').hidden = true;
+      byId('topbar').hidden = true;
+      byId('identity-recovery-view').hidden = false;
+
+      if (wasHidden) {
+        stopIdentityCooldown();
+        state.identityRecovery.requestedEmail = '';
+        clearIdentityMessages();
+        byId('identity-email-form').hidden = false;
+        byId('identity-code-form').hidden = true;
+        byId('identity-code').value = '';
+        byId('identity-code').disabled = false;
+        byId('identity-verify-code').disabled = false;
+        byId('identity-change-email').disabled = false;
+        setIdentityNotice(
+          'Google account detection was unavailable. Verify access using a code sent to your YDC mailbox.',
+          'info'
+        );
+      } else if (error && !isIdentityUnavailable(error)) {
+        setIdentityNotice(errorMessage(error), 'danger');
+      }
+
+      window.setTimeout(function () {
+        var target = byId('identity-code-form').hidden ? byId('identity-email') : byId('identity-code');
+        if (target) target.focus();
+      }, 0);
+    }
+
+    function setIdentityButtonBusy(buttonId, busy, busyText, defaultText) {
+      var button = byId(buttonId);
+      var label = button.querySelector('.button__label');
+      button.disabled = Boolean(busy);
+      button.setAttribute('aria-busy', busy ? 'true' : 'false');
+      if (label) label.textContent = busy ? busyText : defaultText;
+    }
+
+    function stopIdentityCooldown() {
+      if (state.identityRecovery.cooldownTimer) {
+        window.clearInterval(state.identityRecovery.cooldownTimer);
+        state.identityRecovery.cooldownTimer = null;
+      }
+      state.identityRecovery.cooldownUntil = 0;
+      var resend = byId('identity-resend-code');
+      resend.disabled = false;
+      resend.textContent = 'Resend code';
+    }
+
+    function updateIdentityCooldown() {
+      var remaining = Math.max(0, Math.ceil((state.identityRecovery.cooldownUntil - Date.now()) / 1000));
+      var resend = byId('identity-resend-code');
+      if (remaining > 0) {
+        resend.disabled = true;
+        resend.textContent = 'Resend code in ' + remaining + 's';
+        return;
+      }
+      stopIdentityCooldown();
+    }
+
+    function startIdentityCooldown(seconds) {
+      stopIdentityCooldown();
+      var duration = Math.max(1, Math.min(600, Math.round(asNumber(seconds, 60))));
+      state.identityRecovery.cooldownUntil = Date.now() + (duration * 1000);
+      updateIdentityCooldown();
+      state.identityRecovery.cooldownTimer = window.setInterval(updateIdentityCooldown, 1000);
+    }
+
+    function requestIdentityCode(email, isResend) {
+      var normalizedEmail = ydcEmail(email || state.identityRecovery.requestedEmail || byId('identity-email').value);
+      clearFieldError('identity-email', 'identity-email-error');
+      clearFieldError('identity-code', 'identity-code-error');
+      setIdentityNotice('', 'info');
+
+      if (!isValidYdcEmail(normalizedEmail)) {
+        byId('identity-email-form').hidden = false;
+        byId('identity-code-form').hidden = true;
+        setFieldError('identity-email', 'identity-email-error', 'Enter a valid @ydc.com.ph work email address.');
+        byId('identity-email').focus();
+        return Promise.resolve();
+      }
+      if (state.identityRecovery.sending) return Promise.resolve();
+
+      state.identityRecovery.sending = true;
+      byId('identity-email').value = normalizedEmail;
+      if (isResend) {
+        byId('identity-resend-code').disabled = true;
+        byId('identity-resend-code').textContent = 'Sending code\u2026';
+      } else {
+        setIdentityButtonBusy('identity-send-code', true, 'Sending code\u2026', 'Send verification code');
+        byId('identity-email').disabled = true;
+      }
+
+      return serverCall('PMS_apiRequestIdentityCode', { email: normalizedEmail })
+        .then(function (result) {
+          state.identityRecovery.requestedEmail = normalizedEmail;
+          byId('identity-code-email').textContent = normalizedEmail;
+          byId('identity-email-form').hidden = true;
+          byId('identity-code-form').hidden = false;
+          byId('identity-code').value = '';
+          var expiresInSeconds = Math.max(0, Math.round(asNumber(result.expiresInSeconds, 0)));
+          var expiryMessage = expiresInSeconds
+            ? ' It expires in about ' + Math.max(1, Math.ceil(expiresInSeconds / 60)) + ' minute' + (expiresInSeconds > 60 ? 's.' : '.')
+            : '';
+          setIdentityNotice(
+            (normalizeText(result.message) || ('A 6-digit verification code was sent to ' + normalizedEmail + '.')) + expiryMessage,
+            'success'
+          );
+          startIdentityCooldown(pick(result, ['cooldownSeconds', 'retryAfterSeconds'], 60));
+          window.setTimeout(function () { byId('identity-code').focus(); }, 0);
+        })
+        .catch(function (error) {
+          if (isResend) {
+            setIdentityNotice(errorMessage(error), 'danger');
+          } else {
+            setFieldError('identity-email', 'identity-email-error', errorMessage(error));
+            byId('identity-email').focus();
+          }
+        })
+        .finally(function () {
+          state.identityRecovery.sending = false;
+          byId('identity-email').disabled = false;
+          setIdentityButtonBusy('identity-send-code', false, 'Sending code\u2026', 'Send verification code');
+          if (isResend && state.identityRecovery.cooldownUntil <= Date.now()) {
+            byId('identity-resend-code').disabled = false;
+            byId('identity-resend-code').textContent = 'Resend code';
+          }
+        });
+    }
+
+    function verifyIdentityCode(event) {
+      event.preventDefault();
+      var email = state.identityRecovery.requestedEmail;
+      var code = normalizeText(byId('identity-code').value).replace(/\s+/g, '');
+      clearFieldError('identity-code', 'identity-code-error');
+      setIdentityNotice('', 'info');
+
+      if (!isValidYdcEmail(email)) {
+        changeIdentityEmail();
+        setFieldError('identity-email', 'identity-email-error', 'Enter your YDC work email and request a new code.');
+        return;
+      }
+      if (!/^\d{6}$/.test(code)) {
+        setFieldError('identity-code', 'identity-code-error', 'Enter the complete 6-digit verification code.');
+        byId('identity-code').focus();
+        return;
+      }
+      if (state.identityRecovery.verifying) return;
+
+      var verificationAccepted = false;
+      state.identityRecovery.verifying = true;
+      setIdentityButtonBusy('identity-verify-code', true, 'Verifying\u2026', 'Verify and continue');
+      byId('identity-code').disabled = true;
+      byId('identity-change-email').disabled = true;
+      byId('identity-resend-code').disabled = true;
+
+      serverCall('PMS_apiVerifyIdentityCode', { email: email, code: code })
+        .then(function (result) {
+          if (result && result.verified === false) {
+            throw clientError(result.message || 'The verification code could not be accepted.', result.code || 'INVALID_CODE');
+          }
+          verificationAccepted = true;
+          byId('identity-code').value = '';
+          setIdentityNotice('Email verified. Loading your PMS workspace\u2026', 'success');
+          var bootstrap = result && (result.bootstrap || result.context);
+          if (bootstrap) {
+            applyBootstrap(bootstrap);
+            return bootstrap;
+          }
+          return serverCall('PMS_apiBootstrap').then(function (data) {
+            applyBootstrap(data);
+            return data;
+          });
+        })
+        .then(function () {
+          stopIdentityCooldown();
+          showToast('Identity verified', 'Your YDC mailbox was verified securely.', 'success');
+          byId('main-content').focus();
+        })
+        .catch(function (error) {
+          byId('identity-recovery-view').hidden = false;
+          byId('boot-screen').hidden = true;
+          byId('fatal-state').hidden = true;
+          if (verificationAccepted) {
+            setIdentityNotice('Your email was verified, but the workspace could not load. Use retry below to continue. ' + errorMessage(error), 'danger');
+          } else if (isIdentityUnavailable(error)) {
+            setIdentityNotice('Verification could not be completed. Request a new code and try again.', 'danger');
+          } else {
+            setFieldError('identity-code', 'identity-code-error', errorMessage(error));
+          }
+          var errorTarget = byId('identity-code-form').hidden ? byId('identity-email') : byId('identity-code');
+          if (errorTarget) errorTarget.focus();
+        })
+        .finally(function () {
+          state.identityRecovery.verifying = false;
+          byId('identity-change-email').disabled = false;
+          setIdentityButtonBusy('identity-verify-code', false, 'Verifying\u2026', 'Verify and continue');
+          var waitingForWorkspaceRetry = verificationAccepted && !byId('identity-recovery-view').hidden;
+          byId('identity-code').disabled = waitingForWorkspaceRetry;
+          byId('identity-verify-code').disabled = waitingForWorkspaceRetry;
+          updateIdentityCooldown();
+        });
+    }
+
+    function changeIdentityEmail() {
+      stopIdentityCooldown();
+      state.identityRecovery.requestedEmail = '';
+      byId('identity-code').value = '';
+      byId('identity-code').disabled = false;
+      byId('identity-verify-code').disabled = false;
+      byId('identity-code-form').hidden = true;
+      byId('identity-email-form').hidden = false;
+      clearIdentityMessages();
+      byId('identity-email').focus();
+    }
+
+    function showFatal(error) {
+      var identityUnavailable = isIdentityUnavailable(error);
+      if (identityUnavailable) {
+        showIdentityRecovery(error);
+        return;
+      }
+      state.identityUnavailable = identityUnavailable;
+      byId('boot-screen').hidden = true;
+      byId('identity-recovery-view').hidden = true;
+      byId('register-view').hidden = true;
+      byId('dashboard-view').hidden = true;
+      byId('topbar').hidden = true;
+      byId('fatal-title').textContent = "We couldn't load your workspace";
+      byId('fatal-message').textContent = errorMessage(error) || 'Please refresh and try again.';
+      byId('retry-bootstrap').textContent = 'Try again';
+      byId('fatal-state').hidden = false;
+      byId('fatal-title').focus && byId('fatal-title').focus();
+    }
+
+    function initials(name, email) {
+      var words = normalizeText(name).split(/\s+/).filter(Boolean);
+      if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+      if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+      return normalizeText(email).slice(0, 2).toUpperCase() || 'IT';
+    }
+
+    function normalizeSections(value) {
+      var source = value;
+      if (!Array.isArray(source) && source && typeof source === 'object') {
+        source = Object.keys(source).map(function (key) {
+          var entry = source[key];
+          return typeof entry === 'string' ? { key: key, label: entry } : Object.assign({ key: key }, entry);
+        });
+      }
+      var normalized = toArray(source).map(function (entry) {
+        if (typeof entry === 'string') return { key: entry, label: entry };
+        return {
+          key: normalizeText(pick(entry, ['key', 'id', 'value', 'sectionKey'], '')),
+          label: normalizeText(pick(entry, ['label', 'name', 'displayName', 'section'], ''))
+        };
+      }).filter(function (entry) { return entry.key; });
+      return normalized.length ? normalized : FALLBACK_SECTIONS.slice();
+    }
+
+    function normalizePeripherals(value) {
+      var source = value;
+      if (!Array.isArray(source) && source && typeof source === 'object') {
+        source = Object.keys(source).map(function (key) {
+          var entry = source[key];
+          return typeof entry === 'string' ? { key: key, label: entry } : Object.assign({ key: key }, entry);
+        });
+      }
+      var normalized = toArray(source).map(function (entry) {
+        if (typeof entry === 'string') return { key: entry, label: entry };
+        return {
+          key: normalizeText(pick(entry, ['key', 'id', 'value'], '')),
+          label: normalizeText(pick(entry, ['label', 'name', 'title'], ''))
+        };
+      }).filter(function (entry) { return entry.key; });
+      return normalized.length ? normalized : FALLBACK_PERIPHERALS.slice();
+    }
+
+    function normalizeChecklist(value) {
+      var source = value;
+      if (!Array.isArray(source) && source && typeof source === 'object') {
+        source = Object.keys(source).map(function (key) {
+          var group = source[key];
+          return Object.assign({ key: key }, Array.isArray(group) ? { items: group } : group);
+        });
+      }
+
+      var groups = toArray(source).map(function (group, groupIndex) {
+        var items = pick(group, ['items', 'checks', 'questions'], []);
+        return {
+          key: normalizeText(pick(group, ['key', 'id', 'categoryKey'], 'group' + groupIndex)),
+          label: normalizeText(pick(group, ['label', 'name', 'title', 'category'], 'Checklist')),
+          description: normalizeText(pick(group, ['description', 'helpText', 'subtitle'], '')),
+          items: toArray(items).map(function (item, itemIndex) {
+            if (typeof item === 'string') {
+              return { key: item, label: item, allowsNa: false };
+            }
+            return {
+              key: normalizeText(pick(item, ['key', 'id', 'value'], 'item' + itemIndex)),
+              label: normalizeText(pick(item, ['label', 'name', 'title', 'text'], 'Checklist item')),
+              allowsNa: Boolean(pick(item, ['allowsNa', 'allowNa', 'naAllowed', 'notApplicableAllowed'], false))
+            };
+          }).filter(function (item) { return item.key; })
+        };
+      }).filter(function (group) { return group.items.length; });
+
+      if (!groups.length && Array.isArray(value)) {
+        var flat = value.filter(function (item) {
+          return item && !Array.isArray(item.items) && pick(item, ['key', 'id'], '');
+        });
+        if (flat.length) {
+          var grouped = {};
+          flat.forEach(function (item) {
+            var category = normalizeText(pick(item, ['category', 'group', 'categoryLabel'], 'Checklist'));
+            if (!grouped[category]) grouped[category] = [];
+            grouped[category].push(item);
+          });
+          groups = Object.keys(grouped).map(function (category, index) {
+            return {
+              key: 'group' + index,
+              label: category,
+              description: '',
+              items: grouped[category].map(function (item) {
+                return {
+                  key: normalizeText(pick(item, ['key', 'id'], '')),
+                  label: normalizeText(pick(item, ['label', 'name', 'title', 'text'], 'Checklist item')),
+                  allowsNa: Boolean(pick(item, ['allowsNa', 'allowNa', 'naAllowed'], false))
+                };
+              })
+            };
+          });
+        }
+      }
+
+      return groups.length ? groups : FALLBACK_CHECKLIST.slice();
+    }
+
+    function normalizeAssets(value) {
+      var seen = new Set();
+      return toArray(value).map(function (asset) {
+        if (typeof asset === 'string') {
+          return { tag: normalizeTag(asset), status: 'INPROD', location: '', sourceTab: '' };
+        }
+        return {
+          tag: normalizeTag(pick(asset, ['tag', 'assetTag', 'asset', 'id'], '')),
+          status: normalizeText(pick(asset, ['status', 'equipmentStatus'], 'INPROD')).toUpperCase(),
+          location: normalizeText(pick(asset, ['location', 'masterLocation'], '')),
+          sourceTab: normalizeText(pick(asset, ['sourceTab', 'sheetName', 'source'], '')),
+          row: pick(asset, ['row', 'sourceRow'], null)
+        };
+      }).filter(function (asset) {
+        if (!asset.tag || seen.has(asset.tag)) return false;
+        seen.add(asset.tag);
+        return true;
+      });
+    }
+
+    function sectionKey() {
+      return normalizeText(pick(state.profile, ['sectionKey', 'section', 'itSection'], pick(state.user, ['sectionKey', 'section'], '')));
+    }
+
+    function sectionLabel(key) {
+      var match = state.sections.find(function (section) { return section.key === key; });
+      return match ? match.label : normalizeText(key).replace(/_/g, ' ');
+    }
+
+    function userName() {
+      return normalizeText(pick(state.profile, ['name', 'displayName', 'technicianName'], pick(state.user, ['name', 'displayName'], '')));
+    }
+
+    function userEmail() {
+      return normalizeText(pick(state.user, ['email', 'technicianEmail'], pick(state.profile, ['email'], '')));
+    }
+
+    function userIsAdmin() {
+      var role = normalizeText(pick(state.profile, ['role'], pick(state.user, ['role'], ''))).toUpperCase();
+      return Boolean(state.profile.isAdmin || state.user.isAdmin || role === 'ADMIN' || role === 'PMS_ADMIN');
+    }
+
+    function initializeSchema() {
+      state.sections = normalizeSections(state.config.sections);
+      state.peripherals = normalizePeripherals(state.config.peripherals);
+      state.checklistGroups = normalizeChecklist(state.config.checklist);
+      state.assets = normalizeAssets(state.bootstrap.assets);
+      state.assetMap = new Map();
+      state.assets.forEach(function (asset) { state.assetMap.set(asset.tag, asset); });
+      resetFormData();
+      renderRegistrationOptions();
+      renderAssetOptions();
+      renderPeripheralSchema();
+      renderChecklistSchema();
+    }
+
+    function applyBootstrap(data) {
+      state.bootstrap = data || {};
+      state.user = state.bootstrap.user || {};
+      state.profile = state.bootstrap.profile || {};
+      state.config = state.bootstrap.config || {};
+      if (!userEmail()) {
+        throw clientError('The signed-in Google account could not be verified.', 'IDENTITY_UNAVAILABLE');
+      }
+      initializeSchema();
+      renderIdentity();
+      byId('boot-screen').hidden = true;
+      byId('fatal-state').hidden = true;
+      byId('identity-recovery-view').hidden = true;
+      state.identityUnavailable = false;
+
+      var registered = state.bootstrap.registered === true || Boolean(sectionKey());
+      if (!registered) {
+        byId('topbar').hidden = true;
+        byId('dashboard-view').hidden = true;
+        byId('register-view').hidden = false;
+        window.setTimeout(function () { byId('register-name').focus(); }, 0);
+        return;
+      }
+
+      byId('register-view').hidden = true;
+      byId('topbar').hidden = false;
+      byId('dashboard-view').hidden = false;
+      renderDashboard();
+      if (normalizeText(state.user.identitySource).toUpperCase() === 'TEMPORARY_KEY') {
+        showToast(
+          'Saved profile restored',
+          'Google did not provide your email for this request, so PMS securely restored your registered section. Administrator tools require a live Google identity.',
+          'info',
+          9000
+        );
+      }
+    }
+
+    function loadBootstrap(options) {
+      var settings = options || {};
+      if (!settings.silent) {
+        byId('boot-screen').hidden = false;
+        byId('boot-screen').setAttribute('aria-busy', 'true');
+        byId('fatal-state').hidden = true;
+        byId('identity-recovery-view').hidden = true;
+      }
+      return serverCall('PMS_apiBootstrap')
+        .then(function (data) {
+          applyBootstrap(data);
+          return data;
+        })
+        .catch(function (error) {
+          if (settings.silent && !isIdentityUnavailable(error)) {
+            showToast('Refresh failed', errorMessage(error), 'danger');
+          } else {
+            showFatal(error);
+          }
+          throw error;
+        });
+    }
+
+    function renderRegistrationOptions() {
+      var select = byId('register-section');
+      while (select.options.length > 1) select.remove(1);
+      state.sections.forEach(function (section) {
+        var option = document.createElement('option');
+        option.value = section.key;
+        option.textContent = section.label;
+        select.appendChild(option);
+      });
+      byId('register-name').value = userName();
+      byId('register-email').value = userEmail();
+    }
+
+    function renderIdentity() {
+      var name = userName() || 'YDC technician';
+      var email = userEmail();
+      var currentSection = sectionLabel(sectionKey());
+      byId('header-name').textContent = name;
+      byId('header-email').textContent = email;
+      byId('header-avatar').textContent = initials(name, email);
+      byId('header-section').textContent = currentSection;
+      byId('header-section').hidden = !sectionKey();
+      byId('user-summary').hidden = false;
+      byId('form-technician-name').textContent = name;
+      byId('form-technician-email').textContent = email;
+      byId('form-technician-section').textContent = currentSection || '—';
+    }
+
+    function onRegister(event) {
+      event.preventDefault();
+      var displayName = normalizeText(byId('register-name').value).replace(/\s+/g, ' ');
+      var section = byId('register-section').value;
+      clearFieldError('register-name', 'register-name-error');
+      clearFieldError('register-section', 'register-error');
+      if (!displayName) {
+        setFieldError('register-name', 'register-name-error', 'Enter the name that should appear on your PMS records.');
+        byId('register-name').focus();
+        return;
+      }
+      if (displayName.length > 120) {
+        setFieldError('register-name', 'register-name-error', 'Display name must be 120 characters or fewer.');
+        byId('register-name').focus();
+        return;
+      }
+      if (!section || !state.sections.some(function (item) { return item.key === section; })) {
+        setFieldError('register-section', 'register-error', 'Select your assigned IT section.');
+        byId('register-section').focus();
+        return;
+      }
+      if (!userEmail()) {
+        showFatal(clientError('The signed-in Google account could not be verified.', 'IDENTITY_UNAVAILABLE'));
+        return;
+      }
+
+      byId('register-name').value = displayName;
+      setBusy(true, 'Saving your profile…');
+      serverCall('PMS_apiRegister', { displayName: displayName, section: section })
+        .then(function () { return loadBootstrap({ silent: true }); })
+        .then(function () {
+          showToast('Workspace ready', 'Your profile has been saved. Future visits will open your dashboard automatically.', 'success');
+          byId('main-content').focus();
+        })
+        .catch(function (error) {
+          if (isIdentityUnavailable(error)) {
+            showFatal(error);
+            return;
+          }
+          var targetName = /name/i.test(errorMessage(error));
+          setFieldError(targetName ? 'register-name' : 'register-section', targetName ? 'register-name-error' : 'register-error', errorMessage(error));
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function currentManilaDate() {
+      try {
+        var parts = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Manila',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(new Date());
+        var values = {};
+        parts.forEach(function (part) { values[part.type] = part.value; });
+        return values.year + '-' + values.month + '-' + values.day;
+      } catch (ignore) {
+        var now = new Date();
+        return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+      }
+    }
+
+    function parseDateParts(value) {
+      var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalizeText(value));
+      if (!match) return null;
+      var year = Number(match[1]);
+      var month = Number(match[2]);
+      var day = Number(match[3]);
+      var test = new Date(Date.UTC(year, month - 1, day));
+      if (test.getUTCFullYear() !== year || test.getUTCMonth() !== month - 1 || test.getUTCDate() !== day) return null;
+      return { year: year, month: month, day: day };
+    }
+
+    function deriveCycle(value) {
+      var parts = parseDateParts(value);
+      if (!parts) return null;
+      var cycle;
+      var startMonth;
+      var endMonth;
+      var endDay;
+      if (parts.month <= 4) {
+        cycle = 'T1'; startMonth = 1; endMonth = 4; endDay = 30;
+      } else if (parts.month <= 8) {
+        cycle = 'T2'; startMonth = 5; endMonth = 8; endDay = 31;
+      } else {
+        cycle = 'T3'; startMonth = 9; endMonth = 12; endDay = 31;
+      }
+      return {
+        year: parts.year,
+        cycle: cycle,
+        cycleId: parts.year + '-' + cycle,
+        start: parts.year + '-' + String(startMonth).padStart(2, '0') + '-01',
+        deadline: parts.year + '-' + String(endMonth).padStart(2, '0') + '-' + String(endDay).padStart(2, '0')
+      };
+    }
+
+    function formatDate(value, options) {
+      var parts = parseDateParts(value);
+      if (!parts) return normalizeText(value) || '—';
+      var date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, 12));
+      return new Intl.DateTimeFormat('en-US', options || { year: 'numeric', month: 'short', day: 'numeric' }).format(date);
+    }
+
+    function dayDifference(from, to) {
+      var a = parseDateParts(from);
+      var b = parseDateParts(to);
+      if (!a || !b) return null;
+      return Math.ceil((Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day)) / 86400000);
+    }
+
+    function renderDashboard() {
+      var metrics = state.bootstrap.metrics || {};
+      var summary = metrics.summary || metrics.current || metrics;
+      var today = currentManilaDate();
+      var derived = deriveCycle(today);
+      var cycle = normalizeText(pick(summary, ['cycle', 'currentCycle'], pick(metrics, ['cycle', 'currentCycle'], derived.cycle)));
+      var year = asNumber(pick(summary, ['year', 'maintenanceYear', 'currentYear'], pick(metrics, ['year', 'currentYear'], derived.year)), derived.year);
+      var deadline = normalizeText(pick(summary, ['deadline', 'cycleDeadline'], pick(metrics, ['deadline', 'cycleDeadline'], deriveCycle(year + (cycle === 'T1' ? '-01-01' : cycle === 'T2' ? '-05-01' : '-09-01')).deadline)));
+      var daysRemaining = pick(summary, ['daysRemaining', 'daysToDeadline'], null);
+      if (daysRemaining === null || daysRemaining === undefined) daysRemaining = dayDifference(today, deadline);
+
+      var eligible = asNumber(pick(summary, ['eligible', 'eligibleAssets', 'totalEligible'], state.assets.length), state.assets.length);
+      var completed = asNumber(pick(summary, ['completed', 'completedAssets', 'totalCompleted'], 0), 0);
+      var pending = asNumber(pick(summary, ['pending', 'pendingAssets', 'totalPending'], Math.max(eligible - completed, 0)), 0);
+      var complianceValue = pick(summary, ['compliance', 'compliancePct', 'compliancePercent', 'percentage'], eligible ? completed / eligible * 100 : null);
+      var compliance = complianceValue === null ? null : Math.max(0, Math.min(100, Math.round(asNumber(complianceValue, 0) * 10) / 10));
+
+      byId('dashboard-eyebrow').textContent = sectionLabel(sectionKey()) || 'PMS workspace';
+      byId('dashboard-title').textContent = 'Maintenance overview';
+      byId('dashboard-welcome').textContent = 'Welcome back, ' + (userName() || 'technician') + '. Track this cycle’s preventive maintenance coverage.';
+      [byId('new-record-button'), byId('empty-new-record')].forEach(function (button) {
+        button.disabled = state.assets.length === 0;
+        button.title = state.assets.length ? 'Open the preventive maintenance questionnaire' : 'No eligible INPROD assets are available in your section';
+      });
+      byId('cycle-badge').textContent = cycle;
+      byId('cycle-banner-title').textContent = year + ' ' + cycle + ' preventive maintenance';
+      byId('cycle-date-range').textContent = formatDate(deriveCycle(year + (cycle === 'T1' ? '-01-01' : cycle === 'T2' ? '-05-01' : '-09-01')).start, { month: 'long', day: 'numeric' }) + ' – ' + formatDate(deadline, { month: 'long', day: 'numeric', year: 'numeric' });
+      byId('cycle-days').textContent = daysRemaining === null ? '—' : String(Math.abs(daysRemaining));
+      byId('cycle-days-label').textContent = daysRemaining !== null && daysRemaining < 0 ? 'days overdue' : daysRemaining === 1 ? 'day remaining' : 'days remaining';
+      byId('header-cycle').textContent = year + ' ' + cycle;
+      byId('header-cycle').hidden = false;
+
+      byId('metric-eligible').textContent = formatNumber(eligible);
+      byId('metric-completed').textContent = formatNumber(completed);
+      byId('metric-pending').textContent = formatNumber(pending);
+      byId('metric-compliance').textContent = compliance === null ? 'N/A' : formatPercent(compliance);
+      byId('metric-findings').textContent = formatNumber(pick(summary, ['withFindings', 'findings', 'assetsWithFindings'], 0));
+      byId('metric-follow-up').textContent = formatNumber(pick(summary, ['followUpRequired', 'followUp', 'requiresFollowUp'], 0));
+      byId('metric-mine').textContent = formatNumber(pick(summary, ['myCompleted', 'completedByMe', 'technicianCompleted'], 0));
+      byId('pending-detail').textContent = daysRemaining !== null && daysRemaining < 0 && pending > 0 ? 'Overdue assets' : 'Assets remaining';
+      byId('coverage-ratio').textContent = completed + ' of ' + eligible + ' eligible assets';
+      byId('coverage-percent').textContent = compliance === null ? 'N/A' : formatPercent(compliance);
+      setProgress(byId('coverage-progress'), byId('coverage-progress-fill'), compliance || 0);
+
+      renderLocations(pick(summary, ['completionByLocation', 'byLocation', 'locations'], pick(metrics, ['completionByLocation', 'byLocation', 'locations'], [])));
+      renderRecent(state.bootstrap.recentRecords || []);
+      renderRollover(state.bootstrap.rollover || null);
+    }
+
+    function formatNumber(value) {
+      return new Intl.NumberFormat('en-US').format(asNumber(value, 0));
+    }
+
+    function formatPercent(value) {
+      var number = Math.round(asNumber(value, 0) * 10) / 10;
+      return number.toLocaleString('en-US', { maximumFractionDigits: 1 }) + '%';
+    }
+
+    function setProgress(container, fill, value) {
+      var percent = clampPercent(value);
+      container.setAttribute('aria-valuenow', String(percent));
+      fill.style.width = percent + '%';
+      fill.classList.toggle('is-complete', percent === 100);
+    }
+
+    function renderLocations(value) {
+      var locations = value;
+      if (!Array.isArray(locations) && locations && typeof locations === 'object') {
+        locations = Object.keys(locations).map(function (name) {
+          var entry = locations[name];
+          return typeof entry === 'number' ? { location: name, completed: entry } : Object.assign({ location: name }, entry);
+        });
+      }
+      locations = toArray(locations);
+      var list = byId('location-list');
+      list.replaceChildren();
+      byId('location-empty').hidden = locations.length !== 0;
+      byId('location-count').textContent = locations.length ? locations.length + (locations.length === 1 ? ' location' : ' locations') : '';
+
+      locations.slice(0, 10).forEach(function (entry) {
+        var eligible = asNumber(pick(entry, ['eligible', 'total'], 0), 0);
+        var completed = asNumber(pick(entry, ['completed', 'done'], 0), 0);
+        var percent = clampPercent(pick(entry, ['compliance', 'percent', 'percentage'], eligible ? completed / eligible * 100 : 0));
+        var row = document.createElement('div');
+        row.className = 'location-row';
+        var top = document.createElement('div');
+        top.className = 'location-row__top';
+        var name = document.createElement('span');
+        name.className = 'location-row__name';
+        name.textContent = normalizeText(pick(entry, ['location', 'name', 'label'], 'Unspecified')) || 'Unspecified';
+        var count = document.createElement('span');
+        count.className = 'location-row__count';
+        count.textContent = completed + ' / ' + eligible + ' · ' + percent + '%';
+        top.appendChild(name);
+        top.appendChild(count);
+        var progress = document.createElement('div');
+        progress.className = 'progress-track';
+        progress.setAttribute('role', 'progressbar');
+        progress.setAttribute('aria-label', name.textContent + ' completion');
+        progress.setAttribute('aria-valuemin', '0');
+        progress.setAttribute('aria-valuemax', '100');
+        progress.setAttribute('aria-valuenow', String(percent));
+        var fill = document.createElement('span');
+        fill.className = 'progress-fill';
+        fill.style.width = percent + '%';
+        if (percent === 100) fill.classList.add('is-complete');
+        progress.appendChild(fill);
+        row.appendChild(top);
+        row.appendChild(progress);
+        list.appendChild(row);
+      });
+    }
+
+    function completionDecision(value) {
+      var text = normalizeText(value).toUpperCase();
+      var percentMatch = text.match(/(\d{1,3})%/);
+      var percent = percentMatch ? percentMatch[1] + '% · ' : '';
+      var decision;
+      if (text.indexOf('SYNC REQUIRED') >= 0) decision = { label: 'SYNC REQUIRED', className: 'status-chip--warning' };
+      else if (text.indexOf('SYNC FAILED') >= 0) decision = { label: 'SYNC FAILED', className: 'status-chip--danger' };
+      else if (text.indexOf('COMPLETED') >= 0 && text.indexOf('INCOMPLETE') < 0) decision = { label: 'COMPLETED', className: 'status-chip--success' };
+      else if (text.indexOf('SYNCING') >= 0) decision = { label: 'SYNCING', className: 'status-chip--info' };
+      else decision = { label: 'INCOMPLETE', className: 'status-chip--warning' };
+      decision.display = percent + decision.label;
+      return decision;
+    }
+
+    function renderRecent(records) {
+      var rows = toArray(records);
+      var body = byId('recent-records-body');
+      body.replaceChildren();
+      byId('recent-table-wrap').hidden = rows.length === 0;
+      byId('recent-empty').hidden = rows.length !== 0;
+
+      rows.forEach(function (record) {
+        var id = normalizeText(pick(record, ['recordId', 'id'], ''));
+        var maintenanceDate = normalizeText(pick(record, ['maintenanceDate', 'performedOn', 'date'], ''));
+        var assetTag = normalizeText(pick(record, ['assetTag', 'asset'], ''));
+        var result = normalizeText(pick(record, ['assessmentResult', 'result'], '')) || 'Not assessed';
+        var completionText = normalizeText(pick(record, ['pmsCompletion', 'completion', 'status'], 'INCOMPLETE'));
+        var decision = completionDecision(completionText);
+        var row = document.createElement('tr');
+
+        var idCell = document.createElement('td');
+        var idStrong = document.createElement('strong');
+        idStrong.textContent = id || '—';
+        idCell.appendChild(idStrong);
+
+        var dateCell = document.createElement('td');
+        dateCell.textContent = formatDate(maintenanceDate);
+        var assetCell = document.createElement('td');
+        var assetStrong = document.createElement('strong');
+        assetStrong.textContent = assetTag || '—';
+        assetCell.appendChild(assetStrong);
+        var resultCell = document.createElement('td');
+        resultCell.textContent = result;
+        var statusCell = document.createElement('td');
+        var chip = document.createElement('span');
+        chip.className = 'status-chip ' + decision.className;
+        chip.textContent = decision.display;
+        chip.title = completionText;
+        statusCell.appendChild(chip);
+        var actionCell = document.createElement('td');
+        var editable = record.editable !== undefined ? Boolean(record.editable) : decision.label === 'INCOMPLETE';
+        if (id && editable) {
+          var action = document.createElement('button');
+          action.className = 'table-action';
+          action.type = 'button';
+          action.textContent = decision.label === 'INCOMPLETE' ? 'Resume' : 'Open';
+          action.dataset.recordId = id;
+          action.addEventListener('click', function () { openExistingRecord(id); });
+          actionCell.appendChild(action);
+        }
+
+        row.appendChild(idCell);
+        row.appendChild(dateCell);
+        row.appendChild(assetCell);
+        row.appendChild(resultCell);
+        row.appendChild(statusCell);
+        row.appendChild(actionCell);
+        body.appendChild(row);
+      });
+    }
+
+    function renderRollover(rollover) {
+      var panel = byId('rollover-panel');
+      if (!userIsAdmin()) {
+        panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      var metrics = state.bootstrap.metrics || {};
+      var status = rollover || {};
+      var currentYear = asNumber(pick(status, ['currentYear', 'trackerYear', 'oldYear'], pick(metrics, ['year', 'currentYear'], new Date().getFullYear())), new Date().getFullYear());
+      var nextYear = asNumber(pick(status, ['nextYear', 'targetYear'], currentYear + 1), currentYear + 1);
+      byId('tracker-year-chip').textContent = 'Tracker year ' + currentYear;
+      byId('rollover-year').value = String(nextYear);
+      renderReconciliationStatus(status, currentYear);
+      resetRolloverReview();
+    }
+
+    function reconciliationLabel(status) {
+      var labels = {
+        RUNNING: 'Automatic retry running',
+        COMPLETED: 'Synchronized',
+        COMPLETED_WITH_FAILURES: 'Needs attention',
+        MANUAL_RETRY_REQUIRED: 'Manual retry required',
+        FAILED: 'Retry required',
+        FAILURE: 'Retry required'
+      };
+      return labels[status] || (status ? status.replace(/_/g, ' ').toLowerCase().replace(/^./, function (character) { return character.toUpperCase(); }) : 'Synchronized');
+    }
+
+    function reconciliationNeedsRetry(status) {
+      return status.indexOf('FAIL') >= 0 || status.indexOf('MANUAL_RETRY') >= 0;
+    }
+
+    function renderReconciliationStatus(rollover, currentYear) {
+      var status = rollover || {};
+      var reconciliation = status.reconciliation || {};
+      var reconciliationStatus = normalizeText(pick(reconciliation, ['status'], '')).toUpperCase();
+      var rawPending = pick(status, ['pendingSync'], null);
+      var pendingKnown = rawPending !== null && rawPending !== undefined && Number.isFinite(Number(rawPending));
+      var pending = pendingKnown ? Math.max(0, asNumber(rawPending, 0)) : null;
+      var needsRetry = reconciliationNeedsRetry(reconciliationStatus);
+      var retryVisible = (pending !== null && pending > 0) || needsRetry;
+      var retryButton = byId('retry-pending-sync');
+      var chip = byId('sync-status-chip');
+      var title = byId('sync-recovery-title');
+      var detail = byId('sync-recovery-detail');
+      var recovery = byId('sync-recovery');
+      var validYear = Number.isInteger(Number(currentYear)) && Number(currentYear) >= 2000 && Number(currentYear) <= 9999;
+
+      retryButton.hidden = !retryVisible;
+      retryButton.disabled = !validYear;
+      retryButton.dataset.trackerYear = validYear ? String(currentYear) : '';
+      retryButton.title = validYear ? 'Retry tracker synchronization for ' + currentYear : 'Tracker years must match before synchronization can be retried';
+
+      chip.className = 'status-chip ';
+      recovery.classList.remove('sync-recovery--attention', 'sync-recovery--running', 'sync-recovery--success');
+      if (!pendingKnown) {
+        title.textContent = 'Synchronization status unavailable';
+        detail.textContent = 'The two operational tracker sheets do not currently report the same tracker year.';
+        chip.textContent = 'Year mismatch';
+        chip.className += 'status-chip--danger';
+        recovery.classList.add('sync-recovery--attention');
+        return;
+      }
+
+      title.textContent = pending === 1 ? '1 record pending synchronization' : formatNumber(pending) + ' records pending synchronization';
+      if (reconciliationStatus === 'RUNNING') {
+        detail.textContent = pending > 0
+          ? 'Automatic reconciliation is running in batches. You can retry now if a record needs immediate recovery.'
+          : 'The final reconciliation batch is finishing. Refresh the dashboard for the latest result.';
+        chip.className += 'status-chip--info';
+        recovery.classList.add('sync-recovery--running');
+      } else if (needsRetry) {
+        detail.textContent = pending > 0
+          ? 'Some completed records have not updated their tracker checkbox and remarks. Retry the pending synchronization.'
+          : 'The last recovery job reported a failure. Retry to confirm the tracker is synchronized.';
+        chip.className += 'status-chip--danger';
+        recovery.classList.add('sync-recovery--attention');
+      } else if (pending > 0) {
+        detail.textContent = 'Completed PMS records are waiting to update their tracker checkbox and remarks.';
+        chip.className += 'status-chip--warning';
+        recovery.classList.add('sync-recovery--attention');
+      } else {
+        detail.textContent = 'All completed PMS records for this tracker year are synchronized.';
+        chip.className += 'status-chip--success';
+        recovery.classList.add('sync-recovery--success');
+      }
+      chip.textContent = reconciliationStatus ? reconciliationLabel(reconciliationStatus) : (pending > 0 ? 'Pending' : 'Synchronized');
+    }
+
+    function retryPendingSynchronization() {
+      var button = byId('retry-pending-sync');
+      var trackerYear = Number(button.dataset.trackerYear);
+      if (!Number.isInteger(trackerYear) || trackerYear < 2000 || trackerYear > 9999) {
+        showToast('Retry unavailable', 'Both tracker sheets must use the same valid tracker year.', 'danger');
+        return;
+      }
+      setBusy(true, 'Retrying pending tracker synchronization…');
+      serverCall('PMS_apiRetryReconciliation', trackerYear)
+        .then(function (result) {
+          var reconciliation = result.reconciliation || {};
+          var pending = asNumber(pick(reconciliation, ['pendingRemaining'], 0), 0);
+          showToast(
+            pending > 0 ? 'Synchronization retry started' : 'Tracker synchronized',
+            pending > 0 ? formatNumber(pending) + ' record' + (pending === 1 ? ' remains' : 's remain') + ' pending; remaining batches will continue automatically.' : 'No completed records are waiting to update the tracker.',
+            pending > 0 ? 'warning' : 'success',
+            8500
+          );
+          return loadBootstrap({ silent: true });
+        })
+        .catch(function (error) {
+          showToast('Synchronization retry failed', errorMessage(error), 'danger', 9000);
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function resetRolloverReview() {
+      state.dryRun = null;
+      byId('rollover-review').hidden = true;
+      byId('rollover-reviewed').checked = false;
+      byId('rollover-confirmation').value = '';
+      byId('rollover-execute').disabled = true;
+      byId('rollover-stats').replaceChildren();
+    }
+
+    function runRolloverDryRun() {
+      var nextYear = Number(byId('rollover-year').value);
+      if (!Number.isInteger(nextYear) || nextYear < 2000 || nextYear > 9999) {
+        showToast('Invalid year', 'Enter a valid four-digit tracker year.', 'danger');
+        byId('rollover-year').focus();
+        return;
+      }
+      setBusy(true, 'Running rollover safety checks…');
+      serverCall('PMS_apiRolloverDryRun', nextYear)
+        .then(function (result) {
+          state.dryRun = result;
+          renderRolloverDryRun(result);
+          showToast('Safety check complete', 'No workbook changes were made.', 'success');
+        })
+        .catch(function (error) {
+          resetRolloverReview();
+          showToast('Safety check failed', errorMessage(error), 'danger');
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function renderRolloverDryRun(result) {
+      var nextYear = asNumber(result.nextYear, Number(byId('rollover-year').value));
+      byId('rollover-review').hidden = false;
+      byId('rollover-summary').textContent = 'The tracker can move from ' + result.currentYear + ' to ' + nextYear + '. This preview expires in ' + asNumber(result.expiresInSeconds, 0) + ' seconds.';
+      byId('rollover-confirmation-phrase').textContent = 'START ' + nextYear;
+      byId('rollover-confirmation').value = '';
+      byId('rollover-reviewed').checked = false;
+      byId('rollover-execute').disabled = true;
+
+      var stats = byId('rollover-stats');
+      stats.replaceChildren();
+      if (result.capacity) {
+        [
+          ['Workbook cells', formatNumber(result.capacity.allocatedCells) + ' / ' + formatNumber(result.capacity.limitCells)],
+          ['Workbook capacity used', asNumber(result.capacity.utilizationPercent, 0) + '%']
+        ].forEach(function (pair) {
+          var wrapper = document.createElement('div');
+          var term = document.createElement('dt');
+          var description = document.createElement('dd');
+          term.textContent = pair[0];
+          description.textContent = pair[1];
+          wrapper.appendChild(term);
+          wrapper.appendChild(description);
+          stats.appendChild(wrapper);
+        });
+      }
+      toArray(result.sections).forEach(function (section) {
+        var completed = section.completedByCycle || {};
+        var remarks = section.remarksByCycle || {};
+        var values = [
+          ['Section', sectionLabel(section.section) || normalizeText(section.sheetName)],
+          ['Eligible assets', formatNumber(section.assetCount)],
+          ['Completed T1 / T2 / T3', [completed.T1 || 0, completed.T2 || 0, completed.T3 || 0].join(' / ')],
+          ['Remarks T1 / T2 / T3', [remarks.T1 || 0, remarks.T2 || 0, remarks.T3 || 0].join(' / ')]
+        ];
+        values.forEach(function (pair) {
+          var wrapper = document.createElement('div');
+          var term = document.createElement('dt');
+          var description = document.createElement('dd');
+          term.textContent = pair[0];
+          description.textContent = pair[1];
+          wrapper.appendChild(term);
+          wrapper.appendChild(description);
+          stats.appendChild(wrapper);
+        });
+      });
+      byId('rollover-review').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function updateRolloverConfirmation() {
+      if (!state.dryRun) {
+        byId('rollover-execute').disabled = true;
+        return;
+      }
+      var phrase = 'START ' + state.dryRun.nextYear;
+      byId('rollover-execute').disabled = !byId('rollover-reviewed').checked || normalizeText(byId('rollover-confirmation').value).toUpperCase() !== phrase;
+    }
+
+    function executeRollover() {
+      if (!state.dryRun || byId('rollover-execute').disabled) return;
+      var nextYear = Number(state.dryRun.nextYear);
+      var token = normalizeText(state.dryRun.confirmationToken);
+      setBusy(true, 'Opening ' + nextYear + ' and preserving prior-year records…');
+      serverCall('PMS_apiExecuteRollover', nextYear, token)
+        .then(function (result) {
+          showToast('New PMS year opened', normalizeText(result.message) || ('The operational tracker is ready for ' + result.newYear + '.'), 'success', 9000);
+          return loadBootstrap({ silent: true });
+        })
+        .catch(function (error) {
+          showToast('Rollover stopped', errorMessage(error), 'danger', 9000);
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function renderAssetOptions() {
+      var datalist = byId('asset-options');
+      datalist.replaceChildren();
+      state.assets.forEach(function (asset) {
+        var option = document.createElement('option');
+        option.value = asset.tag;
+        option.label = asset.location ? asset.location : 'Location not recorded';
+        datalist.appendChild(option);
+      });
+      byId('asset-help').textContent = state.assets.length ? ('Search ' + formatNumber(state.assets.length) + ' current INPROD assets in ' + sectionLabel(sectionKey()) + '.') : 'No eligible INPROD assets are currently available in your section.';
+    }
+
+    function renderPeripheralSchema() {
+      var grid = byId('peripheral-grid');
+      grid.replaceChildren();
+      state.peripherals.forEach(function (peripheral) {
+        var field = document.createElement('div');
+        field.className = 'peripheral-field';
+        field.dataset.peripheralKey = peripheral.key;
+        var label = document.createElement('label');
+        var inputId = 'peripheral-' + safeId(peripheral.key);
+        label.setAttribute('for', inputId);
+        label.textContent = peripheral.label;
+
+        var chipInput = document.createElement('div');
+        chipInput.className = 'chip-input';
+        chipInput.addEventListener('click', function () { input.focus(); });
+        var input = document.createElement('input');
+        input.id = inputId;
+        input.type = 'text';
+        input.autocomplete = 'off';
+        input.placeholder = 'Add asset tag';
+        input.dataset.peripheralKey = peripheral.key;
+        input.setAttribute('aria-label', 'Add ' + peripheral.label + ' asset tag');
+        input.addEventListener('keydown', onPeripheralKeydown);
+        input.addEventListener('blur', function () { commitPeripheralInput(input); });
+        input.addEventListener('input', function () {
+          if (input.value.indexOf(',') >= 0) commitPeripheralInput(input);
+          markDirty();
+        });
+        chipInput.appendChild(input);
+
+        var warning = document.createElement('p');
+        warning.className = 'peripheral-warning';
+        warning.id = inputId + '-warning';
+        warning.setAttribute('aria-live', 'polite');
+
+        field.appendChild(label);
+        field.appendChild(chipInput);
+        field.appendChild(warning);
+        grid.appendChild(field);
+      });
+      renderAllPeripheralChips();
+    }
+
+    function safeId(value) {
+      return normalizeText(value).replace(/[^a-zA-Z0-9_-]/g, '-');
+    }
+
+    function onPeripheralKeydown(event) {
+      if (event.key === 'Enter' || event.key === ',') {
+        event.preventDefault();
+        commitPeripheralInput(event.currentTarget);
+      } else if (event.key === 'Backspace' && !event.currentTarget.value) {
+        var key = event.currentTarget.dataset.peripheralKey;
+        var values = state.peripheralValues[key] || [];
+        if (values.length) {
+          values.pop();
+          renderPeripheralChips(key);
+          markDirty();
+        }
+      }
+    }
+
+    function commitPeripheralInput(input) {
+      var key = input.dataset.peripheralKey;
+      var tags = input.value.split(',').map(normalizeTag).filter(Boolean);
+      if (!tags.length) return;
+      if (!state.peripheralValues[key]) state.peripheralValues[key] = [];
+      tags.forEach(function (tag) {
+        if (state.peripheralValues[key].indexOf(tag) < 0) state.peripheralValues[key].push(tag);
+      });
+      input.value = '';
+      renderPeripheralChips(key);
+      markDirty();
+    }
+
+    function renderAllPeripheralChips() {
+      state.peripherals.forEach(function (peripheral) { renderPeripheralChips(peripheral.key); });
+    }
+
+    function renderPeripheralChips(key) {
+      var field = document.querySelector('[data-peripheral-key="' + CSS.escape(key) + '"]');
+      if (!field) return;
+      var chipInput = field.querySelector('.chip-input');
+      var input = chipInput.querySelector('input');
+      chipInput.querySelectorAll('.tag-chip').forEach(function (chip) { chip.remove(); });
+      var unverified = 0;
+      (state.peripheralValues[key] || []).forEach(function (tag) {
+        var verified = state.assetMap.has(tag);
+        if (!verified) unverified += 1;
+        var chip = document.createElement('span');
+        chip.className = 'tag-chip' + (verified ? '' : ' tag-chip--unverified');
+        chip.title = verified ? 'Matched in your section asset list' : 'Unverified peripheral tag';
+        var label = document.createElement('span');
+        label.textContent = tag;
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', 'Remove ' + tag);
+        remove.addEventListener('click', function (event) {
+          event.stopPropagation();
+          state.peripheralValues[key] = state.peripheralValues[key].filter(function (value) { return value !== tag; });
+          renderPeripheralChips(key);
+          markDirty();
+          input.focus();
+        });
+        chip.appendChild(label);
+        chip.appendChild(remove);
+        chipInput.insertBefore(chip, input);
+      });
+      var warning = field.querySelector('.peripheral-warning');
+      warning.textContent = unverified ? unverified + (unverified === 1 ? ' tag is' : ' tags are') + ' not in the available section asset list and will be flagged.' : '';
+    }
+
+    function renderChecklistSchema() {
+      var container = byId('checklist-groups');
+      container.replaceChildren();
+      state.checklistGroups.forEach(function (group) {
+        var wrapper = document.createElement('section');
+        wrapper.className = 'checklist-group';
+        wrapper.dataset.checklistGroup = group.key;
+
+        var header = document.createElement('div');
+        header.className = 'checklist-group__header';
+        var title = document.createElement('div');
+        title.className = 'checklist-group__title';
+        var strong = document.createElement('strong');
+        strong.textContent = group.label;
+        var description = document.createElement('span');
+        description.textContent = group.description || group.items.length + ' checks';
+        title.appendChild(strong);
+        title.appendChild(description);
+
+        var progressWrap = document.createElement('div');
+        progressWrap.className = 'checklist-group__progress';
+        var count = document.createElement('span');
+        count.className = 'checklist-group__count';
+        count.dataset.groupCount = group.key;
+        count.textContent = '0 / ' + group.items.length;
+        var progress = document.createElement('div');
+        progress.className = 'progress-track';
+        progress.setAttribute('role', 'progressbar');
+        progress.setAttribute('aria-label', group.label + ' progress');
+        progress.setAttribute('aria-valuemin', '0');
+        progress.setAttribute('aria-valuemax', '100');
+        progress.setAttribute('aria-valuenow', '0');
+        progress.dataset.groupProgress = group.key;
+        var fill = document.createElement('span');
+        fill.className = 'progress-fill';
+        progress.appendChild(fill);
+        progressWrap.appendChild(count);
+        progressWrap.appendChild(progress);
+        header.appendChild(title);
+        header.appendChild(progressWrap);
+
+        var items = document.createElement('div');
+        items.className = 'checklist-items';
+        group.items.forEach(function (item) {
+          var row = document.createElement('div');
+          row.className = 'checklist-item';
+          row.dataset.checklistItem = item.key;
+          var label = document.createElement('label');
+          label.className = 'checklist-item__check';
+          var checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.dataset.checklistKey = item.key;
+          checkbox.addEventListener('change', function () {
+            state.checklistValues[item.key] = checkbox.checked ? 'DONE' : '';
+            row.classList.remove('is-na');
+            var na = row.querySelector('.na-toggle');
+            if (na) {
+              na.classList.remove('is-active');
+              na.setAttribute('aria-pressed', 'false');
+            }
+            markDirty();
+            updateChecklistProgress();
+          });
+          var itemLabel = document.createElement('span');
+          itemLabel.className = 'checklist-item__label';
+          itemLabel.textContent = item.label;
+          label.appendChild(checkbox);
+          label.appendChild(itemLabel);
+          row.appendChild(label);
+
+          if (item.allowsNa) {
+            var naButton = document.createElement('button');
+            naButton.className = 'na-toggle';
+            naButton.type = 'button';
+            naButton.textContent = 'N/A';
+            naButton.setAttribute('aria-pressed', 'false');
+            naButton.setAttribute('aria-label', 'Mark ' + item.label + ' not applicable');
+            naButton.addEventListener('click', function () {
+              var active = state.checklistValues[item.key] === 'NA';
+              state.checklistValues[item.key] = active ? '' : 'NA';
+              checkbox.checked = false;
+              checkbox.disabled = !active;
+              row.classList.toggle('is-na', !active);
+              naButton.classList.toggle('is-active', !active);
+              naButton.setAttribute('aria-pressed', String(!active));
+              markDirty();
+              updateChecklistProgress();
+            });
+            row.appendChild(naButton);
+          }
+          items.appendChild(row);
+        });
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(items);
+        container.appendChild(wrapper);
+      });
+      updateChecklistInputs();
+      updateChecklistProgress();
+    }
+
+    function allChecklistItems() {
+      return state.checklistGroups.reduce(function (items, group) { return items.concat(group.items); }, []);
+    }
+
+    function calculateChecklistProgress(items) {
+      var source = items || allChecklistItems();
+      var applicable = 0;
+      var completed = 0;
+      var na = 0;
+      source.forEach(function (item) {
+        var value = state.checklistValues[item.key] || '';
+        if (value === 'NA' && item.allowsNa) {
+          na += 1;
+          return;
+        }
+        applicable += 1;
+        if (value === 'DONE') completed += 1;
+      });
+      return {
+        total: source.length,
+        applicable: applicable,
+        completed: completed,
+        na: na,
+        percent: applicable === 0 ? 100 : Math.round(completed / applicable * 100)
+      };
+    }
+
+    function updateChecklistInputs() {
+      allChecklistItems().forEach(function (item) {
+        var row = document.querySelector('[data-checklist-item="' + CSS.escape(item.key) + '"]');
+        if (!row) return;
+        var checkbox = row.querySelector('input[type="checkbox"]');
+        var value = state.checklistValues[item.key] || '';
+        checkbox.checked = value === 'DONE';
+        checkbox.disabled = value === 'NA';
+        row.classList.toggle('is-na', value === 'NA');
+        var na = row.querySelector('.na-toggle');
+        if (na) {
+          na.classList.toggle('is-active', value === 'NA');
+          na.setAttribute('aria-pressed', String(value === 'NA'));
+        }
+      });
+    }
+
+    function updateChecklistProgress() {
+      state.checklistGroups.forEach(function (group) {
+        var progress = calculateChecklistProgress(group.items);
+        var count = document.querySelector('[data-group-count="' + CSS.escape(group.key) + '"]');
+        var track = document.querySelector('[data-group-progress="' + CSS.escape(group.key) + '"]');
+        if (count) count.textContent = progress.completed + ' / ' + progress.applicable;
+        if (track) setProgress(track, track.querySelector('.progress-fill'), progress.percent);
+      });
+
+      var overall = calculateChecklistProgress();
+      var label = overall.completed + ' of ' + overall.applicable + ' complete';
+      if (overall.na) label += ' · ' + overall.na + ' N/A';
+      byId('modal-progress-label').textContent = label;
+      setProgress(byId('modal-progress'), byId('modal-progress-fill'), overall.percent);
+      byId('review-checklist').textContent = label;
+      byId('review-final-status').textContent = overall.percent + '% — ' + (overall.percent === 100 ? 'READY TO COMPLETE' : 'INCOMPLETE');
+      byId('review-status-chip').textContent = overall.percent === 100 ? 'READY' : 'INCOMPLETE';
+      byId('review-status-chip').className = 'status-chip ' + (overall.percent === 100 ? 'status-chip--success' : 'status-chip--warning');
+      byId('review-hint').textContent = overall.percent === 100 ? 'The checklist is complete. Finish the required assessment and select Complete PMS.' : 'Complete all applicable checklist items before finalizing PMS.';
+      setProgress(byId('review-progress'), byId('review-progress-fill'), overall.percent);
+      updateFooterActions();
+    }
+
+    function resetFormData() {
+      state.peripheralValues = {};
+      state.checklistValues = {};
+      state.peripherals.forEach(function (item) { state.peripheralValues[item.key] = []; });
+      allChecklistItems().forEach(function (item) { state.checklistValues[item.key] = ''; });
+      state.currentStep = 1;
+      state.recordId = '';
+      state.idempotencyKey = createIdempotencyKey();
+      state.selectedAsset = null;
+      state.dirty = false;
+      state.submittedCompletion = '';
+    }
+
+    function createIdempotencyKey() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      return 'pms-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '-' + Math.random().toString(36).slice(2);
+    }
+
+    function clearFormControls() {
+      byId('questionnaire-form').reset();
+      byId('maintenance-date').max = currentManilaDate();
+      byId('maintenance-date').value = currentManilaDate();
+      byId('asset-tag').value = '';
+      byId('observed-location').value = '';
+      byId('asset-snapshot').hidden = true;
+      byId('location-incorrect').checked = false;
+      byId('location-incorrect').disabled = false;
+      byId('observed-location-wrap').hidden = true;
+      byId('assessment-result').value = '';
+      byId('asset-findings').value = '';
+      byId('action-taken').value = '';
+      byId('recommendation').value = '';
+      byId('form-alert').hidden = true;
+      byId('record-save-state').textContent = '';
+      document.querySelectorAll('.field-error').forEach(function (error) {
+        error.hidden = true;
+        error.textContent = '';
+      });
+      document.querySelectorAll('.field.has-error, .search-input.has-error').forEach(function (field) { field.classList.remove('has-error'); });
+      renderAllPeripheralChips();
+      updateChecklistInputs();
+      updateChecklistProgress();
+      updateDerivedCycle();
+      updateReview();
+    }
+
+    function openNewRecord() {
+      if (!state.assets.length) {
+        showToast('No eligible assets', 'Your section currently has no INPROD assets available for maintenance.', 'warning');
+        return;
+      }
+      resetFormData();
+      clearFormControls();
+      byId('questionnaire-title').textContent = 'New maintenance record';
+      openModal();
+    }
+
+    function openExistingRecord(recordId) {
+      setBusy(true, 'Loading maintenance record…');
+      serverCall('PMS_apiGetRecord', recordId)
+        .then(function (record) {
+          resetFormData();
+          clearFormControls();
+          populateRecord(record);
+          byId('questionnaire-title').textContent = 'Resume maintenance record';
+          openModal();
+        })
+        .catch(function (error) {
+          showToast('Record unavailable', errorMessage(error), 'danger');
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function populateRecord(record) {
+      var source = record.record || record;
+      state.recordId = normalizeText(source.recordId || source.id);
+      state.idempotencyKey = normalizeText(source.idempotencyKey) || createIdempotencyKey();
+      state.submittedCompletion = normalizeText(source.pmsCompletion);
+      byId('questionnaire-form').reset();
+      byId('maintenance-date').max = currentManilaDate();
+      byId('maintenance-date').value = normalizeText(source.maintenanceDate);
+      byId('asset-tag').value = normalizeTag(source.assetTag);
+      selectAsset(byId('asset-tag').value, false);
+      byId('location-incorrect').checked = Boolean(source.locationDiscrepancy);
+      byId('observed-location').value = normalizeText(source.observedLocation);
+      updateObservedLocationVisibility();
+
+      var savedPeripherals = source.peripherals || {};
+      state.peripherals.forEach(function (peripheral) {
+        var value = savedPeripherals[peripheral.key];
+        if (Array.isArray(value)) {
+          state.peripheralValues[peripheral.key] = value.map(normalizeTag).filter(Boolean);
+        } else {
+          state.peripheralValues[peripheral.key] = normalizeText(value).split(/\s*[|,;]\s*/).map(normalizeTag).filter(Boolean);
+        }
+      });
+
+      var savedChecklist = source.checklist || {};
+      allChecklistItems().forEach(function (item) {
+        var value = normalizeText(savedChecklist[item.key]).toUpperCase();
+        state.checklistValues[item.key] = value === 'DONE' || value === 'NA' ? value : '';
+      });
+
+      var assessment = source.assessment || {};
+      byId('assessment-result').value = normalizeText(assessment.result || source.assessmentResult);
+      byId('asset-findings').value = normalizeText(assessment.findings || source.findings || source.assetFindings);
+      byId('action-taken').value = normalizeText(assessment.actionTaken || source.actionTaken);
+      byId('recommendation').value = normalizeText(assessment.recommendation || source.recommendation);
+      renderAllPeripheralChips();
+      updateChecklistInputs();
+      updateChecklistProgress();
+      updateDerivedCycle();
+      updateReview();
+      setStep(1, false);
+      state.dirty = false;
+      byId('record-save-state').textContent = state.recordId ? 'Editing ' + state.recordId : '';
+    }
+
+    function openModal() {
+      state.lastFocus = document.activeElement;
+      state.modalOpen = true;
+      state.dirty = false;
+      byId('questionnaire-modal').hidden = false;
+      document.body.classList.add('modal-open');
+      setStep(1, false);
+      window.setTimeout(function () { byId('maintenance-date').focus(); }, 0);
+    }
+
+    function requestCloseModal(force) {
+      if (!state.modalOpen) return;
+      if (!force && state.dirty && !window.confirm('Close this questionnaire? Unsaved changes will be lost.')) return;
+      state.modalOpen = false;
+      state.dirty = false;
+      byId('questionnaire-modal').hidden = true;
+      document.body.classList.remove('modal-open');
+      if (state.lastFocus && typeof state.lastFocus.focus === 'function') state.lastFocus.focus();
+    }
+
+    function markDirty() {
+      if (state.modalOpen) state.dirty = true;
+      updateReview();
+    }
+
+    function onFormInput(event) {
+      if (event.target.closest('.form-step')) {
+        markDirty();
+        if (event.target.id === 'maintenance-date') updateDerivedCycle();
+        if (event.target.id === 'asset-tag') selectAsset(event.target.value, false);
+        if (event.target.id === 'location-incorrect') updateObservedLocationVisibility();
+        if (event.target.id === 'assessment-result') applyAssessmentShortcut();
+      }
+    }
+
+    function updateDerivedCycle() {
+      var date = byId('maintenance-date').value;
+      var derived = deriveCycle(date);
+      byId('form-maintenance-year').textContent = derived ? derived.year : '—';
+      byId('form-cycle').textContent = derived ? derived.cycle : '—';
+      byId('review-cycle').textContent = derived ? derived.cycleId : 'Not selected';
+      clearFieldError('maintenance-date', 'maintenance-date-error');
+      if (date && date > currentManilaDate()) {
+        setFieldError('maintenance-date', 'maintenance-date-error', 'Maintenance date cannot be in the future.');
+      }
+      updateReview();
+    }
+
+    function selectAsset(value, showError) {
+      var tag = normalizeTag(value);
+      var asset = state.assetMap.get(tag) || null;
+      state.selectedAsset = asset;
+      clearFieldError('asset-tag', 'asset-error');
+      if (!asset) {
+        byId('asset-snapshot').hidden = true;
+        byId('review-asset').textContent = tag || 'Not selected';
+        if (showError && tag) setFieldError('asset-tag', 'asset-error', 'Select an exact asset tag from the available INPROD list.');
+        updateReview();
+        return;
+      }
+
+      byId('asset-tag').value = asset.tag;
+      byId('selected-asset-tag').textContent = asset.tag;
+      byId('selected-asset-status').textContent = asset.status || 'INPROD';
+      byId('selected-asset-location').textContent = asset.location || 'Not recorded';
+      byId('selected-asset-source').textContent = asset.sourceTab || sectionLabel(sectionKey()) + ' asset master';
+      byId('asset-snapshot').hidden = false;
+      byId('review-asset').textContent = asset.tag;
+      if (!asset.location) {
+        byId('location-incorrect').checked = true;
+        byId('location-incorrect').disabled = true;
+        byId('location-incorrect-control').querySelector('span').textContent = 'No master location is recorded; enter the observed location below';
+      } else {
+        byId('location-incorrect').disabled = false;
+        byId('location-incorrect-control').querySelector('span').textContent = 'The asset is currently at a different location';
+      }
+      updateObservedLocationVisibility();
+      updateReview();
+    }
+
+    function updateObservedLocationVisibility() {
+      var required = Boolean(state.selectedAsset && (!state.selectedAsset.location || byId('location-incorrect').checked));
+      byId('observed-location-wrap').hidden = !required;
+      byId('observed-location').required = required;
+      if (!required) {
+        byId('observed-location').value = '';
+        clearFieldError('observed-location', 'observed-location-error');
+      }
+    }
+
+    function applyAssessmentShortcut() {
+      if (byId('assessment-result').value !== 'No findings') return;
+      if (!normalizeText(byId('asset-findings').value)) byId('asset-findings').value = 'No findings';
+      if (!normalizeText(byId('action-taken').value)) byId('action-taken').value = 'No action required';
+      if (!normalizeText(byId('recommendation').value)) byId('recommendation').value = 'None';
+    }
+
+    function updateReview() {
+      if (!byId('review-asset')) return;
+      byId('review-asset').textContent = state.selectedAsset ? state.selectedAsset.tag : (normalizeTag(byId('asset-tag').value) || 'Not selected');
+      var derived = deriveCycle(byId('maintenance-date').value);
+      byId('review-cycle').textContent = derived ? derived.cycleId : 'Not selected';
+    }
+
+    function setStep(nextStep, validate) {
+      var target = Math.max(1, Math.min(4, Number(nextStep)));
+      if (validate !== false && target > state.currentStep && state.currentStep === 1 && !validateCoreFields(true)) return false;
+      state.currentStep = target;
+      document.querySelectorAll('.form-step').forEach(function (step) {
+        step.hidden = Number(step.dataset.step) !== target;
+      });
+      document.querySelectorAll('[data-step-target]').forEach(function (button) {
+        var number = Number(button.dataset.stepTarget);
+        button.classList.toggle('is-current', number === target);
+        button.classList.toggle('is-complete', number < target);
+        if (number === target) button.setAttribute('aria-current', 'step');
+        else button.removeAttribute('aria-current');
+      });
+      byId('previous-step').hidden = target === 1;
+      byId('next-step').hidden = target === 4;
+      byId('complete-pms').hidden = target !== 4;
+      byId('questionnaire-body').scrollTop = 0;
+      updateFooterActions();
+      var heading = byId('step-' + target + '-title');
+      if (heading) heading.focus && heading.focus();
+      return true;
+    }
+
+    function updateFooterActions() {
+      if (!byId('complete-pms')) return;
+      var progress = calculateChecklistProgress();
+      byId('complete-pms').disabled = state.busy || progress.percent !== 100;
+      byId('complete-pms').title = progress.percent === 100 ? 'Finalize and synchronize this PMS record' : 'Complete all applicable checklist items first';
+    }
+
+    function setFieldError(inputId, errorId, message) {
+      var input = byId(inputId);
+      var error = byId(errorId);
+      if (error) {
+        error.textContent = normalizeText(message);
+        error.hidden = false;
+      }
+      if (input) {
+        input.setAttribute('aria-invalid', 'true');
+        var wrapper = input.closest('.field') || input.closest('.search-input');
+        if (wrapper) wrapper.classList.add('has-error');
+      }
+    }
+
+    function clearFieldError(inputId, errorId) {
+      var input = byId(inputId);
+      var error = byId(errorId);
+      if (error) {
+        error.hidden = true;
+        error.textContent = '';
+      }
+      if (input) {
+        input.removeAttribute('aria-invalid');
+        var wrapper = input.closest('.field') || input.closest('.search-input');
+        if (wrapper) wrapper.classList.remove('has-error');
+      }
+    }
+
+    function showFormAlert(message) {
+      byId('form-alert-message').textContent = normalizeText(message);
+      byId('form-alert').hidden = false;
+      byId('form-alert').focus();
+    }
+
+    function clearFormAlert() {
+      byId('form-alert').hidden = true;
+      byId('form-alert-message').textContent = '';
+    }
+
+    function validateCoreFields(focusFirst) {
+      clearFormAlert();
+      var valid = true;
+      var first = null;
+      var date = byId('maintenance-date').value;
+      var derived = deriveCycle(date);
+      clearFieldError('maintenance-date', 'maintenance-date-error');
+      clearFieldError('asset-tag', 'asset-error');
+      clearFieldError('observed-location', 'observed-location-error');
+
+      if (!derived) {
+        valid = false;
+        first = first || byId('maintenance-date');
+        setFieldError('maintenance-date', 'maintenance-date-error', 'Choose the date maintenance was performed.');
+      } else if (date > currentManilaDate()) {
+        valid = false;
+        first = first || byId('maintenance-date');
+        setFieldError('maintenance-date', 'maintenance-date-error', 'Maintenance date cannot be in the future.');
+      }
+
+      selectAsset(byId('asset-tag').value, true);
+      if (!state.selectedAsset) {
+        valid = false;
+        first = first || byId('asset-tag');
+        if (!normalizeTag(byId('asset-tag').value)) setFieldError('asset-tag', 'asset-error', 'Select an asset tag.');
+      }
+
+      var observedRequired = state.selectedAsset && (!state.selectedAsset.location || byId('location-incorrect').checked);
+      if (observedRequired && !normalizeText(byId('observed-location').value)) {
+        valid = false;
+        first = first || byId('observed-location');
+        setFieldError('observed-location', 'observed-location-error', 'Enter the asset’s observed location.');
+      }
+
+      if (!valid) {
+        showFormAlert('Add a valid maintenance date, eligible asset, and any required observed location.');
+        if (focusFirst && first) first.focus();
+      }
+      return valid;
+    }
+
+    function validateAssessment(focusFirst) {
+      var fields = [
+        ['assessment-result', 'assessment-result-error', 'Select an assessment result.'],
+        ['asset-findings', 'asset-findings-error', 'Document the asset findings or enter “No findings”.'],
+        ['action-taken', 'action-taken-error', 'Document the action taken or enter “No action required”.'],
+        ['recommendation', 'recommendation-error', 'Enter a recommendation or “None”.']
+      ];
+      var valid = true;
+      var first = null;
+      fields.forEach(function (definition) {
+        clearFieldError(definition[0], definition[1]);
+        if (!normalizeText(byId(definition[0]).value)) {
+          valid = false;
+          first = first || byId(definition[0]);
+          setFieldError(definition[0], definition[1], definition[2]);
+        }
+      });
+
+      if (byId('assessment-result').value === 'No findings' && normalizeText(byId('asset-findings').value).toLowerCase() !== 'no findings') {
+        valid = false;
+        first = first || byId('asset-findings');
+        setFieldError('asset-findings', 'asset-findings-error', 'Use the exact entry “No findings” for this assessment result.');
+      }
+
+      if (!valid) {
+        showFormAlert('Complete the assessment before finalizing PMS.');
+        if (focusFirst && first) first.focus();
+      }
+      return valid;
+    }
+
+    function commitAllPeripheralInputs() {
+      document.querySelectorAll('#peripheral-grid input[data-peripheral-key]').forEach(function (input) {
+        commitPeripheralInput(input);
+      });
+    }
+
+    function buildPayload() {
+      commitAllPeripheralInputs();
+      var peripherals = {};
+      state.peripherals.forEach(function (peripheral) {
+        peripherals[peripheral.key] = (state.peripheralValues[peripheral.key] || []).slice();
+      });
+      var checklist = {};
+      allChecklistItems().forEach(function (item) {
+        checklist[item.key] = state.checklistValues[item.key] || '';
+      });
+      return {
+        recordId: state.recordId || undefined,
+        idempotencyKey: state.idempotencyKey,
+        maintenanceDate: byId('maintenance-date').value,
+        assetTag: state.selectedAsset ? state.selectedAsset.tag : normalizeTag(byId('asset-tag').value),
+        observedLocation: normalizeText(byId('observed-location').value),
+        locationDiscrepancy: Boolean(state.selectedAsset && (!state.selectedAsset.location || byId('location-incorrect').checked)),
+        peripherals: peripherals,
+        checklist: checklist,
+        assessment: {
+          result: byId('assessment-result').value,
+          findings: normalizeText(byId('asset-findings').value),
+          actionTaken: normalizeText(byId('action-taken').value),
+          recommendation: normalizeText(byId('recommendation').value)
+        }
+      };
+    }
+
+    function saveRecord(mode) {
+      clearFormAlert();
+      if (!validateCoreFields(true)) {
+        setStep(1, false);
+        return;
+      }
+      if (mode === 'COMPLETE') {
+        var progress = calculateChecklistProgress();
+        if (progress.percent !== 100) {
+          setStep(3, false);
+          showFormAlert('Complete every applicable checklist item before finalizing PMS.');
+          return;
+        }
+        if (!validateAssessment(true)) {
+          setStep(4, false);
+          return;
+        }
+      }
+
+      var payload = buildPayload();
+      setBusy(true, mode === 'COMPLETE' ? 'Finalizing and synchronizing PMS…' : 'Saving your progress…');
+      serverCall('PMS_apiSaveRecord', payload, mode)
+        .then(function (result) {
+          state.recordId = normalizeText(result.recordId) || state.recordId;
+          state.submittedCompletion = normalizeText(result.pmsCompletion);
+          state.dirty = false;
+          applySaveResultToDashboard(result);
+          var decision = completionDecision(result.pmsCompletion || result.syncStatus || (mode === 'COMPLETE' ? 'COMPLETED' : 'INCOMPLETE'));
+          var defaultMessage = mode === 'COMPLETE' ? ('Record ' + state.recordId + ' was finalized.') : ('Draft ' + state.recordId + ' was saved.');
+          showToast(mode === 'COMPLETE' ? (decision.label === 'COMPLETED' ? 'PMS completed' : 'PMS saved for synchronization') : 'Progress saved', normalizeText(result.message) || defaultMessage, decision.label === 'COMPLETED' || mode === 'SAVE' ? 'success' : 'warning', 8500);
+          requestCloseModal(true);
+        })
+        .catch(function (error) {
+          showFormAlert(errorMessage(error));
+          showToast(mode === 'COMPLETE' ? 'Could not complete PMS' : 'Could not save progress', errorMessage(error), 'danger', 8500);
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function applySaveResultToDashboard(result) {
+      if (result.metrics) state.bootstrap.metrics = result.metrics;
+      if (Array.isArray(result.recentRecords)) state.bootstrap.recentRecords = result.recentRecords;
+      renderDashboard();
+    }
+
+    function trapModalFocus(event) {
+      if (!state.modalOpen) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        requestCloseModal(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = Array.prototype.slice.call(byId('questionnaire-modal').querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+        .filter(function (element) { return !element.hidden && element.offsetParent !== null; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function bindEvents() {
+      byId('retry-bootstrap').addEventListener('click', function () {
+        loadBootstrap();
+      });
+      byId('identity-email-form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        requestIdentityCode(byId('identity-email').value, false);
+      });
+      byId('identity-code-form').addEventListener('submit', verifyIdentityCode);
+      byId('identity-resend-code').addEventListener('click', function () {
+        if (state.identityRecovery.cooldownUntil > Date.now()) return;
+        requestIdentityCode(state.identityRecovery.requestedEmail, true);
+      });
+      byId('identity-change-email').addEventListener('click', changeIdentityEmail);
+      byId('identity-retry-google').addEventListener('click', function () {
+        clearIdentityMessages();
+        loadBootstrap();
+      });
+      byId('identity-email').addEventListener('input', function () {
+        clearFieldError('identity-email', 'identity-email-error');
+        setIdentityNotice('', 'info');
+      });
+      byId('identity-code').addEventListener('input', function (event) {
+        event.currentTarget.value = event.currentTarget.value.replace(/\D/g, '').slice(0, 6);
+        clearFieldError('identity-code', 'identity-code-error');
+        setIdentityNotice('', 'info');
+      });
+      byId('register-form').addEventListener('submit', onRegister);
+      byId('brand-home').addEventListener('click', function (event) {
+        event.preventDefault();
+        byId('main-content').focus();
+      });
+      byId('new-record-button').addEventListener('click', openNewRecord);
+      byId('empty-new-record').addEventListener('click', openNewRecord);
+      byId('refresh-dashboard').addEventListener('click', function () {
+        setBusy(true, 'Refreshing dashboard…');
+        loadBootstrap({ silent: true })
+          .then(function () { showToast('Dashboard refreshed', 'The latest PMS data is now displayed.', 'success'); })
+          .catch(function () {})
+          .finally(function () { setBusy(false); });
+      });
+      byId('close-questionnaire').addEventListener('click', function () { requestCloseModal(false); });
+      document.querySelectorAll('[data-close-modal]').forEach(function (element) {
+        element.addEventListener('click', function () { requestCloseModal(false); });
+      });
+      byId('questionnaire-form').addEventListener('input', onFormInput);
+      byId('questionnaire-form').addEventListener('change', onFormInput);
+      byId('asset-tag').addEventListener('blur', function () { selectAsset(byId('asset-tag').value, Boolean(byId('asset-tag').value)); });
+      byId('previous-step').addEventListener('click', function () { setStep(state.currentStep - 1, false); });
+      byId('next-step').addEventListener('click', function () { setStep(state.currentStep + 1, true); });
+      document.querySelectorAll('[data-step-target]').forEach(function (button) {
+        button.addEventListener('click', function () { setStep(Number(button.dataset.stepTarget), true); });
+      });
+      byId('save-progress').addEventListener('click', function () { saveRecord('SAVE'); });
+      byId('questionnaire-form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        saveRecord('COMPLETE');
+      });
+      byId('fill-no-findings').addEventListener('click', function () {
+        byId('asset-findings').value = 'No findings';
+        markDirty();
+      });
+      byId('fill-no-action').addEventListener('click', function () {
+        byId('action-taken').value = 'No action required';
+        markDirty();
+      });
+      byId('fill-no-recommendation').addEventListener('click', function () {
+        byId('recommendation').value = 'None';
+        markDirty();
+      });
+      byId('rollover-dry-run').addEventListener('click', runRolloverDryRun);
+      byId('rollover-year').addEventListener('input', resetRolloverReview);
+      byId('rollover-reviewed').addEventListener('change', updateRolloverConfirmation);
+      byId('rollover-confirmation').addEventListener('input', updateRolloverConfirmation);
+      byId('rollover-execute').addEventListener('click', executeRollover);
+      byId('retry-pending-sync').addEventListener('click', retryPendingSynchronization);
+      document.addEventListener('keydown', trapModalFocus);
+      window.addEventListener('beforeunload', function (event) {
+        if (!state.modalOpen || !state.dirty) return;
+        event.preventDefault();
+        event.returnValue = '';
+      });
+    }
+
+    function init() {
+      bindEvents();
+      byId('maintenance-date').max = currentManilaDate();
+      loadBootstrap().catch(function () {});
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  }());
+</script>
