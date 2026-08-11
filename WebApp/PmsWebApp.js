@@ -196,6 +196,45 @@ function PMS_diagnoseSignIn() {
   return PMS.Auth.diagnostics();
 }
 
+/**
+ * Editor-only probe that writes the sign-in diagnostics and the real bootstrap
+ * shape to the execution log, because the editor does not display a returned
+ * object. Use this when the browser reports BOOTSTRAP_INCOMPLETE: it shows
+ * whether the server actually produced user.email and, if the registered branch
+ * fails, the underlying error and stack.
+ */
+function PMS_logSignInReport() {
+  var report = {};
+  try {
+    report.diagnostics = PMS.Auth.diagnostics();
+  } catch (error) {
+    report.diagnostics = { failed: (error.name || 'Error') + ': ' + error.message };
+  }
+  try {
+    var bootstrap = PMS_buildBootstrap_();
+    report.bootstrap = {
+      ok: bootstrap.ok,
+      registered: bootstrap.registered,
+      topLevelFields: Object.keys(bootstrap),
+      userFields: Object.keys(bootstrap.user || {}),
+      userEmail: (bootstrap.user || {}).email || '(EMPTY)',
+      userName: (bootstrap.user || {}).name || '(EMPTY)',
+      profile: bootstrap.profile,
+      assetCount: (bootstrap.assets || []).length,
+      recentRecordCount: (bootstrap.recentRecords || []).length,
+      hasConfig: Boolean(bootstrap.config),
+      hasMetrics: Boolean(bootstrap.metrics)
+    };
+  } catch (error) {
+    report.bootstrap = {
+      failed: (error.name || 'Error') + ': ' + error.message,
+      stack: error.stack || '(no stack)'
+    };
+  }
+  console.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
 function PMS_continueReconciliation_() {
   return PMS.Rollover.continueReconciliation();
 }
