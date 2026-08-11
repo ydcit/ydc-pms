@@ -267,7 +267,8 @@
       ACCESS_NOT_PROVISIONED: 'Your account is not on the PMS access list',
       ACCOUNT_DISABLED: 'Your PMS account is inactive',
       ACCESS_DENIED: 'Access denied',
-      IDENTITY_UNAVAILABLE: 'We could not read your Google account'
+      IDENTITY_UNAVAILABLE: 'We could not read your Google account',
+      BOOTSTRAP_INCOMPLETE: 'PMS loaded with an incomplete response'
     };
 
     function showFatal(error) {
@@ -447,10 +448,15 @@
       state.profile = state.bootstrap.profile || {};
       state.config = state.bootstrap.config || {};
       if (!userEmail()) {
+        // The server guarantees a non-empty email or throws, so reaching this
+        // point means the response was truncated or reshaped in transit. Report
+        // what actually arrived instead of blaming Google sign-in.
+        var topKeys = Object.keys(state.bootstrap || {}).join(', ') || '(empty)';
+        var userKeys = Object.keys(state.user || {}).join(', ') || '(empty)';
         throw clientError(
-          'PMS loaded but the server did not return your account email. Reload the page, and if this continues ask ' +
-            'a PMS administrator to re-authorize the deployment.',
-          'IDENTITY_UNAVAILABLE'
+          'PMS loaded but the response carried no account email. Response fields: [' + topKeys + ']. ' +
+            'User fields: [' + userKeys + ']. Run PMS_diagnoseSignIn in the Apps Script editor and share the output.',
+          'BOOTSTRAP_INCOMPLETE'
         );
       }
       initializeSchema();
@@ -553,7 +559,10 @@
           byId('main-content').focus();
         })
         .catch(function (error) {
-          var fatalCodes = ['IDENTITY_UNAVAILABLE', 'ACCESS_NOT_PROVISIONED', 'ACCOUNT_DISABLED', 'ACCESS_DENIED'];
+          var fatalCodes = [
+            'IDENTITY_UNAVAILABLE', 'ACCESS_NOT_PROVISIONED', 'ACCOUNT_DISABLED',
+            'ACCESS_DENIED', 'BOOTSTRAP_INCOMPLETE'
+          ];
           if (fatalCodes.indexOf(errorCode(error)) >= 0) {
             showFatal(error);
             return;
