@@ -88,7 +88,7 @@ function PMS_buildBootstrap_() {
   };
   if (context.registered) {
     PMS.Records.ensureTrackerBaseline();
-    response.assets = PMS.Assets.listEligible(context.section);
+    response.assets = PMS.Assets.listSelectable(context.section);
     var records = PMS.Records.dashboardRecords();
     response.metrics = PMS.Metrics.dashboard({ section: context.isAdmin ? 'ALL' : context.section }, records);
     response.recentRecords = PMS.Records.recent(context, 10, records);
@@ -125,7 +125,7 @@ function PMS_apiRegister(registration) {
 
 function PMS_apiRefreshAssets() {
   var context = PMS.Auth.requireProfile();
-  return PMS_jsonResponse_({ ok: true, assets: PMS.Assets.listEligible(context.section, true) });
+  return PMS_jsonResponse_({ ok: true, assets: PMS.Assets.listSelectable(context.section, true) });
 }
 
 function PMS_apiDashboard(filters) {

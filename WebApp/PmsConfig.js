@@ -17,6 +17,14 @@ PMS.CONFIG = {
   // "PMS Users" sheet. Set to false to allow any allowed-domain account to
   // self-register instead.
   REQUIRE_DIRECTORY_ENTRY: true,
+  // Controls which assets the questionnaire's asset picker hides as already
+  // completed, based on the T1/T2/T3 checkboxes in the section tracker sheet.
+  //   ANY_CYCLE     - hide once T1, T2, or T3 is checked for the tracker year.
+  //   CURRENT_CYCLE - hide only for the cycle being worked on, so an asset
+  //                   completed in T1 is still offered in T2 and T3.
+  // This affects the picker only. Dashboard eligibility and compliance always
+  // count every INPROD asset.
+  ASSET_PICKER_COMPLETION_SCOPE: 'ANY_CYCLE',
   MAX_TEXT_LENGTH: 5000,
   MAX_REMARKS_CELL_LENGTH: 49000,
   // Static bootstrap allowlist. Additional administrators may be stored in the

@@ -118,6 +118,15 @@ PMS.Tracker = (function () {
       PMS.Util.fail('Tracker checkbox verification failed.', 'SYNC_FAILED');
     }
 
+    // The asset list is cached, and this asset has just become completed. Drop
+    // the cache so the asset picker stops offering it immediately rather than
+    // after the cache expires.
+    try {
+      PMS.Assets.invalidate(section.key);
+    } catch (error) {
+      console.warn('Asset cache could not be invalidated after sync: ' + error.message);
+    }
+
     return {
       status: 'COMPLETED',
       sheetName: sheet.getName(),

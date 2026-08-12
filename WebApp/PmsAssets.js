@@ -1,7 +1,8 @@
 var PMS = PMS || {};
 
 PMS.Assets = (function () {
-  var CACHE_VERSION = 2;
+  // Bumped when the cached asset shape changes so stale entries are rejected.
+  var CACHE_VERSION = 3;
   var CACHE_CHUNK_SIZE = 80000;
   var MAX_CACHE_CHUNKS = 100;
 
@@ -147,15 +148,44 @@ PMS.Assets = (function () {
     return sheet;
   }
 
+  var CYCLE_KEYS = Object.keys(PMS.CONFIG.CYCLES);
+
+  /** Column span covering every cycle checkbox, read as one range. */
+  function cycleCheckboxSpan() {
+    var columns = CYCLE_KEYS.map(function (key) {
+      return PMS.CONFIG.CYCLES[key].checkboxColumn;
+    });
+    return {
+      first: Math.min.apply(null, columns),
+      last: Math.max.apply(null, columns)
+    };
+  }
+
   function readAll(sectionKey) {
     var section = PMS.Util.section(sectionKey);
     var sheet = sheetForSection(sectionKey);
     var lastRow = sheet.getLastRow();
     if (lastRow < PMS.CONFIG.ASSET_DATA_START_ROW) return [];
+    var rowCount = lastRow - PMS.CONFIG.ASSET_DATA_START_ROW + 1;
     var values = sheet
-      .getRange(PMS.CONFIG.ASSET_DATA_START_ROW, 1, lastRow - PMS.CONFIG.ASSET_DATA_START_ROW + 1, 3)
+      .getRange(PMS.CONFIG.ASSET_DATA_START_ROW, 1, rowCount, 3)
       .getDisplayValues();
+    // Checkboxes must be read with getValues(); a display value renders the
+    // boolean as the text "TRUE"/"FALSE" and would compare incorrectly.
+    var span = cycleCheckboxSpan();
+    var cycleValues = sheet
+      .getRange(PMS.CONFIG.ASSET_DATA_START_ROW, span.first, rowCount, span.last - span.first + 1)
+      .getValues();
+
     return values.map(function (row, index) {
+      var cycles = {};
+      var completedCycles = [];
+      CYCLE_KEYS.forEach(function (key) {
+        var offset = PMS.CONFIG.CYCLES[key].checkboxColumn - span.first;
+        var done = cycleValues[index][offset] === true;
+        cycles[key] = done;
+        if (done) completedCycles.push(key);
+      });
       return {
         tag: PMS.Util.normalizeAssetTag(row[0]),
         status: PMS.Util.cleanText(row[1], 100).toUpperCase(),
@@ -163,7 +193,9 @@ PMS.Assets = (function () {
         row: PMS.CONFIG.ASSET_DATA_START_ROW + index,
         section: section.key,
         sectionLabel: section.label,
-        sheetName: section.sheetName
+        sheetName: section.sheetName,
+        cycles: cycles,
+        completedCycles: completedCycles
       };
     }).filter(function (asset) {
       return Boolean(asset.tag);
@@ -190,6 +222,48 @@ PMS.Assets = (function () {
       console.warn('Asset list could not be cached: ' + error.message);
     }
     return assets;
+  }
+
+  /**
+   * True when the tracker already records this asset as maintained, according
+   * to PMS.CONFIG.ASSET_PICKER_COMPLETION_SCOPE.
+   */
+  function isAlreadyCompleted(asset, cycleKey) {
+    var completed = asset.completedCycles || [];
+    if (PMS.CONFIG.ASSET_PICKER_COMPLETION_SCOPE === 'CURRENT_CYCLE') {
+      return completed.indexOf(cycleKey) >= 0;
+    }
+    return completed.length > 0;
+  }
+
+  /**
+   * Assets offered in the questionnaire's asset picker: INPROD and not yet
+   * checked off in the section tracker.
+   *
+   * Deliberately separate from listEligible(), which PMS.Metrics uses as the
+   * eligibility denominator. Filtering there would make completed assets vanish
+   * from the eligible count and break the compliance percentage.
+   *
+   * The cycle fields are dropped from the result so the client payload stays
+   * the same size as before.
+   */
+  function listSelectable(sectionKey, forceRefresh) {
+    var cycleKey = PMS.Util.currentCycle().cycle;
+    return listEligible(sectionKey, forceRefresh)
+      .filter(function (asset) {
+        return !isAlreadyCompleted(asset, cycleKey);
+      })
+      .map(function (asset) {
+        return {
+          tag: asset.tag,
+          status: asset.status,
+          location: asset.location,
+          row: asset.row,
+          section: asset.section,
+          sectionLabel: asset.sectionLabel,
+          sheetName: asset.sheetName
+        };
+      });
   }
 
   function requireEligible(sectionKey, assetTag) {
@@ -219,6 +293,7 @@ PMS.Assets = (function () {
     sheetForSection: sheetForSection,
     readAll: readAll,
     listEligible: listEligible,
+    listSelectable: listSelectable,
     requireEligible: requireEligible,
     invalidate: invalidate
   };
