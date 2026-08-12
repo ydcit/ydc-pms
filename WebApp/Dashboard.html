@@ -6,8 +6,8 @@
         <h1 id="dashboard-title">Maintenance overview</h1>
         <p id="dashboard-welcome">Track preventive maintenance coverage for your section.</p>
       </div>
-      <button class="button button--primary button--new-record" id="new-record-button" type="button">
-        <span class="button__icon" aria-hidden="true">＋</span>
+      <button class="button button--primary" id="new-record-button" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
         <span>New maintenance record</span>
       </button>
     </div>
@@ -39,7 +39,9 @@
       <div class="metric-grid" id="metric-grid">
         <article class="metric-card">
           <div class="metric-card__top">
-            <span class="metric-icon metric-icon--neutral" aria-hidden="true">▦</span>
+            <span class="metric-icon metric-icon--neutral" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg>
+            </span>
             <span class="metric-card__label">Eligible assets</span>
           </div>
           <strong class="metric-card__value" id="metric-eligible">—</strong>
@@ -48,7 +50,9 @@
 
         <article class="metric-card">
           <div class="metric-card__top">
-            <span class="metric-icon metric-icon--success" aria-hidden="true">✓</span>
+            <span class="metric-icon metric-icon--success" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-check-circle"></use></svg>
+            </span>
             <span class="metric-card__label">Completed</span>
           </div>
           <strong class="metric-card__value" id="metric-completed">—</strong>
@@ -57,7 +61,9 @@
 
         <article class="metric-card">
           <div class="metric-card__top">
-            <span class="metric-icon metric-icon--warning" aria-hidden="true">○</span>
+            <span class="metric-icon metric-icon--warning" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-clock"></use></svg>
+            </span>
             <span class="metric-card__label">Pending</span>
           </div>
           <strong class="metric-card__value" id="metric-pending">—</strong>
@@ -66,7 +72,9 @@
 
         <article class="metric-card metric-card--accent">
           <div class="metric-card__top">
-            <span class="metric-icon metric-icon--accent" aria-hidden="true">↗</span>
+            <span class="metric-icon metric-icon--accent" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-trending-up"></use></svg>
+            </span>
             <span class="metric-card__label">Compliance</span>
           </div>
           <strong class="metric-card__value" id="metric-compliance">—</strong>
@@ -99,7 +107,9 @@
         </div>
         <div class="location-list" id="location-list"></div>
         <div class="empty-state empty-state--compact" id="location-empty" hidden>
-          <span aria-hidden="true">⌖</span>
+          <span class="empty-state__art" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-map-pin"></use></svg>
+          </span>
           <p>No location data is available for this cycle.</p>
         </div>
       </article>
@@ -113,21 +123,27 @@
         </div>
         <div class="attention-list">
           <div class="attention-item">
-            <span class="attention-item__icon attention-item__icon--amber" aria-hidden="true">!</span>
+            <span class="attention-item__icon attention-item__icon--amber" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-alert-triangle"></use></svg>
+            </span>
             <div>
               <strong id="metric-findings">—</strong>
               <span>Assets with findings</span>
             </div>
           </div>
           <div class="attention-item">
-            <span class="attention-item__icon attention-item__icon--red" aria-hidden="true">↻</span>
+            <span class="attention-item__icon attention-item__icon--red" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+            </span>
             <div>
               <strong id="metric-follow-up">—</strong>
               <span>Follow-up required</span>
             </div>
           </div>
           <div class="attention-item">
-            <span class="attention-item__icon attention-item__icon--blue" aria-hidden="true">◎</span>
+            <span class="attention-item__icon attention-item__icon--blue" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-user-check"></use></svg>
+            </span>
             <div>
               <strong id="metric-mine">—</strong>
               <span>Completed by me this cycle</span>
@@ -143,7 +159,10 @@
           <p class="eyebrow">Activity</p>
           <h2 id="recent-title">Recent submissions</h2>
         </div>
-        <button class="button button--quiet button--small" id="refresh-dashboard" type="button">Refresh</button>
+        <button class="button button--quiet button--small" id="refresh-dashboard" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+          <span>Refresh</span>
+        </button>
       </div>
 
       <div class="table-wrap" id="recent-table-wrap">
@@ -163,10 +182,15 @@
       </div>
 
       <div class="empty-state" id="recent-empty" hidden>
-        <span class="empty-state__art" aria-hidden="true">◇</span>
+        <span class="empty-state__art" aria-hidden="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-inbox"></use></svg>
+        </span>
         <h3>No submissions yet</h3>
         <p>Your saved and completed maintenance records will appear here.</p>
-        <button class="button button--secondary button--small" id="empty-new-record" type="button">Create first record</button>
+        <button class="button button--secondary button--small" id="empty-new-record" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+          <span>Create first record</span>
+        </button>
       </div>
     </section>
 
@@ -192,7 +216,8 @@
           <p id="sync-recovery-detail">Checking for completed records that still need to update the operational tracker.</p>
         </div>
         <button class="button button--secondary button--small" id="retry-pending-sync" type="button" hidden>
-          Retry pending sync
+          <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+          <span>Retry pending sync</span>
         </button>
       </div>
 
@@ -201,12 +226,17 @@
           <label for="rollover-year">New tracker year</label>
           <input id="rollover-year" type="number" min="2000" max="9999" inputmode="numeric">
         </div>
-        <button class="button button--secondary" id="rollover-dry-run" type="button">Run safety check</button>
+        <button class="button button--secondary" id="rollover-dry-run" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
+          <span>Run safety check</span>
+        </button>
       </div>
 
       <div class="rollover-review" id="rollover-review" hidden>
         <div class="notice notice--warning">
-          <span class="notice__icon" aria-hidden="true">!</span>
+          <span class="notice__icon" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-alert-triangle"></use></svg>
+          </span>
           <div>
             <strong>Review the dry-run report</strong>
             <p id="rollover-summary">No changes have been made.</p>
@@ -222,7 +252,10 @@
             <label for="rollover-confirmation">Type <strong id="rollover-confirmation-phrase"></strong> to confirm</label>
             <input id="rollover-confirmation" type="text" autocomplete="off" spellcheck="false">
           </div>
-          <button class="button button--danger" id="rollover-execute" type="button" disabled>Start new PMS year</button>
+          <button class="button button--danger" id="rollover-execute" type="button" disabled>
+            <svg class="icon" aria-hidden="true"><use href="#i-database"></use></svg>
+            <span>Start new PMS year</span>
+          </button>
         </div>
       </div>
     </section>

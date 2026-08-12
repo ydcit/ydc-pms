@@ -2,17 +2,24 @@
   <div class="register-layout">
     <div class="register-intro">
       <span class="register-intro__badge" aria-hidden="true">
-        <svg viewBox="0 0 24 24" focusable="false">
-          <path d="M12 3v18M3 12h18"></path>
-        </svg>
+        <svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg>
       </span>
       <p class="eyebrow">First-time setup</p>
       <h1 id="register-title">Set up your PMS workspace</h1>
       <p>Confirm your name and assigned IT section once. We will remember your profile so future visits open directly to your dashboard.</p>
       <ul class="feature-list">
-        <li><span aria-hidden="true">✓</span> Signed in with your YDC Google account</li>
-        <li><span aria-hidden="true">✓</span> One-time profile registration</li>
-        <li><span aria-hidden="true">✓</span> Section-specific asset access</li>
+        <li>
+          <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg></span>
+          Signed in with your YDC Google account
+        </li>
+        <li>
+          <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg></span>
+          One-time profile registration
+        </li>
+        <li>
+          <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg></span>
+          Section-specific asset access
+        </li>
       </ul>
     </div>
 
@@ -43,9 +50,12 @@
 
           <div class="field">
             <label for="register-section">IT section <span class="required-mark" aria-hidden="true">*</span></label>
-            <select id="register-section" required aria-describedby="register-section-help register-error">
-              <option value="">Select your assigned section</option>
-            </select>
+            <div class="select-wrap">
+              <select id="register-section" required aria-describedby="register-section-help register-error">
+                <option value="">Select your assigned section</option>
+              </select>
+              <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+            </div>
             <p class="field-help" id="register-section-help">You will only see INPROD assets assigned to this section.</p>
             <p class="field-error" id="register-error" hidden></p>
           </div>
@@ -53,7 +63,7 @@
 
         <button class="button button--primary button--full" id="register-submit" type="submit">
           <span>Continue to dashboard</span>
-          <span aria-hidden="true">→</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
         </button>
       </form>
     </div>

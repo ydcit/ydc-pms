@@ -21,6 +21,7 @@
       dirty: false,
       modalOpen: false,
       busy: false,
+      combobox: { open: false, activeIndex: -1, matches: [] },
       lastFocus: null,
       dryRun: null,
       submittedCompletion: ''
@@ -144,6 +145,21 @@
       return normalizeText(value).toUpperCase();
     }
 
+    /**
+     * Builds an icon node from the sprite in Index.html so dynamically created
+     * markup uses the same stroke set as the static markup.
+     */
+    function iconSvg(name) {
+      var ns = 'http://www.w3.org/2000/svg';
+      var svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('class', 'icon');
+      svg.setAttribute('aria-hidden', 'true');
+      var use = document.createElementNS(ns, 'use');
+      use.setAttribute('href', '#i-' + name);
+      svg.appendChild(use);
+      return svg;
+    }
+
     function parseServerValue(value) {
       var parsed = value;
       if (typeof parsed === 'string') {
@@ -252,7 +268,7 @@
       var close = document.createElement('button');
       close.type = 'button';
       close.setAttribute('aria-label', 'Dismiss notification');
-      close.textContent = '×';
+      close.appendChild(iconSvg('close'));
       close.addEventListener('click', function () { toast.remove(); });
 
       toast.appendChild(content);
@@ -1042,16 +1058,200 @@
         .finally(function () { setBusy(false); });
     }
 
+    /* ------------------------------------------------------------------------
+       Asset combobox.
+
+       Replaces the native <datalist>, which cannot be styled and whose popup
+       the browser positions independently of the field. This renders an ARIA
+       listbox anchored to the control, with keyboard navigation and a capped
+       visible window so a section with a thousand assets stays responsive.
+       ------------------------------------------------------------------------ */
+
+    var ASSET_LIST_LIMIT = 50;
+
+    function assetCombobox() {
+      return {
+        wrap: byId('asset-combobox'),
+        input: byId('asset-tag'),
+        panel: byId('asset-listbox')
+      };
+    }
+
     function renderAssetOptions() {
-      var datalist = byId('asset-options');
-      datalist.replaceChildren();
+      state.combobox.activeIndex = -1;
+      byId('asset-help').textContent = state.assets.length
+        ? ('Search ' + formatNumber(state.assets.length) + ' current INPROD assets in ' + sectionLabel(sectionKey()) + '.')
+        : 'No eligible INPROD assets are currently available in your section.';
+      renderAssetList();
+    }
+
+    /** Prefix matches rank above substring matches, then location matches. */
+    function matchingAssets(query) {
+      var term = normalizeTag(query);
+      if (!term) return state.assets.slice();
+      var starts = [];
+      var contains = [];
       state.assets.forEach(function (asset) {
-        var option = document.createElement('option');
-        option.value = asset.tag;
-        option.label = asset.location ? asset.location : 'Location not recorded';
-        datalist.appendChild(option);
+        var position = asset.tag.indexOf(term);
+        if (position === 0) starts.push(asset);
+        else if (position > 0) contains.push(asset);
+        else if (String(asset.location || '').toUpperCase().indexOf(term) >= 0) contains.push(asset);
       });
-      byId('asset-help').textContent = state.assets.length ? ('Search ' + formatNumber(state.assets.length) + ' current INPROD assets in ' + sectionLabel(sectionKey()) + '.') : 'No eligible INPROD assets are currently available in your section.';
+      return starts.concat(contains);
+    }
+
+    function renderAssetList(query) {
+      var parts = assetCombobox();
+      var matches = matchingAssets(query === undefined ? parts.input.value : query);
+      state.combobox.matches = matches;
+      parts.panel.replaceChildren();
+
+      if (!matches.length) {
+        var empty = document.createElement('p');
+        empty.className = 'combobox__empty';
+        empty.textContent = state.assets.length
+          ? 'No asset matches that search.'
+          : 'No eligible INPROD assets in your section.';
+        parts.panel.appendChild(empty);
+        return;
+      }
+
+      var shown = matches.slice(0, ASSET_LIST_LIMIT);
+      if (matches.length > shown.length) {
+        var count = document.createElement('p');
+        count.className = 'combobox__count';
+        count.textContent = 'Showing ' + shown.length + ' of ' + formatNumber(matches.length);
+        parts.panel.appendChild(count);
+      }
+
+      var selectedTag = state.selectedAsset ? state.selectedAsset.tag : '';
+      shown.forEach(function (asset, index) {
+        var option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'combobox__option';
+        option.id = 'asset-option-' + index;
+        option.tabIndex = -1;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', asset.tag === selectedTag ? 'true' : 'false');
+        option.dataset.index = String(index);
+
+        var tag = document.createElement('span');
+        tag.className = 'combobox__option-tag';
+        tag.textContent = asset.tag;
+        var meta = document.createElement('span');
+        meta.className = 'combobox__option-meta';
+        meta.textContent = asset.location || 'Location not recorded';
+        option.appendChild(tag);
+        option.appendChild(meta);
+
+        // mousedown rather than click: this keeps focus in the input so the
+        // blur validator cannot fire before the selection is committed.
+        option.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+          commitAsset(asset.tag);
+        });
+        parts.panel.appendChild(option);
+      });
+    }
+
+    /**
+     * Measures the panel against the viewport. The panel is position: fixed so
+     * the modal's scroll container cannot clip it, which means its coordinates
+     * have to be recomputed whenever the field moves.
+     */
+    function positionAssetPanel() {
+      if (!state.combobox.open) return;
+      var parts = assetCombobox();
+      var rect = parts.wrap.getBoundingClientRect();
+      var panel = parts.panel;
+      var gap = 6;
+      var margin = 12;
+      var spaceBelow = window.innerHeight - rect.bottom - margin;
+      var spaceAbove = rect.top - margin;
+      var flipUp = spaceBelow < 170 && spaceAbove > spaceBelow;
+      var available = Math.max(120, Math.min(288, flipUp ? spaceAbove : spaceBelow));
+
+      panel.style.left = Math.round(rect.left) + 'px';
+      panel.style.width = Math.round(rect.width) + 'px';
+      panel.style.maxHeight = Math.round(available) + 'px';
+      if (flipUp) {
+        panel.style.top = 'auto';
+        panel.style.bottom = Math.round(window.innerHeight - rect.top + gap) + 'px';
+      } else {
+        panel.style.bottom = 'auto';
+        panel.style.top = Math.round(rect.bottom + gap) + 'px';
+      }
+    }
+
+    function openAssetList(refilter) {
+      var parts = assetCombobox();
+      if (!state.assets.length) return;
+      if (refilter !== false) renderAssetList();
+      parts.panel.hidden = false;
+      parts.wrap.classList.add('is-open');
+      parts.input.setAttribute('aria-expanded', 'true');
+      state.combobox.open = true;
+      positionAssetPanel();
+      // Capture phase so scrolling the modal body repositions the panel too.
+      window.addEventListener('scroll', positionAssetPanel, true);
+      window.addEventListener('resize', positionAssetPanel);
+    }
+
+    function closeAssetList() {
+      var parts = assetCombobox();
+      parts.panel.hidden = true;
+      parts.wrap.classList.remove('is-open');
+      parts.input.setAttribute('aria-expanded', 'false');
+      parts.input.removeAttribute('aria-activedescendant');
+      state.combobox.open = false;
+      state.combobox.activeIndex = -1;
+      window.removeEventListener('scroll', positionAssetPanel, true);
+      window.removeEventListener('resize', positionAssetPanel);
+    }
+
+    function highlightAssetOption(index) {
+      var parts = assetCombobox();
+      var options = parts.panel.querySelectorAll('.combobox__option');
+      if (!options.length) return;
+      var bounded = Math.max(0, Math.min(options.length - 1, index));
+      options.forEach(function (option) { option.classList.remove('is-active'); });
+      var active = options[bounded];
+      active.classList.add('is-active');
+      active.scrollIntoView({ block: 'nearest' });
+      parts.input.setAttribute('aria-activedescendant', active.id);
+      state.combobox.activeIndex = bounded;
+    }
+
+    function commitAsset(tag) {
+      byId('asset-tag').value = tag;
+      closeAssetList();
+      selectAsset(tag, true);
+      markDirty();
+    }
+
+    function onAssetKeydown(event) {
+      var key = event.key;
+      if (key === 'ArrowDown' || key === 'ArrowUp') {
+        event.preventDefault();
+        if (!state.combobox.open) {
+          openAssetList();
+          highlightAssetOption(key === 'ArrowDown' ? 0 : state.combobox.matches.length - 1);
+          return;
+        }
+        highlightAssetOption(state.combobox.activeIndex + (key === 'ArrowDown' ? 1 : -1));
+        return;
+      }
+      if (key === 'Enter' && state.combobox.open && state.combobox.activeIndex >= 0) {
+        event.preventDefault();
+        var chosen = state.combobox.matches[state.combobox.activeIndex];
+        if (chosen) commitAsset(chosen.tag);
+        return;
+      }
+      if (key === 'Escape' && state.combobox.open) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeAssetList();
+      }
     }
 
     function renderPeripheralSchema() {
@@ -1150,7 +1350,7 @@
         label.textContent = tag;
         var remove = document.createElement('button');
         remove.type = 'button';
-        remove.textContent = '×';
+        remove.appendChild(iconSvg('close'));
         remove.setAttribute('aria-label', 'Remove ' + tag);
         remove.addEventListener('click', function (event) {
           event.stopPropagation();
@@ -1358,6 +1558,7 @@
       byId('maintenance-date').max = currentManilaDate();
       byId('maintenance-date').value = currentManilaDate();
       byId('asset-tag').value = '';
+      closeAssetList();
       byId('observed-location').value = '';
       byId('asset-snapshot').hidden = true;
       byId('location-incorrect').checked = false;
@@ -1482,7 +1683,10 @@
       if (event.target.closest('.form-step')) {
         markDirty();
         if (event.target.id === 'maintenance-date') updateDerivedCycle();
-        if (event.target.id === 'asset-tag') selectAsset(event.target.value, false);
+        if (event.target.id === 'asset-tag') {
+          openAssetList();
+          selectAsset(event.target.value, false);
+        }
         if (event.target.id === 'location-incorrect') updateObservedLocationVisibility();
         if (event.target.id === 'assessment-result') applyAssessmentShortcut();
       }
@@ -1824,7 +2028,23 @@
       });
       byId('questionnaire-form').addEventListener('input', onFormInput);
       byId('questionnaire-form').addEventListener('change', onFormInput);
-      byId('asset-tag').addEventListener('blur', function () { selectAsset(byId('asset-tag').value, Boolean(byId('asset-tag').value)); });
+      byId('asset-tag').addEventListener('focus', function () { openAssetList(); });
+      byId('asset-tag').addEventListener('keydown', onAssetKeydown);
+      byId('asset-tag').addEventListener('blur', function () {
+        closeAssetList();
+        selectAsset(byId('asset-tag').value, Boolean(byId('asset-tag').value));
+      });
+      byId('asset-combobox-toggle').addEventListener('click', function () {
+        if (state.combobox.open) {
+          closeAssetList();
+          return;
+        }
+        byId('asset-tag').focus();
+        openAssetList();
+      });
+      document.addEventListener('mousedown', function (event) {
+        if (state.combobox.open && !event.target.closest('#asset-combobox')) closeAssetList();
+      });
       byId('previous-step').addEventListener('click', function () { setStep(state.currentStep - 1, false); });
       byId('next-step').addEventListener('click', function () { setStep(state.currentStep + 1, true); });
       document.querySelectorAll('[data-step-target]').forEach(function (button) {
