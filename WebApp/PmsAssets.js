@@ -148,11 +148,18 @@ PMS.Assets = (function () {
     return sheet;
   }
 
-  var CYCLE_KEYS = Object.keys(PMS.CONFIG.CYCLES);
+  /*
+    Resolved on call, never at load time. Apps Script evaluates project files in
+    alphabetical order, so PmsAssets runs before PmsConfig and PMS.CONFIG does
+    not exist yet while this file is being evaluated.
+  */
+  function cycleKeys() {
+    return Object.keys(PMS.CONFIG.CYCLES);
+  }
 
   /** Column span covering every cycle checkbox, read as one range. */
   function cycleCheckboxSpan() {
-    var columns = CYCLE_KEYS.map(function (key) {
+    var columns = cycleKeys().map(function (key) {
       return PMS.CONFIG.CYCLES[key].checkboxColumn;
     });
     return {
@@ -180,7 +187,7 @@ PMS.Assets = (function () {
     return values.map(function (row, index) {
       var cycles = {};
       var completedCycles = [];
-      CYCLE_KEYS.forEach(function (key) {
+      cycleKeys().forEach(function (key) {
         var offset = PMS.CONFIG.CYCLES[key].checkboxColumn - span.first;
         var done = cycleValues[index][offset] === true;
         cycles[key] = done;
