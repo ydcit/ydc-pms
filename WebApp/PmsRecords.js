@@ -439,6 +439,39 @@ PMS.Records = (function () {
     return Math.max(minimum, Math.min(maximum, Math.floor(number)));
   }
 
+  // Sortable columns, plus the fallbacks used to break ties so ordering is
+  // deterministic and a row can never appear on two pages.
+  var COMPLETED_SORTS = Object.freeze({
+    maintenanceDate: ['maintenanceDate', 'submittedAt'],
+    submittedAt: ['submittedAt', 'maintenanceDate'],
+    assetTag: ['assetTag', 'maintenanceDate'],
+    location: ['location', 'assetTag'],
+    cycleId: ['cycleId', 'maintenanceDate'],
+    technicianName: ['technicianName', 'maintenanceDate'],
+    assessmentResult: ['assessmentResult', 'maintenanceDate']
+  });
+
+  // "All" still needs a ceiling: google.script.run has already proven to fail
+  // silently on an oversized response, so the count is capped and the caller is
+  // told when the list was cut short.
+  var COMPLETED_ALL_CAP = 1000;
+
+  function completedComparator(sortKey, ascending) {
+    var keys = COMPLETED_SORTS[sortKey] || COMPLETED_SORTS.maintenanceDate;
+    var factor = ascending ? 1 : -1;
+    return function (a, b) {
+      for (var index = 0; index < keys.length; index += 1) {
+        var key = keys[index];
+        var left = String(a[key] || '');
+        var right = String(b[key] || '');
+        if (left !== right) {
+          return factor * left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
+        }
+      }
+      return factor * (a.row - b.row);
+    };
+  }
+
   /**
    * Completed maintenance visible to the caller.
    *
@@ -508,22 +541,31 @@ PMS.Records = (function () {
         .indexOf(search) >= 0;
     });
 
-    filtered.sort(function (a, b) {
-      var left = a.submittedAt || a.maintenanceDate || '';
-      var right = b.submittedAt || b.maintenanceDate || '';
-      if (left !== right) return right.localeCompare(left);
-      return b.row - a.row;
-    });
+    var sortKey = COMPLETED_SORTS[PMS.Util.cleanText(request.sort, 40)] ? PMS.Util.cleanText(request.sort, 40) : 'maintenanceDate';
+    var ascending = PMS.Util.cleanText(request.direction, 4).toUpperCase() === 'ASC';
+    filtered.sort(completedComparator(sortKey, ascending));
 
     var uniqueAssets = {};
     filtered.forEach(function (record) {
       if (record.assetTag) uniqueAssets[record.assetTag] = true;
     });
 
-    var pageSize = boundedInteger(request.pageSize, 25, 5, 100);
-    var totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-    var page = boundedInteger(request.page, 1, 1, totalPages);
-    var start = (page - 1) * pageSize;
+    var showAll = PMS.Util.cleanText(request.pageSize, 8).toUpperCase() === 'ALL';
+    var truncated = false;
+    var pageSize;
+    var page;
+    var start;
+    if (showAll) {
+      truncated = filtered.length > COMPLETED_ALL_CAP;
+      pageSize = Math.max(1, Math.min(filtered.length || 1, COMPLETED_ALL_CAP));
+      page = 1;
+      start = 0;
+    } else {
+      pageSize = boundedInteger(request.pageSize, 20, 5, 100);
+      page = boundedInteger(request.page, 1, 1, Math.max(1, Math.ceil(filtered.length / pageSize)));
+      start = (page - 1) * pageSize;
+    }
+    var totalPages = showAll ? 1 : Math.max(1, Math.ceil(filtered.length / pageSize));
 
     return {
       ok: true,
@@ -531,12 +573,17 @@ PMS.Records = (function () {
       rows: filtered.slice(start, start + pageSize),
       page: page,
       pageSize: pageSize,
+      pageSizeMode: showAll ? 'ALL' : String(pageSize),
       totalPages: totalPages,
       total: filtered.length,
       totalInScope: scoped.length,
       uniqueAssets: Object.keys(uniqueAssets).length,
       rangeStart: filtered.length ? start + 1 : 0,
       rangeEnd: Math.min(start + pageSize, filtered.length),
+      sort: sortKey,
+      direction: ascending ? 'ASC' : 'DESC',
+      truncated: truncated,
+      cap: COMPLETED_ALL_CAP,
       filters: {
         years: Object.keys(yearSet).map(Number).sort(function (a, b) { return b - a; }),
         cycles: Object.keys(cycleSet).sort(),

@@ -1708,14 +1708,84 @@
      Completed maintenance archive
      -------------------------------------------------------------------------- */
 
-  .archive-panel {
-    margin-bottom: 32px;
+  .page-heading__actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 10px;
   }
 
-  .panel__subtitle {
+  .archive-dialog {
+    position: relative;
+    display: flex;
+    width: min(100%, 1080px);
+    max-height: min(92vh, 900px);
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--r-xl);
+    background: var(--surface);
+    box-shadow: var(--shadow-xl);
+    animation: pop-in 220ms var(--ease);
+  }
+
+  .archive-dialog__header {
+    flex: none;
+    padding: 22px 26px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+
+  .archive-dialog__title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+
+  .archive-dialog__title-row h1 {
+    font-size: 21px;
+  }
+
+  .archive-dialog__summary {
     margin-top: 5px;
     color: var(--muted);
     font-size: 12.5px;
+  }
+
+  .archive-dialog__header-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .archive-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--surface-soft);
+  }
+
+  .archive-dialog__body .table-wrap {
+    margin: 0;
+  }
+
+  .archive-dialog__body thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+
+  .archive-dialog__footer {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 13px 26px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
   }
 
   .archive-toolbar {
@@ -1723,7 +1793,38 @@
     flex-wrap: wrap;
     align-items: flex-end;
     gap: 10px;
-    margin-bottom: 16px;
+  }
+
+  .archive-toolbar--secondary {
+    justify-content: space-between;
+    margin-top: 10px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .archive-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .archive-control--end {
+    margin-left: auto;
+  }
+
+  .archive-control label {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 550;
+    white-space: nowrap;
+  }
+
+  .archive-direction {
+    white-space: nowrap;
+  }
+
+  .select-wrap--compact {
+    width: 82px;
   }
 
   .archive-toolbar__search {
@@ -1756,25 +1857,45 @@
     font-size: 13px;
   }
 
-  .archive-pager {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding-top: 14px;
-    margin-top: 4px;
-    border-top: 1px solid var(--line);
+  .archive-pager__left {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
   }
 
   .archive-pager__status {
-    color: var(--muted);
+    color: var(--ink-soft);
     font-size: 12.5px;
     font-variant-numeric: tabular-nums;
   }
 
+  .archive-pager__notice {
+    color: var(--warning);
+    font-size: 11.5px;
+  }
+
   .archive-pager__controls {
     display: flex;
+    flex: none;
+    align-items: center;
     gap: 8px;
+  }
+
+  .archive-jump {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .archive-jump input {
+    width: 62px;
+    min-height: 32px;
+    padding: 0 8px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
   }
 
   .location-flag {
@@ -1800,18 +1921,48 @@
     font-size: 11.5px;
   }
 
-  @media (max-width: 780px) {
+  @media (max-width: 860px) {
+    .archive-dialog {
+      width: 100%;
+      height: 100vh;
+      max-height: 100vh;
+      border-radius: 0;
+    }
+
+    .archive-dialog__header {
+      padding: 18px 18px 14px;
+    }
+
+    .archive-dialog__footer {
+      flex-direction: column;
+      align-items: stretch;
+      padding: 12px 18px;
+    }
+
     .archive-toolbar__filter {
       width: calc(50% - 5px);
     }
 
-    .archive-pager {
+    .archive-toolbar--secondary {
       flex-direction: column;
       align-items: stretch;
     }
 
-    .archive-pager__controls .button {
-      flex: 1 1 auto;
+    .archive-control--end {
+      margin-left: 0;
+    }
+
+    .archive-pager__controls {
+      justify-content: space-between;
+    }
+
+    .page-heading__actions {
+      width: 100%;
+      flex-direction: column;
+    }
+
+    .page-heading__actions .button {
+      width: 100%;
     }
   }
 

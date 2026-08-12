@@ -22,7 +22,10 @@
       modalOpen: false,
       busy: false,
       combobox: { open: false, activeIndex: -1, matches: [] },
-      archive: { page: 1, pageSize: 25, totalPages: 1, token: 0, searchTimer: null },
+      archive: {
+        open: false, page: 1, totalPages: 1, direction: 'DESC',
+        token: 0, searchTimer: null, lastFocus: null
+      },
       lastFocus: null,
       dryRun: null,
       submittedCompletion: ''
@@ -702,8 +705,6 @@
       renderLocations(pick(summary, ['completionByLocation', 'byLocation', 'locations'], pick(metrics, ['completionByLocation', 'byLocation', 'locations'], [])));
       renderRecent(state.bootstrap.recentRecords || []);
       renderRollover(state.bootstrap.rollover || null);
-      // Fetched separately so the bootstrap payload stays small.
-      loadCompletedRecords({ page: 1 }).catch(function () {});
     }
 
     function formatNumber(value) {
@@ -849,10 +850,64 @@
        size-sensitive part of this app.
        ------------------------------------------------------------------------ */
 
+    var ARCHIVE_DIRECTION_LABELS = {
+      maintenanceDate: ['Oldest first', 'Newest first'],
+      submittedAt: ['Oldest first', 'Newest first'],
+      assetTag: ['A to Z', 'Z to A'],
+      location: ['A to Z', 'Z to A'],
+      cycleId: ['Oldest first', 'Newest first'],
+      technicianName: ['A to Z', 'Z to A'],
+      assessmentResult: ['A to Z', 'Z to A']
+    };
+
+    function openArchiveModal() {
+      state.archive.lastFocus = document.activeElement;
+      state.archive.open = true;
+      byId('archive-modal').hidden = false;
+      document.body.classList.add('modal-open');
+      loadCompletedRecords({ page: 1 }).catch(function () {});
+      window.setTimeout(function () { byId('archive-search').focus(); }, 0);
+    }
+
+    function closeArchiveModal() {
+      if (!state.archive.open) return;
+      state.archive.open = false;
+      byId('archive-modal').hidden = true;
+      if (!state.modalOpen) document.body.classList.remove('modal-open');
+      var target = state.archive.lastFocus;
+      if (target && typeof target.focus === 'function') target.focus();
+    }
+
+    function trapArchiveFocus(event) {
+      // The questionnaire owns the keyboard whenever it is layered on top.
+      if (!state.archive.open || state.modalOpen) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeArchiveModal();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = Array.prototype.slice.call(byId('archive-modal').querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
     function archiveRequest(overrides) {
       var request = {
         page: state.archive.page,
-        pageSize: state.archive.pageSize,
+        pageSize: byId('archive-page-size').value,
+        sort: byId('archive-sort').value,
+        direction: state.archive.direction,
         search: byId('archive-search').value,
         year: byId('archive-year').value,
         cycle: byId('archive-cycle').value,
@@ -861,14 +916,31 @@
       return Object.assign(request, overrides || {});
     }
 
+    function jumpToArchivePage() {
+      var input = byId('archive-page-input');
+      var requested = Math.round(asNumber(input.value, state.archive.page));
+      var target = Math.max(1, Math.min(state.archive.totalPages, requested));
+      input.value = String(target);
+      if (target === state.archive.page) return;
+      loadCompletedRecords({ page: target });
+    }
+
+    function renderArchiveDirection() {
+      var labels = ARCHIVE_DIRECTION_LABELS[byId('archive-sort').value] || ['Ascending', 'Descending'];
+      var ascending = state.archive.direction === 'ASC';
+      byId('archive-direction-label').textContent = ascending ? labels[0] : labels[1];
+      byId('archive-direction').setAttribute('aria-pressed', ascending ? 'true' : 'false');
+      var use = byId('archive-direction').querySelector('use');
+      if (use) use.setAttribute('href', ascending ? '#i-arrow-up' : '#i-arrow-down');
+    }
+
     function setArchiveBusy(isBusy) {
       byId('archive-loading').hidden = !isBusy;
       if (isBusy) {
         byId('archive-table-wrap').hidden = true;
         byId('archive-empty').hidden = true;
-        byId('archive-pager').hidden = true;
       }
-      ['archive-prev', 'archive-next', 'archive-refresh'].forEach(function (id) {
+      ['archive-prev', 'archive-next', 'archive-refresh', 'archive-page-input'].forEach(function (id) {
         byId(id).disabled = isBusy;
       });
     }
@@ -941,6 +1013,13 @@
 
       byId('archive-eyebrow').textContent = isAdmin ? 'Completed maintenance · all sections' : 'Completed maintenance · your records';
       byId('archive-title').textContent = isAdmin ? 'Completed assets' : 'Assets you have maintained';
+      byId('archive-sort-technician').hidden = !isAdmin;
+      if (!isAdmin && byId('archive-sort').value === 'technicianName') {
+        byId('archive-sort').value = 'maintenanceDate';
+      }
+      if (normalizeText(payload.sort)) byId('archive-sort').value = payload.sort;
+      state.archive.direction = payload.direction === 'ASC' ? 'ASC' : 'DESC';
+      renderArchiveDirection();
       byId('archive-summary').textContent = payload.totalInScope
         ? (formatNumber(payload.total) + ' completed record' + (payload.total === 1 ? '' : 's') +
            ' · ' + formatNumber(payload.uniqueAssets) + ' unique asset' + (payload.uniqueAssets === 1 ? '' : 's') +
@@ -960,7 +1039,6 @@
       var hasRows = rows.length > 0;
       byId('archive-table-wrap').hidden = !hasRows;
       byId('archive-empty').hidden = hasRows;
-      byId('archive-pager').hidden = !hasRows || state.archive.totalPages <= 1;
 
       if (!hasRows) {
         var filtered = Boolean(payload.totalInScope);
@@ -972,11 +1050,29 @@
             : 'Records you complete will be listed here.');
       }
 
-      byId('archive-range').textContent = 'Showing ' + formatNumber(payload.rangeStart) + '–' +
-        formatNumber(payload.rangeEnd) + ' of ' + formatNumber(payload.total) +
-        ' · page ' + state.archive.page + ' of ' + state.archive.totalPages;
+      var showingAll = payload.pageSizeMode === 'ALL';
+      byId('archive-range').textContent = payload.total
+        ? ('Showing ' + formatNumber(payload.rangeStart) + '–' + formatNumber(payload.rangeEnd) +
+           ' of ' + formatNumber(payload.total) +
+           (showingAll ? '' : ' · page ' + state.archive.page + ' of ' + state.archive.totalPages))
+        : 'No records to show';
+
+      var truncated = Boolean(payload.truncated);
+      byId('archive-truncated').hidden = !truncated;
+      if (truncated) {
+        byId('archive-truncated').textContent = 'Showing the first ' + formatNumber(payload.cap) +
+          ' records. Narrow the search or use a page size to see the rest.';
+      }
+
+      // With "All" selected there is a single page, so paging controls are noise.
+      byId('archive-jump').hidden = showingAll || state.archive.totalPages <= 1;
+      byId('archive-prev').hidden = showingAll;
+      byId('archive-next').hidden = showingAll;
       byId('archive-prev').disabled = state.archive.page <= 1;
       byId('archive-next').disabled = state.archive.page >= state.archive.totalPages;
+      byId('archive-page-input').max = String(state.archive.totalPages);
+      byId('archive-page-input').value = String(state.archive.page);
+      byId('archive-page-total').textContent = 'of ' + formatNumber(state.archive.totalPages);
     }
 
     function archiveRow(record, isAdmin) {
@@ -1042,7 +1138,11 @@
         open.className = 'table-action';
         open.type = 'button';
         open.textContent = 'View';
-        open.addEventListener('click', function () { openExistingRecord(id); });
+        open.addEventListener('click', function () {
+          // Close the archive first so the two dialogs never stack.
+          closeArchiveModal();
+          openExistingRecord(id);
+        });
         actionCell.appendChild(open);
       }
 
@@ -2235,6 +2335,11 @@
           .catch(function () {})
           .finally(function () { setBusy(false); });
       });
+      byId('open-archive').addEventListener('click', openArchiveModal);
+      byId('archive-close').addEventListener('click', closeArchiveModal);
+      document.querySelectorAll('[data-close-archive]').forEach(function (element) {
+        element.addEventListener('click', closeArchiveModal);
+      });
       byId('archive-refresh').addEventListener('click', function () { loadCompletedRecords({ page: 1 }); });
       byId('archive-prev').addEventListener('click', function () {
         if (state.archive.page > 1) loadCompletedRecords({ page: state.archive.page - 1 });
@@ -2242,8 +2347,19 @@
       byId('archive-next').addEventListener('click', function () {
         if (state.archive.page < state.archive.totalPages) loadCompletedRecords({ page: state.archive.page + 1 });
       });
-      ['archive-year', 'archive-cycle', 'archive-section'].forEach(function (id) {
+      ['archive-year', 'archive-cycle', 'archive-section', 'archive-sort', 'archive-page-size'].forEach(function (id) {
         byId(id).addEventListener('change', function () { loadCompletedRecords({ page: 1 }); });
+      });
+      byId('archive-direction').addEventListener('click', function () {
+        state.archive.direction = state.archive.direction === 'ASC' ? 'DESC' : 'ASC';
+        renderArchiveDirection();
+        loadCompletedRecords({ page: 1 });
+      });
+      byId('archive-page-input').addEventListener('change', jumpToArchivePage);
+      byId('archive-page-input').addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        jumpToArchivePage();
       });
       byId('archive-search').addEventListener('input', function () {
         window.clearTimeout(state.archive.searchTimer);
@@ -2251,6 +2367,7 @@
           loadCompletedRecords({ page: 1 });
         }, 300);
       });
+      document.addEventListener('keydown', trapArchiveFocus);
       byId('close-questionnaire').addEventListener('click', function () { requestCloseModal(false); });
       document.querySelectorAll('[data-close-modal]').forEach(function (element) {
         element.addEventListener('click', function () { requestCloseModal(false); });
