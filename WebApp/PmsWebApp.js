@@ -92,9 +92,23 @@ function PMS_buildBootstrap_() {
     var records = PMS.Records.dashboardRecords();
     response.metrics = PMS.Metrics.dashboard({ section: context.isAdmin ? 'ALL' : context.section }, records);
     response.recentRecords = PMS.Records.recent(context, 10, records);
-    if (context.isAdmin) response.rollover = PMS.Rollover.status();
   }
+  // Rollover status is deliberately not built here. It reads both tracker
+  // sheets in full and inspects every sheet in the workbook, which is the
+  // single most expensive thing an administrator's load used to wait on. The
+  // client requests it after the dashboard has painted.
+  response.rolloverDeferred = Boolean(context.isAdmin);
   return response;
+}
+
+/** Administrator rollover status, fetched after the dashboard renders. */
+function PMS_apiRolloverStatus() {
+  try {
+    PMS.Auth.requireAdmin();
+    return PMS_jsonResponse_({ ok: true, rollover: PMS.Rollover.status() });
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
 }
 
 function PMS_apiRegister(registration) {

@@ -150,7 +150,25 @@ PMS.Auth = (function () {
     return updated;
   }
 
+  /*
+    Resolving the context reads the PMS Users sheet and can take a lock to stamp
+    the login. A single bootstrap used to do it three times, once directly and
+    again via Metrics and Rollover. The memo lives only for the current script
+    execution, which is one request by one user, so there is nothing to stale.
+  */
+  var contextMemo = null;
+
+  function invalidateContext() {
+    contextMemo = null;
+  }
+
   function getContext() {
+    if (contextMemo) return contextMemo;
+    contextMemo = buildContext();
+    return contextMemo;
+  }
+
+  function buildContext() {
     var email = currentEmail();
     var profile = recordLogin(email, resolveProfile(email));
     var name = profile && profile.name ? profile.name : displayNameFromEmail(email);
@@ -209,6 +227,8 @@ PMS.Auth = (function () {
         identitySource: 'GOOGLE_ACCOUNT'
       };
     });
+    // The profile just changed, so the memo from before the write is stale.
+    invalidateContext();
     return getContext();
   }
 
@@ -258,6 +278,7 @@ PMS.Auth = (function () {
         lastLoginAt: existing.lastLoginAt || ''
       };
     });
+    invalidateContext();
     return { ok: true, email: email, section: section.key, sectionLabel: section.label };
   }
 
@@ -317,6 +338,7 @@ PMS.Auth = (function () {
   return {
     currentEmail: currentEmail,
     getContext: getContext,
+    invalidateContext: invalidateContext,
     register: register,
     requireProfile: requireProfile,
     requireAdmin: requireAdmin,

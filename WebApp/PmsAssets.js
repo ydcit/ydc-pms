@@ -209,13 +209,25 @@ PMS.Assets = (function () {
     });
   }
 
+  /*
+    Per-execution memo. A single bootstrap asks for the eligible list twice,
+    once for the asset picker and once for the metrics denominator. Without this
+    the second call still pays a CacheService round trip plus a base64 decode and
+    checksum of the whole list.
+  */
+  var eligibleMemo = {};
+
   function listEligible(sectionKey, forceRefresh) {
     var section = PMS.Util.section(sectionKey);
     var cache = CacheService.getScriptCache();
     var cacheKey = cacheBaseKey(section.key);
+    if (!forceRefresh && eligibleMemo[section.key]) return eligibleMemo[section.key];
     if (!forceRefresh) {
       var cached = readCachedAssets(cache, cacheKey);
-      if (cached !== null) return cached;
+      if (cached !== null) {
+        eligibleMemo[section.key] = cached;
+        return cached;
+      }
     }
     var seen = {};
     var assets = readAll(sectionKey).filter(function (asset) {
@@ -228,6 +240,7 @@ PMS.Assets = (function () {
     } catch (error) {
       console.warn('Asset list could not be cached: ' + error.message);
     }
+    eligibleMemo[section.key] = assets;
     return assets;
   }
 
@@ -292,6 +305,7 @@ PMS.Assets = (function () {
   }
 
   function invalidate(sectionKey) {
+    delete eligibleMemo[PMS.Util.section(sectionKey).key];
     clearCache(CacheService.getScriptCache(), cacheBaseKey(sectionKey));
   }
 

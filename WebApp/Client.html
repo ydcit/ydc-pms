@@ -26,6 +26,7 @@
         open: false, page: 1, totalPages: 1, direction: 'DESC',
         token: 0, searchTimer: null, lastFocus: null
       },
+      rolloverLoading: false,
       lastFocus: null,
       dryRun: null,
       submittedCompletion: ''
@@ -705,6 +706,24 @@
       renderLocations(pick(summary, ['completionByLocation', 'byLocation', 'locations'], pick(metrics, ['completionByLocation', 'byLocation', 'locations'], [])));
       renderRecent(state.bootstrap.recentRecords || []);
       renderRollover(state.bootstrap.rollover || null);
+      // The server defers rollover status because it is expensive. Fetch it once
+      // the dashboard is on screen so it never delays first paint.
+      if (state.bootstrap.rolloverDeferred && userIsAdmin()) loadRolloverStatus();
+    }
+
+    function loadRolloverStatus() {
+      if (state.rolloverLoading) return;
+      state.rolloverLoading = true;
+      serverCall('PMS_apiRolloverStatus')
+        .then(function (data) {
+          renderRollover((data && data.rollover) || null);
+        })
+        .catch(function (error) {
+          byId('sync-recovery-title').textContent = 'Synchronization status unavailable';
+          byId('sync-recovery-detail').textContent = errorMessage(error);
+          byId('sync-status-chip').textContent = 'Unknown';
+        })
+        .finally(function () { state.rolloverLoading = false; });
     }
 
     function formatNumber(value) {
