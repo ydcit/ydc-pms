@@ -676,7 +676,7 @@
       byId('dashboard-welcome').textContent = 'Welcome back, ' + (userName() || 'technician') + '. Track this cycle’s preventive maintenance coverage.';
       [byId('new-record-button'), byId('empty-new-record')].forEach(function (button) {
         button.disabled = state.assets.length === 0;
-        button.title = state.assets.length ? 'Open the preventive maintenance questionnaire' : 'No eligible INPROD assets are available in your section';
+        button.title = state.assets.length ? 'Open the preventive maintenance questionnaire' : 'Every INPROD asset in your section is already checked off in the tracker';
       });
       byId('cycle-badge').textContent = cycle;
       byId('cycle-banner-title').textContent = year + ' ' + cycle + ' preventive maintenance';
@@ -1080,8 +1080,8 @@
     function renderAssetOptions() {
       state.combobox.activeIndex = -1;
       byId('asset-help').textContent = state.assets.length
-        ? ('Search ' + formatNumber(state.assets.length) + ' current INPROD assets in ' + sectionLabel(sectionKey()) + '.')
-        : 'No eligible INPROD assets are currently available in your section.';
+        ? ('Search ' + formatNumber(state.assets.length) + ' INPROD assets still awaiting PMS in ' + sectionLabel(sectionKey()) + '.')
+        : 'Every INPROD asset in your section is already checked off in the tracker.';
       renderAssetList();
     }
 
@@ -1111,7 +1111,7 @@
         empty.className = 'combobox__empty';
         empty.textContent = state.assets.length
           ? 'No asset matches that search.'
-          : 'No eligible INPROD assets in your section.';
+          : 'No assets are awaiting PMS in your section.';
         parts.panel.appendChild(empty);
         return;
       }
