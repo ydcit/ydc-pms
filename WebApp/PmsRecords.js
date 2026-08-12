@@ -98,6 +98,33 @@ PMS.Records = (function () {
     return values.map(function (row, index) { return rowToObject(row, index + 2); });
   }
 
+  // A round trip to Sheets costs far more than a few surplus columns, so
+  // near-adjacent columns are merged into one read. Anything further apart than
+  // this gets its own read rather than dragging the gap along.
+  var FIELD_GAP_TOLERANCE = 10;
+
+  /** Groups sorted column offsets into the ranges worth reading in one call. */
+  function columnClusters(offsets) {
+    var sorted = offsets.slice().sort(function (a, b) { return a - b; });
+    var clusters = [];
+    sorted.forEach(function (offset) {
+      var current = clusters[clusters.length - 1];
+      if (current && offset - current.last <= FIELD_GAP_TOLERANCE) {
+        current.last = offset;
+        return;
+      }
+      clusters.push({ first: offset, last: offset });
+    });
+    return clusters;
+  }
+
+  /**
+   * Projects the requested columns out of the response sheet.
+   *
+   * This used to issue one getRange().getValues() per field; with fifteen fields
+   * on the dashboard those round trips dominated bootstrap time. Columns are now
+   * read in a handful of clustered ranges instead.
+   */
   function readRecordFields(keys) {
     var fields = Array.isArray(keys) ? keys.filter(function (key, index, values) {
       return values.indexOf(key) === index;
@@ -105,15 +132,27 @@ PMS.Records = (function () {
     var sheet = responseSheet(false);
     if (!sheet || sheet.getLastRow() < 2 || !fields.length) return [];
     var count = sheet.getLastRow() - 1;
-    var records = Array.from({ length: count }, function (_, index) {
-      return { _rowNumber: index + 2 };
+    var offsets = fields.map(columnIndex);
+    var clusters = columnClusters(offsets);
+    var blocks = clusters.map(function (cluster) {
+      return sheet.getRange(2, cluster.first + 1, count, cluster.last - cluster.first + 1).getValues();
     });
-    fields.forEach(function (key) {
-      var values = sheet.getRange(2, columnIndex(key) + 1, count, 1).getValues();
-      values.forEach(function (row, index) {
-        records[index][key] = row[0] === undefined || row[0] === null ? '' : row[0];
-      });
-    });
+
+    var records = new Array(count);
+    for (var rowIndex = 0; rowIndex < count; rowIndex += 1) {
+      var record = { _rowNumber: rowIndex + 2 };
+      for (var position = 0; position < fields.length; position += 1) {
+        var offset = offsets[position];
+        for (var blockIndex = 0; blockIndex < clusters.length; blockIndex += 1) {
+          var cluster = clusters[blockIndex];
+          if (offset < cluster.first || offset > cluster.last) continue;
+          var value = blocks[blockIndex][rowIndex][offset - cluster.first];
+          record[fields[position]] = value === undefined || value === null ? '' : value;
+          break;
+        }
+      }
+      records[rowIndex] = record;
+    }
     return records;
   }
 
@@ -713,8 +752,40 @@ PMS.Records = (function () {
     return appendLegacyRecordsBatch([data]).appended === 1;
   }
 
+  /**
+   * Cheap check for "the baseline already exists for every section".
+   *
+   * Reads only each tracker's year cell, so the steady state costs two single
+   * cell reads instead of a script lock plus a full scan of the response sheet
+   * and both tracker sheets. Returns null when anything is missing, so the
+   * caller falls through to the real, locked path.
+   */
+  function existingBaselines(propertyStore) {
+    var sectionKeys = Object.keys(PMS.CONFIG.SECTIONS);
+    var found = [];
+    for (var index = 0; index < sectionKeys.length; index += 1) {
+      var sectionKey = sectionKeys[index];
+      var sheet = PMS.Assets.sheetForSection(sectionKey);
+      var year = Number(
+        sheet.getRange(PMS.CONFIG.TRACKER_YEAR_ROW, PMS.CONFIG.TRACKER_YEAR_COLUMN).getValue()
+      );
+      if (!year) return null;
+      if (!propertyStore.getProperty(PMS.CONFIG.BASELINE_PROPERTY_PREFIX + year + '_' + sectionKey)) {
+        return null;
+      }
+      found.push({ section: sectionKey, year: year, status: 'EXISTS' });
+    }
+    return found.length === sectionKeys.length ? found : null;
+  }
+
   function ensureTrackerBaseline() {
     var propertyStore = PropertiesService.getScriptProperties();
+    // Fast path first: this runs on every bootstrap, and after the one-time
+    // migration there is nothing left to do.
+    var alreadyDone = existingBaselines(propertyStore);
+    if (alreadyDone) {
+      return { migrated: 0, baselines: alreadyDone };
+    }
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(30000)) PMS.Util.fail('The system is preparing the PMS baseline. Please try again.', 'BUSY');
     var baselines = [];
