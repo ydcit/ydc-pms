@@ -22,6 +22,7 @@
       modalOpen: false,
       busy: false,
       combobox: { open: false, activeIndex: -1, matches: [] },
+      archive: { page: 1, pageSize: 25, totalPages: 1, token: 0, searchTimer: null },
       lastFocus: null,
       dryRun: null,
       submittedCompletion: ''
@@ -701,6 +702,8 @@
       renderLocations(pick(summary, ['completionByLocation', 'byLocation', 'locations'], pick(metrics, ['completionByLocation', 'byLocation', 'locations'], [])));
       renderRecent(state.bootstrap.recentRecords || []);
       renderRollover(state.bootstrap.rollover || null);
+      // Fetched separately so the bootstrap payload stays small.
+      loadCompletedRecords({ page: 1 }).catch(function () {});
     }
 
     function formatNumber(value) {
@@ -836,6 +839,216 @@
         row.appendChild(actionCell);
         body.appendChild(row);
       });
+    }
+
+    /* ------------------------------------------------------------------------
+       Completed maintenance archive.
+
+       Server-paged rather than loaded whole: an administrator's archive grows
+       without bound, and the bootstrap payload has already proven to be the
+       size-sensitive part of this app.
+       ------------------------------------------------------------------------ */
+
+    function archiveRequest(overrides) {
+      var request = {
+        page: state.archive.page,
+        pageSize: state.archive.pageSize,
+        search: byId('archive-search').value,
+        year: byId('archive-year').value,
+        cycle: byId('archive-cycle').value,
+        section: byId('archive-section').value
+      };
+      return Object.assign(request, overrides || {});
+    }
+
+    function setArchiveBusy(isBusy) {
+      byId('archive-loading').hidden = !isBusy;
+      if (isBusy) {
+        byId('archive-table-wrap').hidden = true;
+        byId('archive-empty').hidden = true;
+        byId('archive-pager').hidden = true;
+      }
+      ['archive-prev', 'archive-next', 'archive-refresh'].forEach(function (id) {
+        byId(id).disabled = isBusy;
+      });
+    }
+
+    function loadCompletedRecords(overrides) {
+      var request = archiveRequest(overrides);
+      state.archive.page = asNumber(request.page, 1) || 1;
+      state.archive.token += 1;
+      var token = state.archive.token;
+      setArchiveBusy(true);
+      return serverCall('PMS_apiCompletedRecords', request)
+        .then(function (data) {
+          // Ignore a slower in-flight response that a newer request superseded.
+          if (token !== state.archive.token) return data;
+          renderCompletedRecords(data);
+          return data;
+        })
+        .catch(function (error) {
+          if (token !== state.archive.token) return;
+          setArchiveBusy(false);
+          byId('archive-empty').hidden = false;
+          byId('archive-empty-title').textContent = 'Completed maintenance could not be loaded';
+          byId('archive-empty-message').textContent = errorMessage(error);
+          showToast('Completed list failed', errorMessage(error), 'danger');
+        });
+    }
+
+    function syncArchiveOptions(filters, isAdmin) {
+      var options = filters || {};
+      fillSelect(byId('archive-year'), 'All years', toArray(options.years).map(function (year) {
+        return { value: String(year), label: String(year) };
+      }));
+      fillSelect(byId('archive-cycle'), 'All cycles', toArray(options.cycles).map(function (cycle) {
+        return { value: cycle, label: cycle };
+      }));
+      byId('archive-section-wrap').hidden = !isAdmin;
+      if (isAdmin) {
+        fillSelect(byId('archive-section'), 'All sections', toArray(options.sections).map(function (key) {
+          return { value: key, label: sectionLabel(key) };
+        }));
+      }
+    }
+
+    /** Repopulates a select while preserving the current selection if still valid. */
+    function fillSelect(select, allLabel, items) {
+      var previous = select.value;
+      select.replaceChildren();
+      var all = document.createElement('option');
+      all.value = '';
+      all.textContent = allLabel;
+      select.appendChild(all);
+      items.forEach(function (item) {
+        var option = document.createElement('option');
+        option.value = item.value;
+        option.textContent = item.label;
+        select.appendChild(option);
+      });
+      select.value = items.some(function (item) { return item.value === previous; }) ? previous : '';
+    }
+
+    function renderCompletedRecords(data) {
+      var payload = data || {};
+      var rows = toArray(payload.rows);
+      var isAdmin = payload.scope === 'ALL_SECTIONS';
+      state.archive.page = asNumber(payload.page, 1) || 1;
+      state.archive.totalPages = asNumber(payload.totalPages, 1) || 1;
+
+      setArchiveBusy(false);
+      syncArchiveOptions(payload.filters, isAdmin);
+
+      byId('archive-eyebrow').textContent = isAdmin ? 'Completed maintenance · all sections' : 'Completed maintenance · your records';
+      byId('archive-title').textContent = isAdmin ? 'Completed assets' : 'Assets you have maintained';
+      byId('archive-summary').textContent = payload.totalInScope
+        ? (formatNumber(payload.total) + ' completed record' + (payload.total === 1 ? '' : 's') +
+           ' · ' + formatNumber(payload.uniqueAssets) + ' unique asset' + (payload.uniqueAssets === 1 ? '' : 's') +
+           (payload.total !== payload.totalInScope ? ' (filtered from ' + formatNumber(payload.totalInScope) + ')' : ''))
+        : (isAdmin ? 'No maintenance has been completed yet.' : 'You have not completed any maintenance yet.');
+
+      document.querySelectorAll('.archive-col-technician').forEach(function (cell) {
+        cell.hidden = !isAdmin;
+      });
+
+      var body = byId('archive-body');
+      body.replaceChildren();
+      rows.forEach(function (record) {
+        body.appendChild(archiveRow(record, isAdmin));
+      });
+
+      var hasRows = rows.length > 0;
+      byId('archive-table-wrap').hidden = !hasRows;
+      byId('archive-empty').hidden = hasRows;
+      byId('archive-pager').hidden = !hasRows || state.archive.totalPages <= 1;
+
+      if (!hasRows) {
+        var filtered = Boolean(payload.totalInScope);
+        byId('archive-empty-title').textContent = filtered ? 'No matches' : 'No completed maintenance yet';
+        byId('archive-empty-message').textContent = filtered
+          ? 'No completed record matches the current search or filters.'
+          : (isAdmin
+            ? 'Completed records will be listed here once technicians finish maintenance.'
+            : 'Records you complete will be listed here.');
+      }
+
+      byId('archive-range').textContent = 'Showing ' + formatNumber(payload.rangeStart) + '–' +
+        formatNumber(payload.rangeEnd) + ' of ' + formatNumber(payload.total) +
+        ' · page ' + state.archive.page + ' of ' + state.archive.totalPages;
+      byId('archive-prev').disabled = state.archive.page <= 1;
+      byId('archive-next').disabled = state.archive.page >= state.archive.totalPages;
+    }
+
+    function archiveRow(record, isAdmin) {
+      var row = document.createElement('tr');
+
+      var assetCell = document.createElement('td');
+      var assetWrap = document.createElement('div');
+      assetWrap.className = 'archive-asset';
+      var tag = document.createElement('strong');
+      tag.textContent = normalizeText(record.assetTag) || '—';
+      assetWrap.appendChild(tag);
+      var id = normalizeText(record.recordId);
+      if (id) {
+        var small = document.createElement('small');
+        small.textContent = id;
+        assetWrap.appendChild(small);
+      }
+      assetCell.appendChild(assetWrap);
+
+      var locationCell = document.createElement('td');
+      locationCell.textContent = normalizeText(record.location) || 'Not recorded';
+      if (record.locationDiscrepancy) {
+        var flag = document.createElement('span');
+        flag.className = 'location-flag';
+        flag.title = 'Observed location differed from the asset master';
+        flag.appendChild(iconSvg('alert-triangle'));
+        locationCell.appendChild(flag);
+      }
+
+      var dateCell = document.createElement('td');
+      dateCell.textContent = formatDate(record.maintenanceDate);
+
+      var cycleCell = document.createElement('td');
+      var cycleChip = document.createElement('span');
+      cycleChip.className = 'status-chip status-chip--neutral';
+      cycleChip.textContent = normalizeText(record.cycleId) || '—';
+      cycleCell.appendChild(cycleChip);
+
+      var technicianCell = document.createElement('td');
+      technicianCell.className = 'archive-col-technician';
+      technicianCell.hidden = !isAdmin;
+      if (isAdmin) {
+        var technician = document.createElement('div');
+        technician.className = 'archive-asset';
+        var name = document.createElement('span');
+        name.textContent = normalizeText(record.technicianName) || '—';
+        technician.appendChild(name);
+        var section = document.createElement('small');
+        section.textContent = sectionLabel(normalizeText(record.section));
+        technician.appendChild(section);
+        technicianCell.appendChild(technician);
+      }
+
+      var resultCell = document.createElement('td');
+      resultCell.textContent = normalizeText(record.assessmentResult) || 'Not assessed';
+
+      // The server refuses to open another technician's record, including for
+      // administrators, so only offer the action where it will succeed.
+      var actionCell = document.createElement('td');
+      var ownRecord = normalizeText(record.technicianEmail).toLowerCase() === userEmail().toLowerCase();
+      if (id && ownRecord) {
+        var open = document.createElement('button');
+        open.className = 'table-action';
+        open.type = 'button';
+        open.textContent = 'View';
+        open.addEventListener('click', function () { openExistingRecord(id); });
+        actionCell.appendChild(open);
+      }
+
+      [assetCell, locationCell, dateCell, cycleCell, technicianCell, resultCell, actionCell]
+        .forEach(function (cell) { row.appendChild(cell); });
+      return row;
     }
 
     function renderRollover(rollover) {
@@ -2021,6 +2234,22 @@
           .then(function () { showToast('Dashboard refreshed', 'The latest PMS data is now displayed.', 'success'); })
           .catch(function () {})
           .finally(function () { setBusy(false); });
+      });
+      byId('archive-refresh').addEventListener('click', function () { loadCompletedRecords({ page: 1 }); });
+      byId('archive-prev').addEventListener('click', function () {
+        if (state.archive.page > 1) loadCompletedRecords({ page: state.archive.page - 1 });
+      });
+      byId('archive-next').addEventListener('click', function () {
+        if (state.archive.page < state.archive.totalPages) loadCompletedRecords({ page: state.archive.page + 1 });
+      });
+      ['archive-year', 'archive-cycle', 'archive-section'].forEach(function (id) {
+        byId(id).addEventListener('change', function () { loadCompletedRecords({ page: 1 }); });
+      });
+      byId('archive-search').addEventListener('input', function () {
+        window.clearTimeout(state.archive.searchTimer);
+        state.archive.searchTimer = window.setTimeout(function () {
+          loadCompletedRecords({ page: 1 });
+        }, 300);
       });
       byId('close-questionnaire').addEventListener('click', function () { requestCloseModal(false); });
       document.querySelectorAll('[data-close-modal]').forEach(function (element) {

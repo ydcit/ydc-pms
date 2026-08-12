@@ -406,6 +406,145 @@ PMS.Records = (function () {
     };
   }
 
+  /*
+    Completed-maintenance archive.
+
+    Deliberately a narrow projection: readRecordFields() issues one range read
+    per field, so every extra column costs another sheet round trip. Year and
+    cycle are derived from cycleId, and the location discrepancy from the two
+    location fields, rather than read as their own columns.
+  */
+  var COMPLETED_FIELDS = [
+    'recordId', 'recordType', 'submittedAt', 'technicianName', 'technicianEmail',
+    'itSection', 'maintenanceDate', 'cycleId', 'assetTag', 'masterLocation',
+    'observedLocation', 'assessmentResult', 'pmsCompletion'
+  ];
+
+  function cellText(value) {
+    if (value === undefined || value === null) return '';
+    if (Object.prototype.toString.call(value) === '[object Date]') {
+      return Utilities.formatDate(value, PMS.CONFIG.TIME_ZONE, "yyyy-MM-dd'T'HH:mm:ssXXX");
+    }
+    return String(value).trim();
+  }
+
+  function cycleParts(cycleId) {
+    var match = /^(\d{4})-(T[123])$/.exec(String(cycleId || '').trim());
+    return match ? { year: Number(match[1]), cycle: match[2] } : { year: 0, cycle: '' };
+  }
+
+  function boundedInteger(value, fallback, minimum, maximum) {
+    var number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return Math.max(minimum, Math.min(maximum, Math.floor(number)));
+  }
+
+  /**
+   * Completed maintenance visible to the caller.
+   *
+   * An administrator sees every section; a technician sees only their own
+   * records in their registered section. The scope is enforced here from the
+   * server-resolved context, never from a browser-supplied value.
+   */
+  function completedList(context, options) {
+    var request = options && typeof options === 'object' ? options : {};
+    var isAdmin = Boolean(context.isAdmin);
+    var viewerEmail = PMS.Util.normalizeEmail(context.email);
+
+    var scoped = readRecordFields(COMPLETED_FIELDS)
+      .filter(function (record) {
+        if (!isMaintenanceRecord(record)) return false;
+        if (PMS.Util.completionState(cellText(record.pmsCompletion)) !== 'COMPLETED') return false;
+        if (isAdmin) return true;
+        return PMS.Util.normalizeEmail(cellText(record.technicianEmail)) === viewerEmail &&
+          cellText(record.itSection) === context.section;
+      })
+      .map(function (record) {
+        var parts = cycleParts(record.cycleId);
+        var master = cellText(record.masterLocation);
+        var observed = cellText(record.observedLocation);
+        return {
+          recordId: cellText(record.recordId),
+          assetTag: PMS.Util.normalizeAssetTag(record.assetTag),
+          maintenanceDate: cellText(record.maintenanceDate),
+          submittedAt: cellText(record.submittedAt),
+          cycleId: cellText(record.cycleId),
+          year: parts.year,
+          cycle: parts.cycle,
+          section: cellText(record.itSection),
+          technicianName: cellText(record.technicianName),
+          technicianEmail: cellText(record.technicianEmail),
+          assessmentResult: cellText(record.assessmentResult),
+          location: observed || master,
+          locationDiscrepancy: Boolean(observed && observed !== master),
+          row: record._rowNumber
+        };
+      });
+
+    // Filter options come from everything in scope, so they stay stable while
+    // the user narrows the list.
+    var yearSet = {};
+    var cycleSet = {};
+    var sectionSet = {};
+    scoped.forEach(function (record) {
+      if (record.year) yearSet[record.year] = true;
+      if (record.cycle) cycleSet[record.cycle] = true;
+      if (record.section) sectionSet[record.section] = true;
+    });
+
+    var search = PMS.Util.cleanText(request.search, 120).toUpperCase();
+    var year = Number(request.year) || 0;
+    var cycle = PMS.Util.cleanText(request.cycle, 4).toUpperCase();
+    var section = isAdmin ? PMS.Util.cleanText(request.section, 40).toUpperCase() : '';
+
+    var filtered = scoped.filter(function (record) {
+      if (year && record.year !== year) return false;
+      if (cycle && record.cycle !== cycle) return false;
+      if (section && record.section !== section) return false;
+      if (!search) return true;
+      return [record.assetTag, record.location, record.technicianName, record.recordId, record.assessmentResult]
+        .join(' ')
+        .toUpperCase()
+        .indexOf(search) >= 0;
+    });
+
+    filtered.sort(function (a, b) {
+      var left = a.submittedAt || a.maintenanceDate || '';
+      var right = b.submittedAt || b.maintenanceDate || '';
+      if (left !== right) return right.localeCompare(left);
+      return b.row - a.row;
+    });
+
+    var uniqueAssets = {};
+    filtered.forEach(function (record) {
+      if (record.assetTag) uniqueAssets[record.assetTag] = true;
+    });
+
+    var pageSize = boundedInteger(request.pageSize, 25, 5, 100);
+    var totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    var page = boundedInteger(request.page, 1, 1, totalPages);
+    var start = (page - 1) * pageSize;
+
+    return {
+      ok: true,
+      scope: isAdmin ? 'ALL_SECTIONS' : 'OWN_RECORDS',
+      rows: filtered.slice(start, start + pageSize),
+      page: page,
+      pageSize: pageSize,
+      totalPages: totalPages,
+      total: filtered.length,
+      totalInScope: scoped.length,
+      uniqueAssets: Object.keys(uniqueAssets).length,
+      rangeStart: filtered.length ? start + 1 : 0,
+      rangeEnd: Math.min(start + pageSize, filtered.length),
+      filters: {
+        years: Object.keys(yearSet).map(Number).sort(function (a, b) { return b - a; }),
+        cycles: Object.keys(cycleSet).sort(),
+        sections: Object.keys(sectionSet).sort()
+      }
+    };
+  }
+
   function recent(profile, limit, recordSet) {
     var records = Array.isArray(recordSet) ? recordSet.slice() : dashboardRecords();
     records.sort(function (a, b) {
@@ -710,6 +849,7 @@ PMS.Records = (function () {
     save: save,
     clientRecord: clientRecord,
     recent: recent,
+    completedList: completedList,
     completionKey: completionKey,
     completionKeys: completionKeys,
     appendLegacyRecord: appendLegacyRecord,

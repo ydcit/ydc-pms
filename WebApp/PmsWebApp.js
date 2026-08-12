@@ -137,6 +137,20 @@ function PMS_apiDashboard(filters) {
   });
 }
 
+/**
+ * Completed-maintenance archive. Scope is derived from the server-resolved
+ * profile: an administrator sees every section, a technician sees only their own
+ * completed records. The browser can influence paging and filters, never scope.
+ */
+function PMS_apiCompletedRecords(options) {
+  try {
+    var context = PMS.Auth.requireProfile();
+    return PMS_jsonResponse_(PMS.Records.completedList(context, options));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
 function PMS_apiSaveRecord(payload, mode) {
   return PMS_jsonResponse_(PMS.Records.save(payload, mode));
 }

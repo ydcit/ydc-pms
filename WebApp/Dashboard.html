@@ -194,6 +194,95 @@
       </div>
     </section>
 
+    <section class="panel archive-panel" id="archive-panel" aria-labelledby="archive-title">
+      <div class="panel__header">
+        <div>
+          <p class="eyebrow" id="archive-eyebrow">Completed maintenance</p>
+          <h2 id="archive-title">Completed assets</h2>
+          <p class="panel__subtitle" id="archive-summary">Loading completed maintenance…</p>
+        </div>
+        <button class="button button--quiet button--small" id="archive-refresh" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+          <span>Refresh</span>
+        </button>
+      </div>
+
+      <div class="archive-toolbar">
+        <div class="field archive-toolbar__search">
+          <label class="sr-only" for="archive-search">Search completed maintenance</label>
+          <div class="search-input">
+            <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></span>
+            <input id="archive-search" type="search" autocomplete="off" placeholder="Search asset tag, location, or technician">
+          </div>
+        </div>
+        <div class="field archive-toolbar__filter">
+          <label class="sr-only" for="archive-year">Year</label>
+          <div class="select-wrap">
+            <select id="archive-year"><option value="">All years</option></select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+        <div class="field archive-toolbar__filter">
+          <label class="sr-only" for="archive-cycle">Cycle</label>
+          <div class="select-wrap">
+            <select id="archive-cycle"><option value="">All cycles</option></select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+        <div class="field archive-toolbar__filter" id="archive-section-wrap" hidden>
+          <label class="sr-only" for="archive-section">IT section</label>
+          <div class="select-wrap">
+            <select id="archive-section"><option value="">All sections</option></select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-wrap" id="archive-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Asset tag</th>
+              <th scope="col">Location</th>
+              <th scope="col">Performed on</th>
+              <th scope="col">Cycle</th>
+              <th scope="col" class="archive-col-technician">Technician</th>
+              <th scope="col">Assessment</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="archive-body"></tbody>
+        </table>
+      </div>
+
+      <div class="archive-loading" id="archive-loading" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Loading completed maintenance…</span>
+      </div>
+
+      <div class="empty-state empty-state--compact" id="archive-empty" hidden>
+        <span class="empty-state__art" aria-hidden="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-check-circle"></use></svg>
+        </span>
+        <h3 id="archive-empty-title">No completed maintenance yet</h3>
+        <p id="archive-empty-message">Completed records will be listed here once maintenance is finished.</p>
+      </div>
+
+      <div class="archive-pager" id="archive-pager" hidden>
+        <span class="archive-pager__status" id="archive-range" aria-live="polite"></span>
+        <div class="archive-pager__controls">
+          <button class="button button--secondary button--small" id="archive-prev" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+            <span>Previous</span>
+          </button>
+          <button class="button button--secondary button--small" id="archive-next" type="button">
+            <span>Next</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
     <section class="panel rollover-panel" id="rollover-panel" hidden aria-labelledby="rollover-title">
       <div class="panel__header panel__header--rollover">
         <div>
