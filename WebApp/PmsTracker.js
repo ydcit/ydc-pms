@@ -152,6 +152,17 @@ PMS.Tracker = (function () {
       removed.push({ description: description, range: range });
     });
     if (removed.length) {
+      try {
+        SpreadsheetApp.flush();
+      } catch (error) {
+        PMS.Util.fail(
+          'The obsolete PMS tracker lock cleanup could not be committed on ' + sheet.getName() +
+            ' for ' + removed.map(function (item) { return item.range; }).join(', ') +
+            '. Ask the spreadsheet owner to run PMS_removeLegacyTrackerProtections, then retry synchronization. ' +
+            'Original error: ' + error.message,
+          'TRACKER_PROTECTED'
+        );
+      }
       console.warn('Removed ' + removed.length + ' obsolete PMS cycle protection(s) from ' + sheet.getName() + '.');
     }
     return removed;
@@ -175,6 +186,86 @@ PMS.Tracker = (function () {
       removed: sheets.reduce(function (total, item) { return total + item.removed; }, 0),
       sheets: sheets
     };
+  }
+
+  function rangeContainsCell(range, cell) {
+    var row = cell.getRow();
+    var column = cell.getColumn();
+    return row >= range.getRow() &&
+      row <= range.getLastRow() &&
+      column >= range.getColumn() &&
+      column <= range.getLastColumn();
+  }
+
+  function conciseProtectionText(value) {
+    var text = String(value || '').replace(/\s+/g, ' ').trim();
+    return text.length > 120 ? text.slice(0, 117) + '...' : text;
+  }
+
+  /**
+   * Describes protections that cover a tracker cell without
+   * changing them. Editor lists are intentionally omitted from saved errors.
+   */
+  function protectionDetailsForCell(sheet, cell) {
+    var details = [];
+    var incomplete = false;
+    var maximumDetails = 5;
+    sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE).forEach(function (protection) {
+      if (details.length >= maximumDetails) return;
+      var range;
+      try {
+        range = protection.getRange();
+        if (!rangeContainsCell(range, cell)) return;
+        var warningOnly = protection.isWarningOnly();
+        details.push(
+          'range "' + (conciseProtectionText(protection.getDescription()) || 'untitled') + '" at ' +
+          sheet.getName() + '!' + range.getA1Notation() +
+          ' (mode: ' + (warningOnly ? 'warning only' : 'restricted') +
+          ', deployment account can edit: ' + (protection.canEdit() ? 'yes' : 'no') + ')'
+        );
+      } catch (error) {
+        incomplete = true;
+        details.push('a range protection that could not be inspected (' + conciseProtectionText(error.message) + ')');
+      }
+    });
+
+    sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (protection) {
+      if (details.length >= maximumDetails) return;
+      try {
+        var warningOnly = protection.isWarningOnly();
+        var unprotected = protection.getUnprotectedRanges();
+        if (unprotected.some(function (range) { return rangeContainsCell(range, cell); })) return;
+        details.push(
+          'sheet protection "' + (conciseProtectionText(protection.getDescription()) || 'untitled') + '"' +
+          ' (mode: ' + (warningOnly ? 'warning only' : 'restricted') +
+          ', deployment account can edit: ' + (protection.canEdit() ? 'yes' : 'no') + ')'
+        );
+      } catch (error) {
+        incomplete = true;
+        details.push('a sheet protection that could not be inspected (' + conciseProtectionText(error.message) + ')');
+      }
+    });
+    return { details: details, incomplete: incomplete };
+  }
+
+  function protectedWriteFailure(sheet, cell, label, error) {
+    var diagnostics = { details: [], incomplete: false };
+    try {
+      diagnostics = protectionDetailsForCell(sheet, cell);
+    } catch (inspectionError) {
+      diagnostics.incomplete = true;
+      console.warn('Could not inspect tracker protections: ' + inspectionError.message);
+    }
+    var diagnostic = diagnostics.details.length
+      ? ' Protections affecting this cell: ' + diagnostics.details.join('; ') + '.'
+      : diagnostics.incomplete
+        ? ' Protection details could not be inspected by the deployment account.'
+        : ' No range or sheet protection affecting this cell was visible to the deployment account.';
+    PMS.Util.fail(
+      'Tracker ' + label + ' could not be written at ' + sheet.getName() + '!' + cell.getA1Notation() +
+        '.' + diagnostic + ' Original error: ' + error.message,
+      'TRACKER_PROTECTED'
+    );
   }
 
   function syncCompletedRecord(record, beforeTrackerWrite) {
@@ -239,28 +330,26 @@ PMS.Tracker = (function () {
     if (typeof beforeTrackerWrite === 'function') beforeTrackerWrite(prepared);
 
     try {
-      if (nextRemarks !== previousRemarks) remarksCell.setValue(nextRemarks);
+      if (nextRemarks !== previousRemarks) {
+        remarksCell.setValue(nextRemarks);
+        // Protected-cell errors can be deferred until Sheets flushes the queued
+        // write, so keep the flush inside the same contextual error boundary.
+        SpreadsheetApp.flush();
+      }
     } catch (error) {
-      PMS.Util.fail(
-        'Tracker remarks could not be written at ' + sheet.getName() + '!' + remarksCell.getA1Notation() +
-          '. Check that the web-app owner is allowed to edit this protected cell. Original error: ' + error.message,
-        'TRACKER_PROTECTED'
-      );
+      protectedWriteFailure(sheet, remarksCell, 'remarks', error);
     }
-    SpreadsheetApp.flush();
     if (remarksCell.getDisplayValue().indexOf('[PMS Record: ' + record.recordId + ']') < 0) {
       PMS.Util.fail('Remarks verification failed; the checkbox was not changed.', 'SYNC_FAILED');
     }
     try {
-      checkboxCell.setValue(true);
+      if (previousCheckbox !== true) {
+        checkboxCell.setValue(true);
+        SpreadsheetApp.flush();
+      }
     } catch (error) {
-      PMS.Util.fail(
-        'Tracker checkbox could not be checked at ' + sheet.getName() + '!' + checkboxCell.getA1Notation() +
-          '. Check that the web-app owner is allowed to edit this protected cell. Original error: ' + error.message,
-        'TRACKER_PROTECTED'
-      );
+      protectedWriteFailure(sheet, checkboxCell, 'checkbox', error);
     }
-    SpreadsheetApp.flush();
     if (checkboxCell.getValue() !== true) {
       PMS.Util.fail('Tracker checkbox verification failed.', 'SYNC_FAILED');
     }

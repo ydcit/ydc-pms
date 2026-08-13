@@ -531,13 +531,15 @@ PMS.Records = (function () {
           recordId: record.recordId,
           pmsCompletion: record.pmsCompletion,
           syncStatus: PMS.Util.completionState(record.pmsCompletion),
+          syncError: syncResult.status === 'SYNC_FAILED' ? String(syncResult.error || '').slice(0, 1500) : '',
           message: syncResult.status === 'COMPLETED'
             ? 'PMS completed and the ' + record.cycle + ' tracker was updated.'
             : syncResult.status === 'HISTORICAL_COMPLETED'
               ? 'Historical PMS completed in PMS Records. No current-year tracker cell was changed.'
               : syncResult.status === 'SYNC_REQUIRED'
                 ? 'PMS is 100% complete but awaits the correct tracker year rollover.'
-                : 'The record was saved, but tracker synchronization failed. An administrator can retry it.'
+                : 'The record was saved, but tracker synchronization failed. ' +
+                  (syncResult.error ? String(syncResult.error).slice(0, 1500) : 'An administrator can retry it.')
         };
       }
     } finally {
