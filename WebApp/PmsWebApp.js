@@ -245,6 +245,49 @@ function PMS_diagnoseSignIn() {
 }
 
 /**
+ * Locks the T1/T2/T3 checkbox columns in both tracker sheets so they cannot be
+ * ticked by hand. Run this as the account that deploys the web app, or make sure
+ * that account is listed in PMS_ADMIN_EMAILS, because the app has to keep
+ * writing those cells when a record is completed.
+ */
+function PMS_lockTrackerCheckboxes() {
+  PMS.Auth.requireAdmin();
+  var result = PMS.Tracker.protectCycleColumns({ warningOnly: false });
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
+ * Softer variant: the cells stay editable but Sheets asks for confirmation
+ * before a change is accepted.
+ */
+function PMS_warnOnTrackerCheckboxes() {
+  PMS.Auth.requireAdmin();
+  var result = PMS.Tracker.protectCycleColumns({ warningOnly: true });
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/** Removes the checkbox locks created by the two functions above. */
+function PMS_unlockTrackerCheckboxes() {
+  PMS.Auth.requireAdmin();
+  var result = PMS.Tracker.unprotectCycleColumns();
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
+ * Reports cycle checkboxes that are ticked with no matching completed record,
+ * which is what an accidental tick looks like. Read-only.
+ */
+function PMS_auditTrackerTicks() {
+  PMS.Auth.requireAdmin();
+  var result = PMS.Tracker.auditManualTicks();
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
  * Editor-only probe that writes the sign-in diagnostics and the real bootstrap
  * shape to the execution log, because the editor does not display a returned
  * object. Use this when the browser reports BOOTSTRAP_INCOMPLETE: it shows
