@@ -246,6 +246,33 @@ function PMS_adminSetup() {
 }
 
 /**
+ * Removes obsolete tracker range protections left behind by the reverted
+ * cycle-lock release. This touches only protections whose description begins
+ * exactly "PMS cycle checkbox lock" and preserves all other protections.
+ * Normal synchronization also performs this cleanup automatically; this
+ * editor-visible helper is available for an administrator to migrate both
+ * tracker sheets immediately.
+ */
+function PMS_removeLegacyTrackerProtections() {
+  var admin = PMS.Auth.requireAdmin();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    PMS.Util.fail('Another maintenance operation is running. Try the cleanup again shortly.', 'BUSY');
+  }
+  var result;
+  try {
+    result = PMS.Tracker.removeLegacyCycleProtections();
+  } finally {
+    lock.releaseLock();
+  }
+  result.ok = true;
+  result.removedBy = admin.email;
+  result.removedAt = PMS.Util.nowIso();
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
  * Visible editor entry point for initial deployment setup. The static
  * administrator allowlist prevents another domain user from bootstrapping
  * themselves through google.script.run.

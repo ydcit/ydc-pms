@@ -1,6 +1,12 @@
 var PMS = PMS || {};
 
 PMS.Tracker = (function () {
+  // A short-lived release created range protections with this exact prefix.
+  // The release was reverted, but Apps Script code changes do not remove
+  // protections that were already applied to a spreadsheet. Keep this marker
+  // deliberately narrow so cleanup can never remove a user's own protection.
+  var LEGACY_CYCLE_PROTECTION_PREFIX = 'PMS cycle checkbox lock';
+
   function maintenanceDateText(value) {
     return Object.prototype.toString.call(value) === '[object Date]'
       ? Utilities.formatDate(value, PMS.CONFIG.TIME_ZONE, 'yyyy-MM-dd')
@@ -85,6 +91,92 @@ PMS.Tracker = (function () {
     return matches[0].row;
   }
 
+  /**
+   * Removes only the obsolete range protections created by commit c45024e.
+   * Sheet protections and range protections with any other description are
+   * preserved. This is safe to run repeatedly: after the first cleanup it is
+   * a no-op.
+   */
+  function removeLegacyCycleProtectionsFromSheet(sheet) {
+    var removed = [];
+    var sectionKey = '';
+    Object.keys(PMS.CONFIG.SECTIONS).some(function (key) {
+      if (PMS.CONFIG.SECTIONS[key].sheetName !== sheet.getName()) return false;
+      sectionKey = key;
+      return true;
+    });
+    if (!sectionKey) {
+      PMS.Util.fail('Unknown tracker sheet during protection cleanup: ' + sheet.getName(), 'CONFIGURATION_ERROR');
+    }
+    var protections = sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE);
+    protections.forEach(function (protection) {
+      var description = String(protection.getDescription() || '');
+      if (description.indexOf(LEGACY_CYCLE_PROTECTION_PREFIX) !== 0) return;
+
+      // The reverted feature created exactly three whole-body checkbox-column
+      // locks per tracker tab. Matching its description alone is not enough:
+      // also require the original geometry so a later protection that happens
+      // to reuse the phrase cannot be removed.
+      var protectedRange;
+      try {
+        protectedRange = protection.getRange();
+      } catch (error) {
+        console.warn('Could not inspect obsolete protection "' + description + '": ' + error.message);
+        return;
+      }
+      var matchingCycle = Object.keys(PMS.CONFIG.CYCLES).filter(function (cycleKey) {
+        var expectedDescription = LEGACY_CYCLE_PROTECTION_PREFIX + ' \u00b7 ' + sectionKey + ' \u00b7 ' + cycleKey;
+        return description === expectedDescription &&
+          protectedRange.getColumn() === PMS.CONFIG.CYCLES[cycleKey].checkboxColumn;
+      });
+      if (matchingCycle.length !== 1 ||
+          protectedRange.getRow() !== PMS.CONFIG.ASSET_DATA_START_ROW ||
+          protectedRange.getNumColumns() !== 1 ||
+          protectedRange.getNumRows() < 1) {
+        console.warn('Preserved non-legacy protection that reused the PMS lock description: ' +
+          sheet.getName() + '!' + protectedRange.getA1Notation());
+        return;
+      }
+
+      var range = protectedRange.getA1Notation();
+      try {
+        protection.remove();
+      } catch (error) {
+        PMS.Util.fail(
+          'The obsolete PMS tracker lock at ' + sheet.getName() + '!' + range +
+            ' could not be removed by the web-app owner. Ask the spreadsheet owner to run ' +
+            'PMS_removeLegacyTrackerProtections, then retry synchronization. Original error: ' + error.message,
+          'TRACKER_PROTECTED'
+        );
+      }
+      removed.push({ description: description, range: range });
+    });
+    if (removed.length) {
+      console.warn('Removed ' + removed.length + ' obsolete PMS cycle protection(s) from ' + sheet.getName() + '.');
+    }
+    return removed;
+  }
+
+  function removeLegacyCycleProtections(sectionKey) {
+    var keys = sectionKey
+      ? [PMS.Util.section(sectionKey).key]
+      : Object.keys(PMS.CONFIG.SECTIONS);
+    var sheets = keys.map(function (key) {
+      var sheet = PMS.Assets.sheetForSection(key);
+      var removed = removeLegacyCycleProtectionsFromSheet(sheet);
+      return {
+        section: key,
+        sheetName: sheet.getName(),
+        removed: removed.length,
+        protections: removed
+      };
+    });
+    return {
+      removed: sheets.reduce(function (total, item) { return total + item.removed; }, 0),
+      sheets: sheets
+    };
+  }
+
   function syncCompletedRecord(record, beforeTrackerWrite) {
     var section = PMS.Util.section(record.itSection);
     if (section.key === 'INFRA_SECURITY') {
@@ -123,6 +215,13 @@ PMS.Tracker = (function () {
     var cycleConfig = PMS.CONFIG.CYCLES[record.cycle];
     if (!cycleConfig) PMS.Util.fail('Unknown PMS cycle during tracker synchronization.', 'CONFIGURATION_ERROR');
     var row = findAssetRow(sheet, record.assetTag);
+
+    // A reverted release may have left persistent range protections behind.
+    // Remove only those known stale locks immediately before writing. This
+    // makes ordinary retry reconciliation self-healing while leaving every
+    // unrelated/manual protection intact.
+    removeLegacyCycleProtectionsFromSheet(sheet);
+
     var checkboxCell = sheet.getRange(row, cycleConfig.checkboxColumn);
     var remarksCell = sheet.getRange(row, cycleConfig.remarksColumn);
     var previousCheckbox = checkboxCell.getValue();
@@ -139,12 +238,28 @@ PMS.Tracker = (function () {
     };
     if (typeof beforeTrackerWrite === 'function') beforeTrackerWrite(prepared);
 
-    if (nextRemarks !== previousRemarks) remarksCell.setValue(nextRemarks);
+    try {
+      if (nextRemarks !== previousRemarks) remarksCell.setValue(nextRemarks);
+    } catch (error) {
+      PMS.Util.fail(
+        'Tracker remarks could not be written at ' + sheet.getName() + '!' + remarksCell.getA1Notation() +
+          '. Check that the web-app owner is allowed to edit this protected cell. Original error: ' + error.message,
+        'TRACKER_PROTECTED'
+      );
+    }
     SpreadsheetApp.flush();
     if (remarksCell.getDisplayValue().indexOf('[PMS Record: ' + record.recordId + ']') < 0) {
       PMS.Util.fail('Remarks verification failed; the checkbox was not changed.', 'SYNC_FAILED');
     }
-    checkboxCell.setValue(true);
+    try {
+      checkboxCell.setValue(true);
+    } catch (error) {
+      PMS.Util.fail(
+        'Tracker checkbox could not be checked at ' + sheet.getName() + '!' + checkboxCell.getA1Notation() +
+          '. Check that the web-app owner is allowed to edit this protected cell. Original error: ' + error.message,
+        'TRACKER_PROTECTED'
+      );
+    }
     SpreadsheetApp.flush();
     if (checkboxCell.getValue() !== true) {
       PMS.Util.fail('Tracker checkbox verification failed.', 'SYNC_FAILED');
@@ -229,6 +344,7 @@ PMS.Tracker = (function () {
 
   return {
     assessmentBlock: assessmentBlock,
+    removeLegacyCycleProtections: removeLegacyCycleProtections,
     syncCompletedRecord: syncCompletedRecord,
     trackerRows: trackerRows,
     reconcilePending: reconcilePending

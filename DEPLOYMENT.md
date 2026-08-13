@@ -3,11 +3,12 @@
 ## Created deployment
 
 - Isolated Apps Script project: `1CcLoopM4WSkJFV7SlVOJ7QZkCdVOhLW6YeQxUatFXrLL9OAkXBTUNx3V`
-- Stable deployment ID: `AKfycbwLz_VBuTj_ats0vqlhQ_9VBMtfC_cLpwFDl7T07wrXa1Y0fQLeZQZcKNu0cF8PpWkrCA` (currently version 21)
-- Release candidate: version 22, `YDC PMS - section-specific Infra form and Drive evidence - 2026-08-13`
+- Stable deployment ID: `AKfycbwLz_VBuTj_ats0vqlhQ_9VBMtfC_cLpwFDl7T07wrXa1Y0fQLeZQZcKNu0cF8PpWkrCA` (currently version 24)
+- Infra release: version 22, `YDC PMS - section-specific Infra form and Drive evidence - 2026-08-13`
+- Tracker-sync repair: version 24, `YDC PMS - repair stale tracker protections and sync retry - 2026-08-13`
 - Web app: `https://script.google.com/macros/s/AKfycbwLz_VBuTj_ats0vqlhQ_9VBMtfC_cLpwFDl7T07wrXa1Y0fQLeZQZcKNu0cF8PpWkrCA/exec`
 
-Version 22 adds the section-specific Infrastructure & Security form and evidence uploads. Promote it to the stable deployment only after owner re-authorization for Google Drive access. Evidence destinations are fixed in server configuration and the app never changes folder or file sharing.
+Version 22 added the section-specific Infrastructure & Security form and evidence uploads. Version 24 safely removes only the exact legacy checkbox-column protections left by the reverted cycle-lock release before synchronization; all other protections remain untouched. Evidence destinations are fixed in server configuration and the app never changes folder or file sharing.
 
 The endpoint has been verified to require Google sign-in. The isolated project intentionally contains no legacy `Code.js`, so its public `updateDropdown()` function is not exposed by this web app.
 
