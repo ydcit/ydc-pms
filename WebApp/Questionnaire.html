@@ -27,7 +27,7 @@
             <span class="stepper__digit">2</span>
             <svg class="icon stepper__tick" aria-hidden="true"><use href="#i-check"></use></svg>
           </span>
-          <span class="stepper__label">Peripherals</span>
+          <span class="stepper__label" id="stepper-step-2-label">Peripherals</span>
         </button>
         <span class="stepper__line" aria-hidden="true"></span>
         <button class="stepper__item" type="button" data-step-target="3">
@@ -49,7 +49,7 @@
 
       <div class="modal-progress">
         <div>
-          <span>Checklist progress</span>
+          <span id="modal-progress-title">Checklist progress</span>
           <strong id="modal-progress-label">0 of 20 complete</strong>
         </div>
         <div class="progress-track" role="progressbar" id="modal-progress" aria-label="Questionnaire checklist progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
@@ -111,6 +111,18 @@
                 <strong id="form-cycle">—</strong>
               </div>
             </div>
+          </div>
+
+          <div class="field" id="infra-asset-type-field" hidden>
+            <label for="infra-asset-type">IT-IS Asset Type <span class="required-mark" aria-hidden="true">*</span></label>
+            <div class="select-wrap">
+              <select id="infra-asset-type" name="assetType" aria-describedby="infra-asset-type-help infra-asset-type-error">
+                <option value="">Select an IT-IS asset type</option>
+              </select>
+              <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+            </div>
+            <p class="field-help" id="infra-asset-type-help">Choose the infrastructure category before selecting its asset tag.</p>
+            <p class="field-error" id="infra-asset-type-error" hidden></p>
           </div>
 
           <!--
@@ -176,21 +188,93 @@
             <div>
               <p class="eyebrow">Step 2 of 4</p>
               <h2 id="step-2-title">Included peripheral asset tags</h2>
-              <p>Add every tagged peripheral included in this maintenance. These fields are optional.</p>
+              <p id="step-2-description">Add every tagged peripheral included in this maintenance. These fields are optional.</p>
             </div>
           </div>
 
-          <div class="notice notice--info">
-            <span class="notice__icon" aria-hidden="true">
-              <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
-            </span>
-            <div>
-              <strong>Multiple tags are supported</strong>
-              <p>Type a tag and press Enter or comma. Unrecognized tags are saved with a verification flag.</p>
+          <div id="service-desk-peripherals">
+            <div class="notice notice--info">
+              <span class="notice__icon" aria-hidden="true">
+                <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+              </span>
+              <div>
+                <strong>Multiple tags are supported</strong>
+                <p>Type a tag and press Enter or comma. Unrecognized tags are saved with a verification flag.</p>
+              </div>
             </div>
+
+            <div class="peripheral-grid" id="peripheral-grid"></div>
           </div>
 
-          <div class="peripheral-grid" id="peripheral-grid"></div>
+          <div class="infra-evidence" id="infra-evidence" hidden>
+            <div class="notice notice--info">
+              <span class="notice__icon" aria-hidden="true">
+                <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+              </span>
+              <div>
+                <strong>Evidence is required to complete PMS</strong>
+                <p>You can save a draft without evidence. Existing evidence remains linked until a replacement upload succeeds.</p>
+              </div>
+            </div>
+
+            <div class="evidence-grid">
+              <article class="evidence-card" id="firmware-evidence-card" data-evidence-kind="firmware">
+                <div class="evidence-card__header">
+                  <span class="evidence-card__icon" aria-hidden="true"><svg class="icon"><use href="#i-database"></use></svg></span>
+                  <div>
+                    <strong id="firmware-evidence-label">Latest Firmware Version Evidence</strong>
+                    <p>Attach a screenshot or document showing the installed firmware is current.</p>
+                  </div>
+                </div>
+                <div class="evidence-current" id="firmware-evidence-current" hidden>
+                  <span>Current evidence</span>
+                  <a id="firmware-evidence-link" href="#" target="_blank" rel="noopener noreferrer">Open current evidence</a>
+                </div>
+                <label class="evidence-picker" for="firmware-evidence-file">
+                  <input class="evidence-picker__input" id="firmware-evidence-file" type="file" data-evidence-kind="firmware" aria-describedby="firmware-evidence-help firmware-evidence-error">
+                  <span class="evidence-picker__action">Choose firmware evidence</span>
+                  <small>or replace the currently linked file</small>
+                </label>
+                <div class="evidence-selection" id="firmware-evidence-selection" aria-live="polite">
+                  <div>
+                    <strong id="firmware-evidence-file-name">No file selected</strong>
+                    <span id="firmware-evidence-file-meta">Required when completing PMS</span>
+                  </div>
+                  <button class="text-button" id="firmware-evidence-clear" type="button" hidden>Clear selection</button>
+                </div>
+                <p class="field-help" id="firmware-evidence-help">Supported evidence files only. Maximum 10 MiB.</p>
+                <p class="field-error" id="firmware-evidence-error" hidden></p>
+              </article>
+
+              <article class="evidence-card" id="backup-evidence-card" data-evidence-kind="backup">
+                <div class="evidence-card__header">
+                  <span class="evidence-card__icon" aria-hidden="true"><svg class="icon"><use href="#i-database"></use></svg></span>
+                  <div>
+                    <strong id="backup-evidence-label">Configurations / Backup / Checkpoints Evidence</strong>
+                    <p>Attach evidence that configurations, backups, or checkpoints were verified.</p>
+                  </div>
+                </div>
+                <div class="evidence-current" id="backup-evidence-current" hidden>
+                  <span>Current evidence</span>
+                  <a id="backup-evidence-link" href="#" target="_blank" rel="noopener noreferrer">Open current evidence</a>
+                </div>
+                <label class="evidence-picker" for="backup-evidence-file">
+                  <input class="evidence-picker__input" id="backup-evidence-file" type="file" data-evidence-kind="backup" aria-describedby="backup-evidence-help backup-evidence-error">
+                  <span class="evidence-picker__action">Choose backup or checkpoint evidence</span>
+                  <small>or replace the currently linked file</small>
+                </label>
+                <div class="evidence-selection" id="backup-evidence-selection" aria-live="polite">
+                  <div>
+                    <strong id="backup-evidence-file-name">No file selected</strong>
+                    <span id="backup-evidence-file-meta">Required when completing PMS</span>
+                  </div>
+                  <button class="text-button" id="backup-evidence-clear" type="button" hidden>Clear selection</button>
+                </div>
+                <p class="field-help" id="backup-evidence-help">Supported evidence files only. Maximum 10 MiB.</p>
+                <p class="field-error" id="backup-evidence-error" hidden></p>
+              </article>
+            </div>
+          </div>
         </section>
 
         <section class="form-step" id="form-step-3" data-step="3" aria-labelledby="step-3-title" hidden>
@@ -199,7 +283,7 @@
             <div>
               <p class="eyebrow">Step 3 of 4</p>
               <h2 id="step-3-title">Maintenance checklist</h2>
-              <p>Complete every applicable check. Use N/A only where the checklist explicitly allows it.</p>
+              <p id="step-3-description">Complete every applicable check. Use N/A only where the checklist explicitly allows it.</p>
             </div>
           </div>
 
@@ -274,6 +358,14 @@
                 <dt>Cycle</dt>
                 <dd id="review-cycle">Not selected</dd>
               </div>
+              <div id="review-asset-type-row" hidden>
+                <dt>IT-IS Asset Type</dt>
+                <dd id="review-asset-type">Not selected</dd>
+              </div>
+              <div id="review-evidence-row" hidden>
+                <dt>Evidence</dt>
+                <dd id="review-evidence">0 of 2 ready</dd>
+              </div>
               <div>
                 <dt>Checklist</dt>
                 <dd id="review-checklist">0 of 20 complete</dd>
@@ -314,3 +406,17 @@
     </form>
   </section>
 </div>
+
+<!--
+  HTML Service converts file inputs to Apps Script Blobs only when a form is
+  the sole google.script.run argument. The selected input is moved into this
+  external form for one upload call, then restored to its visible card.
+-->
+<form id="infra-evidence-upload-form" hidden aria-hidden="true">
+  <input id="infra-upload-record-id" name="recordId" type="hidden">
+  <input id="infra-upload-idempotency-key" name="idempotencyKey" type="hidden">
+  <input id="infra-upload-asset-tag" name="assetTag" type="hidden">
+  <input id="infra-upload-asset-type" name="assetType" type="hidden">
+  <input id="infra-upload-maintenance-date" name="maintenanceDate" type="hidden">
+  <input id="infra-upload-evidence-kind" name="evidenceKind" type="hidden">
+</form>

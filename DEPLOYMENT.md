@@ -3,10 +3,11 @@
 ## Created deployment
 
 - Isolated Apps Script project: `1CcLoopM4WSkJFV7SlVOJ7QZkCdVOhLW6YeQxUatFXrLL9OAkXBTUNx3V`
-- Current deployment: version 6, `AKfycbwLz_VBuTj_ats0vqlhQ_9VBMtfC_cLpwFDl7T07wrXa1Y0fQLeZQZcKNu0cF8PpWkrCA`
+- Stable deployment ID: `AKfycbwLz_VBuTj_ats0vqlhQ_9VBMtfC_cLpwFDl7T07wrXa1Y0fQLeZQZcKNu0cF8PpWkrCA` (currently version 21)
+- Release candidate: version 22, `YDC PMS - section-specific Infra form and Drive evidence - 2026-08-13`
 - Web app: `https://script.google.com/macros/s/AKfycbwLz_VBuTj_ats0vqlhQ_9VBMtfC_cLpwFDl7T07wrXa1Y0fQLeZQZcKNu0cF8PpWkrCA/exec`
 
-HEAD replaces the email-code fallback with Google-account-only sign-in and needs a new versioned deployment plus one re-authorization, because the manifest now declares OAuth scopes explicitly. The `MailApp` scope is no longer requested, so "Send email as you" is no longer part of consent.
+Version 22 adds the section-specific Infrastructure & Security form and evidence uploads. Promote it to the stable deployment only after owner re-authorization for Google Drive access. Evidence destinations are fixed in server configuration and the app never changes folder or file sharing.
 
 The endpoint has been verified to require Google sign-in. The isolated project intentionally contains no legacy `Code.js`, so its public `updateDropdown()` function is not exposed by this web app.
 
@@ -29,9 +30,10 @@ To let any domain account self-register instead of requiring a roster row, set `
 ## One-time owner setup
 
 1. Open the Apps Script project as the intended deployment owner.
-2. Run `PMS_setupDeployment` from the editor and approve the requested scopes. Consent must include **See your primary Google Account email address** — that is the `userinfo.email` scope that makes `Session.getActiveUser().getEmail()` return a value instead of an empty string. This guarded entry point writes the configured `@ydc.com.ph` deployment administrator to the private `PMS_ADMIN_EMAILS` Script Property, verifies `PMS Users`, migrates any legacy Script Property profiles, and reports identity diagnostics.
+2. Run `PMS_setupDeployment` from the editor and approve the requested scopes. Consent must include **See your primary Google Account email address** and Google Drive access. This guarded entry point configures the deployment administrator, verifies `PMS Users`, creates the private evidence-signing secret, and confirms both evidence folders are accessible to the deployment owner.
 3. Deploy a **new version** of the web app that **executes as the deployment owner** and is accessible **only to users in the YDC Workspace organization**. A new version is required for the manifest scope change to take effect.
 4. Open the deployment as the owner, confirm the display name, register the owner's actual IT section once, and confirm later visits open the dashboard without registration. The first authorized bootstrap creates the one-time legacy baseline in `PMS Records`; it does not change an existing tracker tab.
+5. Run `PMS_adminSetup` once after registration and confirm that both record sheets and both evidence folders report ready.
 
 ## Troubleshooting sign-in
 
@@ -57,6 +59,15 @@ Test with at least two non-owner `@ydc.com.ph` accounts, one from each IT sectio
 ## Controlled functional pilot
 
 Use an approved pilot asset. Verify Save Progress creates one `INCOMPLETE` row and changes no tracker cell. Then complete all applicable checklist items and the assessment; verify the response becomes `COMPLETED`, the correct T1/T2/T3 remarks block is present, and only the paired checkbox is checked.
+
+For an Infrastructure & Security pilot, also verify:
+
+- the asset tag comes only from `IT-IS PMS` and matches the selected asset type;
+- all four Infra checks and both required evidence files produce 6/6 completion;
+- firmware evidence and configuration/backup/checkpoint evidence land in their separate configured Drive folders;
+- the row is stored in `PMS Records - Infra & Security`, with `PMS Completion` as the final column;
+- the tracker remarks contain asset type, check results, both ACL-protected Drive links, and the full assessment;
+- files over 10 MiB and script, executable, HTML, or SVG content are rejected.
 
 ## Annual rollover
 

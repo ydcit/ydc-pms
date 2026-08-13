@@ -1,8 +1,9 @@
 var PMS = PMS || {};
 
 PMS.Assets = (function () {
-  // Bumped when the cached asset shape changes so stale entries are rejected.
-  var CACHE_VERSION = 3;
+  // Bumped when the browser-visible asset shape/eligibility behavior changes so
+  // prior picker results are never reused after a deployment.
+  var CACHE_VERSION = 4;
   var CACHE_CHUNK_SIZE = 80000;
   var MAX_CACHE_CHUNKS = 100;
 
@@ -174,6 +175,9 @@ PMS.Assets = (function () {
     var lastRow = sheet.getLastRow();
     if (lastRow < PMS.CONFIG.ASSET_DATA_START_ROW) return [];
     var rowCount = lastRow - PMS.CONFIG.ASSET_DATA_START_ROW + 1;
+    var trackerYear = Number(
+      sheet.getRange(PMS.CONFIG.TRACKER_YEAR_ROW, PMS.CONFIG.TRACKER_YEAR_COLUMN).getValue()
+    ) || 0;
     var values = sheet
       .getRange(PMS.CONFIG.ASSET_DATA_START_ROW, 1, rowCount, 3)
       .getDisplayValues();
@@ -201,6 +205,7 @@ PMS.Assets = (function () {
         section: section.key,
         sectionLabel: section.label,
         sheetName: section.sheetName,
+        trackerYear: trackerYear,
         cycles: cycles,
         completedCycles: completedCycles
       };
@@ -257,22 +262,17 @@ PMS.Assets = (function () {
   }
 
   /**
-   * Assets offered in the questionnaire's asset picker: INPROD and not yet
-   * checked off in the section tracker.
+   * Assets offered to the questionnaire.
    *
-   * Deliberately separate from listEligible(), which PMS.Metrics uses as the
-   * eligibility denominator. Filtering there would make completed assets vanish
-   * from the eligible count and break the compliance percentage.
-   *
-   * The cycle fields are dropped from the result so the client payload stays
-   * the same size as before.
+   * Eligibility depends on the maintenance date the technician selects, not on
+   * today's date. The browser therefore receives every INPROD asset together
+   * with its completed-cycle flags and filters the picker after a date is
+   * selected. The server still re-reads the authoritative tracker row before a
+   * save, so these flags are presentation data rather than an authorization
+   * boundary.
    */
   function listSelectable(sectionKey, forceRefresh) {
-    var cycleKey = PMS.Util.currentCycle().cycle;
     return listEligible(sectionKey, forceRefresh)
-      .filter(function (asset) {
-        return !isAlreadyCompleted(asset, cycleKey);
-      })
       .map(function (asset) {
         return {
           tag: asset.tag,
@@ -281,7 +281,10 @@ PMS.Assets = (function () {
           row: asset.row,
           section: asset.section,
           sectionLabel: asset.sectionLabel,
-          sheetName: asset.sheetName
+          sheetName: asset.sheetName,
+          trackerYear: asset.trackerYear,
+          cycles: asset.cycles,
+          completedCycles: asset.completedCycles
         };
       });
   }

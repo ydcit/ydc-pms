@@ -1,23 +1,64 @@
 var PMS = PMS || {};
 
 PMS.Records = (function () {
-  function responseSheet(createIfMissing) {
-    var spreadsheet = PMS.Assets.spreadsheet();
-    var sheet = spreadsheet.getSheetByName(PMS.CONFIG.RESPONSE_SHEET);
-    if (!sheet && createIfMissing) {
-      sheet = spreadsheet.insertSheet(PMS.CONFIG.RESPONSE_SHEET);
-      initializeSheet(sheet);
+  function sheetDefinition(sectionKey) {
+    if (sectionKey === 'INFRA_SECURITY') {
+      return {
+        section: 'INFRA_SECURITY',
+        name: PMS.CONFIG.INFRA_RESPONSE_SHEET,
+        columns: PMS.CONFIG.INFRA_RECORD_COLUMNS
+      };
     }
-    if (sheet) verifyHeaders(sheet);
+    return {
+      section: 'SERVICE_DESK',
+      name: PMS.CONFIG.RESPONSE_SHEET,
+      columns: PMS.CONFIG.RECORD_COLUMNS
+    };
+  }
+
+  function allSheetDefinitions() {
+    return [sheetDefinition('SERVICE_DESK'), sheetDefinition('INFRA_SECURITY')];
+  }
+
+  function definitionForSheet(sheet) {
+    var name = typeof sheet === 'string' ? sheet : sheet.getName();
+    var definitions = allSheetDefinitions();
+    for (var index = 0; index < definitions.length; index += 1) {
+      if (definitions[index].name === name) return definitions[index];
+    }
+    PMS.Util.fail('Unknown PMS record sheet: ' + name, 'CONFIGURATION_ERROR');
+  }
+
+  /**
+   * Returns the record sheet for a section. With no section this deliberately
+   * retains the legacy behavior and returns the Service Desk / system-event
+   * sheet, so existing editor helpers remain compatible.
+   */
+  function responseSheet(createIfMissing, sectionKey) {
+    var definition = sheetDefinition(sectionKey || 'SERVICE_DESK');
+    var spreadsheet = PMS.Assets.spreadsheet();
+    var sheet = spreadsheet.getSheetByName(definition.name);
+    if (!sheet && createIfMissing) {
+      sheet = spreadsheet.insertSheet(definition.name);
+      initializeSheet(sheet, definition.columns);
+    }
+    if (sheet) verifyHeaders(sheet, definition.columns);
     return sheet;
   }
 
-  function initializeSheet(sheet) {
-    var columnCount = PMS.CONFIG.RECORD_COLUMNS.length;
+  function recordSheets(createIfMissing) {
+    return allSheetDefinitions().map(function (definition) {
+      var sheet = responseSheet(Boolean(createIfMissing), definition.section);
+      return sheet ? { sheet: sheet, definition: definition } : null;
+    }).filter(Boolean);
+  }
+
+  function initializeSheet(sheet, columns) {
+    var columnCount = columns.length;
     if (sheet.getMaxColumns() < columnCount) {
       sheet.insertColumnsAfter(sheet.getMaxColumns(), columnCount - sheet.getMaxColumns());
     }
-    var labels = PMS.CONFIG.RECORD_COLUMNS.map(function (column) { return column.label; });
+    var labels = columns.map(function (column) { return column.label; });
     sheet.getRange(1, 1, 1, columnCount).setValues([labels]);
     sheet.setFrozenRows(1);
     sheet.setHiddenGridlines(false);
@@ -29,16 +70,19 @@ PMS.Records = (function () {
       .setWrap(true);
     sheet.setRowHeight(1, 42);
     sheet.setColumnWidths(1, columnCount, 130);
-    sheet.setColumnWidth(1, 190);
-    sheet.setColumnWidth(8, 180);
-    sheet.setColumnWidth(9, 220);
-    sheet.setColumnWidth(18, 155);
-    sheet.setColumnWidths(54, 3, 320);
-    sheet.setColumnWidth(columnCount, 265);
+    setColumnWidthByKey(sheet, columns, 'recordId', 190);
+    setColumnWidthByKey(sheet, columns, 'technicianName', 180);
+    setColumnWidthByKey(sheet, columns, 'technicianEmail', 220);
+    setColumnWidthByKey(sheet, columns, 'assetTag', 155);
+    ['assetFindings', 'actionTaken', 'recommendation'].forEach(function (key) {
+      setColumnWidthByKey(sheet, columns, key, 320);
+    });
+    setColumnWidthByKey(sheet, columns, 'pmsCompletion', 265);
     if (!sheet.getFilter()) {
       sheet.getRange(1, 1, sheet.getMaxRows(), columnCount).createFilter();
     }
-    var statusRange = sheet.getRange(2, columnCount, Math.max(1, sheet.getMaxRows() - 1), 1);
+    var completionColumn = columnIndex('pmsCompletion', columns);
+    var statusRange = sheet.getRange(2, completionColumn + 1, Math.max(1, sheet.getMaxRows() - 1), 1);
     var rules = [
       SpreadsheetApp.newConditionalFormatRule().whenTextContains('— COMPLETED').setBackground('#e6f4ea').setFontColor('#137333').setRanges([statusRange]).build(),
       SpreadsheetApp.newConditionalFormatRule().whenTextContains('— INCOMPLETE').setBackground('#fef7e0').setFontColor('#b06000').setRanges([statusRange]).build(),
@@ -47,15 +91,20 @@ PMS.Records = (function () {
     sheet.setConditionalFormatRules(rules);
   }
 
-  function verifyHeaders(sheet) {
-    var expected = PMS.CONFIG.RECORD_COLUMNS.map(function (column) { return column.label; });
+  function setColumnWidthByKey(sheet, columns, key, width) {
+    var index = optionalColumnIndex(key, columns);
+    if (index >= 0) sheet.setColumnWidth(index + 1, width);
+  }
+
+  function verifyHeaders(sheet, columns) {
+    var expected = columns.map(function (column) { return column.label; });
     if (sheet.getMaxColumns() < expected.length) {
       sheet.insertColumnsAfter(sheet.getMaxColumns(), expected.length - sheet.getMaxColumns());
     }
     var current = sheet.getRange(1, 1, 1, expected.length).getDisplayValues()[0];
     var isBlank = current.every(function (value) { return !value; });
     if (isBlank) {
-      initializeSheet(sheet);
+      initializeSheet(sheet, columns);
       return;
     }
     var mismatches = [];
@@ -63,19 +112,25 @@ PMS.Records = (function () {
       if (current[index] !== label) mismatches.push((index + 1) + ': ' + current[index] + ' ≠ ' + label);
     });
     if (mismatches.length) {
-      PMS.Util.fail('PMS Records header mismatch. Refusing to write: ' + mismatches.slice(0, 5).join('; '), 'SCHEMA_MISMATCH');
+      PMS.Util.fail(sheet.getName() + ' header mismatch. Refusing to write: ' + mismatches.slice(0, 5).join('; '), 'SCHEMA_MISMATCH');
     }
   }
 
-  function columnIndex(key) {
-    for (var i = 0; i < PMS.CONFIG.RECORD_COLUMNS.length; i += 1) {
-      if (PMS.CONFIG.RECORD_COLUMNS[i].key === key) return i;
+  function optionalColumnIndex(key, columns) {
+    for (var i = 0; i < columns.length; i += 1) {
+      if (columns[i].key === key) return i;
     }
+    return -1;
+  }
+
+  function columnIndex(key, columns) {
+    var index = optionalColumnIndex(key, columns);
+    if (index >= 0) return index;
     PMS.Util.fail('Unknown record column: ' + key, 'CONFIGURATION_ERROR');
   }
 
-  function objectToRow(record) {
-    return PMS.CONFIG.RECORD_COLUMNS.map(function (column) {
+  function objectToRow(record, columns) {
+    return columns.map(function (column) {
       var value = record[column.key];
       if (value === undefined || value === null) return '';
       if (typeof value === 'string' && /^[=+\-@]/.test(value)) return "'" + value;
@@ -83,19 +138,26 @@ PMS.Records = (function () {
     });
   }
 
-  function rowToObject(row, rowNumber) {
-    var record = { _rowNumber: rowNumber };
-    PMS.CONFIG.RECORD_COLUMNS.forEach(function (column, index) {
+  function rowToObject(row, rowNumber, sheetName, columns) {
+    var record = { _rowNumber: rowNumber, _sheetName: sheetName };
+    columns.forEach(function (column, index) {
       record[column.key] = row[index] === undefined || row[index] === null ? '' : row[index];
     });
     return record;
   }
 
   function allRecords() {
-    var sheet = responseSheet(false);
-    if (!sheet || sheet.getLastRow() < 2) return [];
-    var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, PMS.CONFIG.RECORD_COLUMNS.length).getValues();
-    return values.map(function (row, index) { return rowToObject(row, index + 2); });
+    var records = [];
+    recordSheets(false).forEach(function (entry) {
+      var sheet = entry.sheet;
+      var columns = entry.definition.columns;
+      if (sheet.getLastRow() < 2) return;
+      var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, columns.length).getValues();
+      values.forEach(function (row, index) {
+        records.push(rowToObject(row, index + 2, sheet.getName(), columns));
+      });
+    });
+    return records;
   }
 
   // A round trip to Sheets costs far more than a few surplus columns, so
@@ -129,30 +191,38 @@ PMS.Records = (function () {
     var fields = Array.isArray(keys) ? keys.filter(function (key, index, values) {
       return values.indexOf(key) === index;
     }) : [];
-    var sheet = responseSheet(false);
-    if (!sheet || sheet.getLastRow() < 2 || !fields.length) return [];
-    var count = sheet.getLastRow() - 1;
-    var offsets = fields.map(columnIndex);
-    var clusters = columnClusters(offsets);
-    var blocks = clusters.map(function (cluster) {
-      return sheet.getRange(2, cluster.first + 1, count, cluster.last - cluster.first + 1).getValues();
-    });
+    if (!fields.length) return [];
+    var records = [];
+    recordSheets(false).forEach(function (entry) {
+      var sheet = entry.sheet;
+      var columns = entry.definition.columns;
+      if (sheet.getLastRow() < 2) return;
+      var count = sheet.getLastRow() - 1;
+      var presentFields = fields.filter(function (key) {
+        return optionalColumnIndex(key, columns) >= 0;
+      });
+      var offsets = presentFields.map(function (key) { return columnIndex(key, columns); });
+      var clusters = columnClusters(offsets);
+      var blocks = clusters.map(function (cluster) {
+        return sheet.getRange(2, cluster.first + 1, count, cluster.last - cluster.first + 1).getValues();
+      });
 
-    var records = new Array(count);
-    for (var rowIndex = 0; rowIndex < count; rowIndex += 1) {
-      var record = { _rowNumber: rowIndex + 2 };
-      for (var position = 0; position < fields.length; position += 1) {
-        var offset = offsets[position];
-        for (var blockIndex = 0; blockIndex < clusters.length; blockIndex += 1) {
-          var cluster = clusters[blockIndex];
-          if (offset < cluster.first || offset > cluster.last) continue;
-          var value = blocks[blockIndex][rowIndex][offset - cluster.first];
-          record[fields[position]] = value === undefined || value === null ? '' : value;
-          break;
+      for (var rowIndex = 0; rowIndex < count; rowIndex += 1) {
+        var record = { _rowNumber: rowIndex + 2, _sheetName: sheet.getName() };
+        fields.forEach(function (key) { record[key] = ''; });
+        for (var position = 0; position < presentFields.length; position += 1) {
+          var offset = offsets[position];
+          for (var blockIndex = 0; blockIndex < clusters.length; blockIndex += 1) {
+            var cluster = clusters[blockIndex];
+            if (offset < cluster.first || offset > cluster.last) continue;
+            var value = blocks[blockIndex][rowIndex][offset - cluster.first];
+            record[presentFields[position]] = value === undefined || value === null ? '' : value;
+            break;
+          }
         }
+        records.push(record);
       }
-      records[rowIndex] = record;
-    }
+    });
     return records;
   }
 
@@ -165,38 +235,50 @@ PMS.Records = (function () {
     ]);
   }
 
-  function findRowByColumn(sheet, key, value) {
+  function findRowByColumn(sheet, key, value, columns) {
     if (!value || sheet.getLastRow() < 2) return 0;
-    var column = columnIndex(key) + 1;
+    var column = columnIndex(key, columns || definitionForSheet(sheet).columns) + 1;
     var matches = sheet
       .getRange(2, column, sheet.getLastRow() - 1, 1)
       .createTextFinder(String(value))
       .matchEntireCell(true)
       .findAll();
     if (matches.length > 1) {
-      PMS.Util.fail('Duplicate ' + key + ' values detected in PMS Records.', 'DATA_INTEGRITY_ERROR');
+      PMS.Util.fail('Duplicate ' + key + ' values detected in ' + sheet.getName() + '.', 'DATA_INTEGRITY_ERROR');
     }
     return matches.length ? matches[0].getRow() : 0;
   }
 
   function getByRow(sheet, rowNumber) {
     if (!rowNumber) return null;
+    var definition = definitionForSheet(sheet);
     return rowToObject(
-      sheet.getRange(rowNumber, 1, 1, PMS.CONFIG.RECORD_COLUMNS.length).getValues()[0],
-      rowNumber
+      sheet.getRange(rowNumber, 1, 1, definition.columns.length).getValues()[0],
+      rowNumber,
+      sheet.getName(),
+      definition.columns
     );
   }
 
+  function findByColumn(key, value) {
+    if (!value) return null;
+    var matches = [];
+    recordSheets(false).forEach(function (entry) {
+      var row = findRowByColumn(entry.sheet, key, value, entry.definition.columns);
+      if (row) matches.push(getByRow(entry.sheet, row));
+    });
+    if (matches.length > 1) {
+      PMS.Util.fail('Duplicate ' + key + ' values detected across PMS record sheets.', 'DATA_INTEGRITY_ERROR');
+    }
+    return matches.length ? matches[0] : null;
+  }
+
   function findByRecordId(recordId) {
-    var sheet = responseSheet(false);
-    if (!sheet) return null;
-    return getByRow(sheet, findRowByColumn(sheet, 'recordId', recordId));
+    return findByColumn('recordId', recordId);
   }
 
   function findByIdempotencyKey(idempotencyKey) {
-    var sheet = responseSheet(false);
-    if (!sheet) return null;
-    return getByRow(sheet, findRowByColumn(sheet, 'idempotencyKey', idempotencyKey));
+    return findByColumn('idempotencyKey', idempotencyKey);
   }
 
   function ensureRowCapacity(sheet, rowNumber) {
@@ -206,10 +288,21 @@ PMS.Records = (function () {
   }
 
   function writeRecord(sheet, record, rowNumber) {
+    var columns = definitionForSheet(sheet).columns;
     var targetRow = rowNumber || sheet.getLastRow() + 1;
     ensureRowCapacity(sheet, targetRow);
-    sheet.getRange(targetRow, 1, 1, PMS.CONFIG.RECORD_COLUMNS.length).setValues([objectToRow(record)]);
+    sheet.getRange(targetRow, 1, 1, columns.length).setValues([objectToRow(record, columns)]);
     return targetRow;
+  }
+
+  function sheetForStoredRecord(record) {
+    if (!record || !record._sheetName) {
+      PMS.Util.fail('The stored PMS record has no sheet location.', 'DATA_INTEGRITY_ERROR');
+    }
+    var sheet = PMS.Assets.spreadsheet().getSheetByName(record._sheetName);
+    if (!sheet) PMS.Util.fail('PMS record sheet not found: ' + record._sheetName, 'CONFIGURATION_ERROR');
+    verifyHeaders(sheet, definitionForSheet(sheet).columns);
+    return sheet;
   }
 
   function completionKey(sectionKey, assetTag, cycleId) {
@@ -232,6 +325,27 @@ PMS.Records = (function () {
     return null;
   }
 
+  function checklistKeys(sectionKey) {
+    return PMS.Util.allChecklistItems(sectionKey).map(function (item) { return item.key; });
+  }
+
+  function maintenanceDateText(value) {
+    if (Object.prototype.toString.call(value) === '[object Date]') {
+      return Utilities.formatDate(value, PMS.CONFIG.TIME_ZONE, 'yyyy-MM-dd');
+    }
+    return String(value || '').slice(0, 10);
+  }
+
+  function applyEvidence(record, prefix, evidence) {
+    var source = evidence && typeof evidence === 'object' ? evidence : null;
+    if (!source) return;
+    var recordKeys = PMS.Evidence.evidenceRecordKeys(prefix);
+    Object.keys(recordKeys).forEach(function (sourceKey) {
+      if (source[sourceKey] === undefined || source[sourceKey] === null) return;
+      record[recordKeys[sourceKey]] = source[sourceKey];
+    });
+  }
+
   function buildRecord(normalized, asset, existing) {
     var profile = normalized.profile;
     var timestamp = PMS.Util.nowIso();
@@ -239,7 +353,10 @@ PMS.Records = (function () {
     var record = existing || {};
     record.recordId = record.recordId || PMS.Util.makeRecordId(normalized.cycle);
     record.recordType = priorCompletion ? 'REINSPECTION' : (record.recordType || 'MAINTENANCE');
-    record.schemaVersion = PMS.CONFIG.SCHEMA_VERSION;
+    // Preserve the schema that originally shaped an existing row. New records
+    // use the current schema, while resuming a legacy Service Desk draft must
+    // not silently relabel its stored layout as a newer version.
+    record.schemaVersion = record.schemaVersion || PMS.CONFIG.SCHEMA_VERSION;
     record.createdAt = record.createdAt || timestamp;
     record.updatedAt = timestamp;
     record.submittedAt = record.submittedAt || '';
@@ -247,6 +364,7 @@ PMS.Records = (function () {
     record.technicianName = profile.name;
     record.technicianEmail = profile.email;
     record.itSection = profile.section;
+    if (profile.section === 'INFRA_SECURITY') record.formType = 'INFRA_SECURITY_V1';
     record.maintenanceDate = normalized.maintenanceDate;
     record.maintenanceYear = normalized.cycle.year;
     record.cycle = normalized.cycle.cycle;
@@ -260,19 +378,29 @@ PMS.Records = (function () {
     record.observedLocation = PMS.Util.safeCellText(normalized.observedLocation, 500);
     record.locationDiscrepancy = normalized.locationDiscrepancy ? 'YES' : 'NO';
 
-    Object.keys(PMS.CONFIG.PERIPHERAL_RECORD_KEYS).forEach(function (key) {
-      record[PMS.CONFIG.PERIPHERAL_RECORD_KEYS[key]] = PMS.Util.safeCellText(normalized.peripherals[key], 2000);
-    });
-    PMS.Util.allChecklistItems().forEach(function (item) {
-      record[item.key] = normalized.checklist.values[item.key];
+    if (profile.section === 'INFRA_SECURITY') {
+      record.assetType = PMS.Util.safeCellText(normalized.assetType, 100);
+      applyEvidence(record, 'firmware', normalized.evidence && normalized.evidence.firmware);
+      applyEvidence(record, 'backup', normalized.evidence && normalized.evidence.backup);
+    } else {
+      Object.keys(PMS.CONFIG.PERIPHERAL_RECORD_KEYS).forEach(function (key) {
+        record[PMS.CONFIG.PERIPHERAL_RECORD_KEYS[key]] = PMS.Util.safeCellText(
+          normalized.peripherals && normalized.peripherals[key],
+          2000
+        );
+      });
+    }
+    Object.keys(normalized.checklist.values || {}).forEach(function (key) {
+      record[key] = normalized.checklist.values[key];
     });
     record.assessmentResult = PMS.Util.safeCellText(normalized.assessment.result, 100);
     record.assetFindings = PMS.Util.safeCellText(normalized.assessment.findings, PMS.CONFIG.MAX_TEXT_LENGTH);
     record.actionTaken = PMS.Util.safeCellText(normalized.assessment.actionTaken, PMS.CONFIG.MAX_TEXT_LENGTH);
     record.recommendation = PMS.Util.safeCellText(normalized.assessment.recommendation, PMS.CONFIG.MAX_TEXT_LENGTH);
-    record.completedItems = normalized.checklist.completed;
-    record.applicableItems = normalized.checklist.applicable;
-    record.completionPercent = normalized.checklist.percent / 100;
+    var progress = normalized.progress || normalized.checklist;
+    record.completedItems = progress.completed;
+    record.applicableItems = progress.applicable;
+    record.completionPercent = progress.percent / 100;
     record.trackerSheet = record.trackerSheet || asset.sheetName;
     record.trackerRow = record.trackerRow || asset.row;
     record.trackerCycle = normalized.cycle.cycle;
@@ -281,6 +409,7 @@ PMS.Records = (function () {
     var flags = [];
     if (!asset.location) flags.push('MISSING_MASTER_LOCATION');
     if (normalized.locationDiscrepancy) flags.push('LOCATION_DISCREPANCY');
+    if (normalized.assetTypeUnverified) flags.push('ASSET_TYPE_UNVERIFIED');
     record.dataQualityFlags = flags.join(' | ');
     return record;
   }
@@ -292,15 +421,17 @@ PMS.Records = (function () {
     if (!lock.tryLock(30000)) PMS.Util.fail('The system is busy. Please try again.', 'BUSY');
     var result;
     try {
-      var sheet = responseSheet(true);
       var existing = null;
       if (normalized.recordId) {
-        existing = getByRow(sheet, findRowByColumn(sheet, 'recordId', normalized.recordId));
+        existing = findByRecordId(normalized.recordId);
         if (!existing) PMS.Util.fail('The PMS draft was not found. Start a new questionnaire.', 'NOT_FOUND');
       }
-      if (!existing) existing = getByRow(sheet, findRowByColumn(sheet, 'idempotencyKey', normalized.idempotencyKey));
+      if (!existing) existing = findByIdempotencyKey(normalized.idempotencyKey);
       if (existing && existing.technicianEmail !== profile.email) {
         PMS.Util.fail('You cannot edit another technician’s record.', 'ACCESS_DENIED');
+      }
+      if (existing && existing.itSection !== profile.section) {
+        PMS.Util.fail('You cannot edit a record assigned to another IT section.', 'ACCESS_DENIED');
       }
       if (existing && PMS.Util.completionState(existing.pmsCompletion) === 'COMPLETED') {
         return {
@@ -312,10 +443,22 @@ PMS.Records = (function () {
         };
       }
 
+      if (existing && existing.itSection === 'INFRA_SECURITY' && existing._sheetName === PMS.CONFIG.RESPONSE_SHEET) {
+        PMS.Util.fail(
+          'This Infrastructure & Security draft uses the retired shared-record format and cannot be edited. Start a new maintenance record; the historical draft will remain preserved.',
+          'LEGACY_DRAFT_INCOMPATIBLE'
+        );
+      }
+
+      var sheet = existing ? sheetForStoredRecord(existing) : responseSheet(true, profile.section);
+
       var asset = PMS.Assets.requireEligible(profile.section, normalized.assetTag);
       PMS.Validation.validateObservedLocation(normalized, asset);
-      if (existing && (existing.assetTag !== asset.tag || existing.cycleId !== normalized.cycle.cycleId)) {
-        PMS.Util.fail('Asset and maintenance cycle cannot be changed after a draft is created.', 'VALIDATION_ERROR');
+      if (existing && (existing.assetTag !== asset.tag || existing.cycleId !== normalized.cycle.cycleId ||
+          maintenanceDateText(existing.maintenanceDate) !== normalized.maintenanceDate ||
+          String(existing.idempotencyKey || '') !== normalized.idempotencyKey ||
+          (profile.section === 'INFRA_SECURITY' && existing.assetType !== normalized.assetType))) {
+        PMS.Util.fail('Asset, asset type, maintenance date, cycle, and request identifier cannot be changed after a draft is created.', 'VALIDATION_ERROR');
       }
       var record = buildRecord(normalized, asset, existing);
       var rowNumber = existing ? existing._rowNumber : 0;
@@ -323,9 +466,9 @@ PMS.Records = (function () {
       if (normalized.mode === 'SAVE') {
         record.syncError = '';
         record.pmsCompletion = PMS.Util.progressText(
-          normalized.checklist.percent,
-          normalized.checklist.completed,
-          normalized.checklist.applicable,
+          normalized.progress.percent,
+          normalized.progress.completed,
+          normalized.progress.applicable,
           'INCOMPLETE'
         );
         rowNumber = writeRecord(sheet, record, rowNumber);
@@ -418,23 +561,42 @@ PMS.Records = (function () {
     if (record.technicianEmail !== profile.email) {
       PMS.Util.fail('You cannot open another technician’s record.', 'ACCESS_DENIED');
     }
+    if (record.itSection === 'INFRA_SECURITY' && record._sheetName === PMS.CONFIG.RESPONSE_SHEET &&
+        PMS.Util.completionState(record.pmsCompletion) !== 'COMPLETED') {
+      PMS.Util.fail(
+        'This Infrastructure & Security draft uses the retired shared-record format and cannot be edited. Start a new maintenance record; the historical draft will remain preserved.',
+        'LEGACY_DRAFT_INCOMPATIBLE'
+      );
+    }
     var peripherals = {};
-    Object.keys(PMS.CONFIG.PERIPHERAL_RECORD_KEYS).forEach(function (key) {
-      var value = String(record[PMS.CONFIG.PERIPHERAL_RECORD_KEYS[key]] || '');
-      peripherals[key] = value ? value.split(' | ') : [];
-    });
+    if (record.itSection !== 'INFRA_SECURITY') {
+      Object.keys(PMS.CONFIG.PERIPHERAL_RECORD_KEYS).forEach(function (key) {
+        var value = String(record[PMS.CONFIG.PERIPHERAL_RECORD_KEYS[key]] || '');
+        peripherals[key] = value ? value.split(' | ') : [];
+      });
+    }
     var checklist = {};
-    PMS.Util.allChecklistItems().forEach(function (item) { checklist[item.key] = record[item.key] || ''; });
+    if (record.itSection === 'INFRA_SECURITY') {
+      checklistKeys('INFRA_SECURITY').forEach(function (key) { checklist[key] = record[key] || ''; });
+    } else {
+      PMS.Util.allChecklistItems().forEach(function (item) { checklist[item.key] = record[item.key] || ''; });
+    }
     return {
       ok: true,
       recordId: record.recordId,
       idempotencyKey: record.idempotencyKey,
-      maintenanceDate: record.maintenanceDate,
+      maintenanceDate: maintenanceDateText(record.maintenanceDate),
+      formType: record.formType || record.itSection,
+      assetType: record.assetType || '',
       assetTag: record.assetTag,
       observedLocation: record.observedLocation,
       locationDiscrepancy: record.locationDiscrepancy === 'YES',
       peripherals: peripherals,
       checklist: checklist,
+      evidence: {
+        firmware: evidenceFromRecord(record, 'firmware'),
+        backup: evidenceFromRecord(record, 'backup')
+      },
       assessment: {
         result: record.assessmentResult,
         findings: record.assetFindings,
@@ -443,6 +605,81 @@ PMS.Records = (function () {
       },
       pmsCompletion: record.pmsCompletion
     };
+  }
+
+  function evidenceFromRecord(record, prefix) {
+    return PMS.Evidence.descriptorFromRecord(record, prefix);
+  }
+
+  /**
+   * Commits an already-created, signed Drive evidence descriptor to an Infra
+   * draft. Upload and persistence are deliberately separate: once this write
+   * succeeds, a browser reload can recover the evidence from the record.
+   */
+  function attachEvidence(recordId, evidenceKind, descriptor) {
+    var profile = PMS.Auth.requireProfile();
+    if (profile.section !== 'INFRA_SECURITY') {
+      PMS.Util.fail('Evidence can be attached only to Infrastructure & Security records.', 'ACCESS_DENIED');
+    }
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(30000)) PMS.Util.fail('The system is busy. Please try again.', 'BUSY');
+    try {
+      var record = findByRecordId(recordId);
+      if (!record) PMS.Util.fail('The PMS draft was not found. Reopen the questionnaire.', 'NOT_FOUND');
+      if (record.itSection === 'INFRA_SECURITY' && record._sheetName === PMS.CONFIG.RESPONSE_SHEET) {
+        PMS.Util.fail(
+          'This Infrastructure & Security draft uses the retired shared-record format and cannot accept evidence. Start a new maintenance record; the historical draft will remain preserved.',
+          'LEGACY_DRAFT_INCOMPATIBLE'
+        );
+      }
+      if (record._sheetName !== PMS.CONFIG.INFRA_RESPONSE_SHEET || record.itSection !== 'INFRA_SECURITY') {
+        PMS.Util.fail('Evidence can be attached only to the Infrastructure & Security record sheet.', 'ACCESS_DENIED');
+      }
+      if (PMS.Util.normalizeEmail(record.technicianEmail) !== profile.email) {
+        PMS.Util.fail('You cannot attach evidence to another technician\'s record.', 'ACCESS_DENIED');
+      }
+      if (PMS.Util.completionState(record.pmsCompletion) === 'COMPLETED') {
+        PMS.Util.fail('Completed PMS evidence cannot be replaced.', 'RECORD_LOCKED');
+      }
+      var verified = PMS.Evidence.verifyDescriptor(descriptor, {
+        recordId: record.recordId,
+        idempotencyKey: record.idempotencyKey,
+        assetType: record.assetType,
+        assetTag: record.assetTag,
+        maintenanceDate: record.maintenanceDate,
+        cycleId: record.cycleId,
+        itSection: record.itSection,
+        evidenceKind: evidenceKind,
+        uploadedBy: profile.email
+      });
+      var keys = PMS.Evidence.evidenceRecordKeys(evidenceKind);
+      Object.keys(keys).forEach(function (descriptorKey) {
+        record[keys[descriptorKey]] = verified[descriptorKey];
+      });
+
+      var completed = checklistKeys('INFRA_SECURITY').reduce(function (total, key) {
+        return total + (String(record[key] || '').toUpperCase() === 'DONE' ? 1 : 0);
+      }, 0);
+      if (record.firmwareEvidenceFileId) completed += 1;
+      if (record.backupEvidenceFileId) completed += 1;
+      var percent = Math.round(completed / 6 * 100);
+      record.updatedAt = PMS.Util.nowIso();
+      record.completedItems = completed;
+      record.applicableItems = 6;
+      record.completionPercent = percent / 100;
+      record.pmsCompletion = PMS.Util.progressText(percent, completed, 6, 'INCOMPLETE');
+      writeRecord(sheetForStoredRecord(record), record, record._rowNumber);
+      SpreadsheetApp.flush();
+      return {
+        ok: true,
+        recordId: record.recordId,
+        evidenceKind: verified.evidenceKind,
+        descriptor: verified,
+        pmsCompletion: record.pmsCompletion
+      };
+    } finally {
+      lock.releaseLock();
+    }
   }
 
   /*
@@ -507,7 +744,8 @@ PMS.Records = (function () {
           return factor * left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
         }
       }
-      return factor * (a.row - b.row);
+      var idComparison = String(a.recordId || '').localeCompare(String(b.recordId || ''));
+      return idComparison ? factor * idComparison : factor * (a.row - b.row);
     };
   }
 
@@ -538,7 +776,7 @@ PMS.Records = (function () {
         return {
           recordId: cellText(record.recordId),
           assetTag: PMS.Util.normalizeAssetTag(record.assetTag),
-          maintenanceDate: cellText(record.maintenanceDate),
+          maintenanceDate: maintenanceDateText(record.maintenanceDate),
           submittedAt: cellText(record.submittedAt),
           cycleId: cellText(record.cycleId),
           year: parts.year,
@@ -586,7 +824,7 @@ PMS.Records = (function () {
 
     var uniqueAssets = {};
     filtered.forEach(function (record) {
-      if (record.assetTag) uniqueAssets[record.assetTag] = true;
+      if (record.assetTag) uniqueAssets[record.section + '|' + record.assetTag] = true;
     });
 
     var showAll = PMS.Util.cleanText(request.pageSize, 8).toUpperCase() === 'ALL';
@@ -636,7 +874,9 @@ PMS.Records = (function () {
     records.sort(function (a, b) {
       var aTime = String(a.submittedAt || a.updatedAt || a.createdAt || '');
       var bTime = String(b.submittedAt || b.updatedAt || b.createdAt || '');
-      return bTime.localeCompare(aTime) || b._rowNumber - a._rowNumber;
+      return bTime.localeCompare(aTime) ||
+        String(b.recordId || '').localeCompare(String(a.recordId || '')) ||
+        b._rowNumber - a._rowNumber;
     });
     var output = [];
     for (var i = 0; i < records.length && output.length < (limit || 10); i += 1) {
@@ -646,7 +886,7 @@ PMS.Records = (function () {
       if (!profile.isAdmin && record.itSection !== profile.section) continue;
       output.push({
         recordId: record.recordId,
-        maintenanceDate: record.maintenanceDate,
+        maintenanceDate: maintenanceDateText(record.maintenanceDate),
         cycleId: record.cycleId,
         assetTag: record.assetTag,
         technicianName: record.technicianName,
@@ -685,6 +925,7 @@ PMS.Records = (function () {
       technicianName: 'Legacy Tracker Import',
       technicianEmail: '',
       itSection: data.section,
+      formType: data.section === 'INFRA_SECURITY' ? 'INFRA_SECURITY_V1' : data.section,
       maintenanceDate: '',
       maintenanceYear: data.year,
       cycle: data.cycle,
@@ -717,7 +958,6 @@ PMS.Records = (function () {
   function appendLegacyRecordsBatch(dataList, existingById) {
     var items = Array.isArray(dataList) ? dataList : [];
     if (!items.length) return { appended: 0, appendedBySection: {} };
-    var sheet = responseSheet(true);
     var recordsById = existingById || {};
     if (!existingById) {
       readRecordFields(['recordId', 'recordType', 'itSection', 'cycleId']).forEach(function (record) {
@@ -725,7 +965,7 @@ PMS.Records = (function () {
       });
     }
     var timestamp = PMS.Util.nowIso();
-    var rows = [];
+    var rowsBySection = { SERVICE_DESK: [], INFRA_SECURITY: [] };
     var appendedBySection = {};
     items.forEach(function (data) {
       var existing = recordsById[data.recordId];
@@ -737,15 +977,23 @@ PMS.Records = (function () {
       }
       var record = legacyRecordObject(data, timestamp);
       recordsById[data.recordId] = record;
-      rows.push(objectToRow(record));
+      var definition = sheetDefinition(data.section);
+      rowsBySection[data.section].push(objectToRow(record, definition.columns));
       appendedBySection[data.section] = (appendedBySection[data.section] || 0) + 1;
     });
-    if (rows.length) {
+    Object.keys(rowsBySection).forEach(function (sectionKey) {
+      var rows = rowsBySection[sectionKey];
+      if (!rows.length) return;
+      var sheet = responseSheet(true, sectionKey);
+      var columns = sheetDefinition(sectionKey).columns;
       var firstRow = sheet.getLastRow() + 1;
       ensureRowCapacity(sheet, firstRow + rows.length - 1);
-      sheet.getRange(firstRow, 1, rows.length, PMS.CONFIG.RECORD_COLUMNS.length).setValues(rows);
-    }
-    return { appended: rows.length, appendedBySection: appendedBySection };
+      sheet.getRange(firstRow, 1, rows.length, columns.length).setValues(rows);
+    });
+    var appended = Object.keys(rowsBySection).reduce(function (total, sectionKey) {
+      return total + rowsBySection[sectionKey].length;
+    }, 0);
+    return { appended: appended, appendedBySection: appendedBySection };
   }
 
   function appendLegacyRecord(data) {
@@ -894,18 +1142,24 @@ PMS.Records = (function () {
       var state = PMS.Util.completionState(record.pmsCompletion);
       return state === 'SYNC REQUIRED' || state === 'SYNC FAILED' || state === 'SYNCING';
     }).sort(function (a, b) {
-      return a._rowNumber - b._rowNumber;
+      return pendingCursor(a) - pendingCursor(b);
     });
-    var candidates = pending.filter(function (record) { return record._rowNumber > cursor; });
+    var candidates = pending.filter(function (record) { return pendingCursor(record) > cursor; });
     var selected = candidates.slice(0, limit || 50);
-    var sheet = responseSheet(false);
-    var records = selected.map(function (record) { return getByRow(sheet, record._rowNumber); });
+    var records = selected.map(function (record) {
+      return getByRow(sheetForStoredRecord(record), record._rowNumber);
+    });
     return {
       records: records,
       totalPending: pending.length,
-      nextCursor: selected.length ? selected[selected.length - 1]._rowNumber : cursor,
+      nextCursor: selected.length ? pendingCursor(selected[selected.length - 1]) : cursor,
       remainingAfterCursor: Math.max(candidates.length - records.length, 0)
     };
+  }
+
+  function pendingCursor(record) {
+    var sheetOffset = record._sheetName === PMS.CONFIG.INFRA_RESPONSE_SHEET ? 1000000000 : 0;
+    return sheetOffset + Number(record._rowNumber || 0);
   }
 
   function pendingSync(year, limit, afterRow) {
@@ -913,9 +1167,9 @@ PMS.Records = (function () {
   }
 
   function finalizeSync(record, syncResult) {
-    var sheet = responseSheet(true);
     var fresh = findByRecordId(record.recordId);
     if (!fresh) PMS.Util.fail('Pending record not found during reconciliation.', 'NOT_FOUND');
+    var sheet = sheetForStoredRecord(fresh);
     fresh.updatedAt = PMS.Util.nowIso();
     fresh.trackerSheet = syncResult.sheetName || fresh.trackerSheet;
     fresh.trackerRow = syncResult.row || fresh.trackerRow;
@@ -940,9 +1194,9 @@ PMS.Records = (function () {
   }
 
   function stageSync(record, prepared) {
-    var sheet = responseSheet(true);
     var fresh = findByRecordId(record.recordId);
     if (!fresh) PMS.Util.fail('Pending record not found before tracker synchronization.', 'NOT_FOUND');
+    var sheet = sheetForStoredRecord(fresh);
     fresh.updatedAt = PMS.Util.nowIso();
     fresh.trackerSheet = prepared.sheetName || fresh.trackerSheet;
     fresh.trackerRow = prepared.row || fresh.trackerRow;
@@ -964,8 +1218,10 @@ PMS.Records = (function () {
     readRecordFields: readRecordFields,
     dashboardRecords: dashboardRecords,
     findByRecordId: findByRecordId,
+    findByIdempotencyKey: findByIdempotencyKey,
     save: save,
     clientRecord: clientRecord,
+    attachEvidence: attachEvidence,
     recent: recent,
     completedList: completedList,
     completionKey: completionKey,

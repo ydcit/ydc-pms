@@ -4,9 +4,10 @@ PMS.CONFIG = {
   APP_NAME: 'YDC Preventive Maintenance',
   SPREADSHEET_ID: '1T33Z8JFRdL9oFZ-6XT_lz-tNIAFKXF2ekp-e-cYm7uc',
   RESPONSE_SHEET: 'PMS Records',
+  INFRA_RESPONSE_SHEET: 'PMS Records - Infra & Security',
   ALLOWED_DOMAIN: 'ydc.com.ph',
   TIME_ZONE: 'Asia/Manila',
-  SCHEMA_VERSION: '1.0.0',
+  SCHEMA_VERSION: '2.0.0',
   ASSET_HEADER_ROW: 3,
   ASSET_DATA_START_ROW: 4,
   TRACKER_YEAR_ROW: 2,
@@ -24,9 +25,11 @@ PMS.CONFIG = {
   //                   completed in T1 is still offered in T2 and T3.
   // This affects the picker only. Dashboard eligibility and compliance always
   // count every INPROD asset.
-  ASSET_PICKER_COMPLETION_SCOPE: 'ANY_CYCLE',
+  ASSET_PICKER_COMPLETION_SCOPE: 'CURRENT_CYCLE',
   MAX_TEXT_LENGTH: 5000,
   MAX_REMARKS_CELL_LENGTH: 49000,
+  MAX_EVIDENCE_BYTES: 10 * 1024 * 1024,
+  EVIDENCE_SIGNING_SECRET_PROPERTY: 'PMS_EVIDENCE_SIGNING_SECRET',
   // Static bootstrap allowlist. Additional administrators may be stored in the
   // private PMS_ADMIN_EMAILS Script Property after initial setup.
   ADMIN_EMAILS: ['itdept@ydc.com.ph'],
@@ -63,6 +66,52 @@ PMS.CONFIG = {
     Object.freeze({ key: 'headset', label: 'Headset' }),
     Object.freeze({ key: 'typeCAdaptor', label: 'Type-C Adaptor' }),
     Object.freeze({ key: 'webcam', label: 'Webcam' })
+  ]),
+  INFRA_ASSET_TYPES: Object.freeze([
+    'Switch',
+    'Firewall',
+    'Access Point',
+    'OMADA Controller',
+    'Server',
+    'FortiAnalyzer'
+  ]),
+  INFRA_ASSET_TYPE_BY_TAG_PREFIX: Object.freeze({
+    SW: 'Switch',
+    FW: 'Firewall',
+    AP: 'Access Point',
+    SVR: 'Server'
+  }),
+  EVIDENCE: Object.freeze({
+    firmware: Object.freeze({
+      key: 'firmware',
+      label: 'Latest Firmware Version Evidence',
+      folderId: '1_YwagxFnBU8M6Yx6Ilr8oy8JFGClgw9I4O7zHQ-K0vsbgVUGCISKjjDNO8TiB23GlY0HHJ47',
+      recordPrefix: 'firmwareEvidence'
+    }),
+    backup: Object.freeze({
+      key: 'backup',
+      label: 'Configurations / Backup / Checkpoints Evidence',
+      folderId: '1IuRmXoTM7pctSvEe6489RP9hgA-AbcXNoeJI_o4IhPeSHT8Bk14ZjiRCitU972lczPpLAojg',
+      recordPrefix: 'backupEvidence'
+    })
+  }),
+  INFRA_CHECKLIST: Object.freeze([
+    Object.freeze({
+      key: 'physical',
+      label: 'Physical Checking',
+      items: Object.freeze([
+        Object.freeze({ key: 'infraPowerCables', label: 'Power Cables Checked', allowsNa: false }),
+        Object.freeze({ key: 'infraDataCables', label: 'Data Cables Checked', allowsNa: false }),
+        Object.freeze({ key: 'infraPowerSupplyUps', label: 'Power Supply / UPS Checked', allowsNa: false })
+      ])
+    }),
+    Object.freeze({
+      key: 'digital',
+      label: 'Digital Checking',
+      items: Object.freeze([
+        Object.freeze({ key: 'infraFirmwareLatest', label: 'Firmware Version at latest', allowsNa: false })
+      ])
+    })
   ]),
   CHECKLIST: Object.freeze([
     Object.freeze({
@@ -210,5 +259,70 @@ PMS.CONFIG.PERIPHERAL_RECORD_KEYS = Object.freeze({
   typeCAdaptor: 'peripheralTypeCAdaptor',
   webcam: 'peripheralWebcam'
 });
+
+PMS.CONFIG.INFRA_RECORD_COLUMNS = Object.freeze([
+  { key: 'recordId', label: 'Record ID' },
+  { key: 'recordType', label: 'Record Type' },
+  { key: 'schemaVersion', label: 'Schema Version' },
+  { key: 'formType', label: 'Form Type' },
+  { key: 'createdAt', label: 'Created At' },
+  { key: 'updatedAt', label: 'Updated At' },
+  { key: 'submittedAt', label: 'Submitted At' },
+  { key: 'idempotencyKey', label: 'Idempotency Key' },
+  { key: 'technicianName', label: 'Technician Name' },
+  { key: 'technicianEmail', label: 'Technician Email' },
+  { key: 'itSection', label: 'IT Section' },
+  { key: 'maintenanceDate', label: 'Maintenance Performed On' },
+  { key: 'maintenanceYear', label: 'Maintenance Year' },
+  { key: 'cycle', label: 'PMS Cycle' },
+  { key: 'cycleId', label: 'Cycle ID' },
+  { key: 'cycleDeadline', label: 'Cycle Deadline' },
+  { key: 'sourceSheet', label: 'Source Sheet' },
+  { key: 'sourceRow', label: 'Source Row' },
+  { key: 'assetType', label: 'IT-IS Asset Type' },
+  { key: 'assetTag', label: 'Asset Tag' },
+  { key: 'assetStatus', label: 'Asset Status' },
+  { key: 'masterLocation', label: 'Master Location' },
+  { key: 'observedLocation', label: 'Observed Location' },
+  { key: 'locationDiscrepancy', label: 'Location Discrepancy' },
+  { key: 'infraPowerCables', label: 'Physical - Power Cables Checked' },
+  { key: 'infraDataCables', label: 'Physical - Data Cables Checked' },
+  { key: 'infraPowerSupplyUps', label: 'Physical - Power Supply / UPS Checked' },
+  { key: 'infraFirmwareLatest', label: 'Digital - Firmware Version at Latest' },
+  { key: 'firmwareEvidenceFileId', label: 'Firmware Evidence - File ID' },
+  { key: 'firmwareEvidenceFileName', label: 'Firmware Evidence - File Name' },
+  { key: 'firmwareEvidenceUrl', label: 'Firmware Evidence - URL' },
+  { key: 'firmwareEvidenceMimeType', label: 'Firmware Evidence - MIME Type' },
+  { key: 'firmwareEvidenceSizeBytes', label: 'Firmware Evidence - Size Bytes' },
+  { key: 'firmwareEvidenceSha256', label: 'Firmware Evidence - SHA-256' },
+  { key: 'firmwareEvidenceUploadedAt', label: 'Firmware Evidence - Uploaded At' },
+  { key: 'firmwareEvidenceUploadedBy', label: 'Firmware Evidence - Uploaded By' },
+  { key: 'backupEvidenceFileId', label: 'Backup Evidence - File ID' },
+  { key: 'backupEvidenceFileName', label: 'Backup Evidence - File Name' },
+  { key: 'backupEvidenceUrl', label: 'Backup Evidence - URL' },
+  { key: 'backupEvidenceMimeType', label: 'Backup Evidence - MIME Type' },
+  { key: 'backupEvidenceSizeBytes', label: 'Backup Evidence - Size Bytes' },
+  { key: 'backupEvidenceSha256', label: 'Backup Evidence - SHA-256' },
+  { key: 'backupEvidenceUploadedAt', label: 'Backup Evidence - Uploaded At' },
+  { key: 'backupEvidenceUploadedBy', label: 'Backup Evidence - Uploaded By' },
+  { key: 'assessmentResult', label: 'Assessment Result' },
+  { key: 'assetFindings', label: 'Asset Findings' },
+  { key: 'actionTaken', label: 'Action Taken' },
+  { key: 'recommendation', label: 'Recommendation' },
+  { key: 'completedItems', label: 'Completed Items' },
+  { key: 'applicableItems', label: 'Applicable Items' },
+  { key: 'completionPercent', label: 'Completion Percent' },
+  { key: 'trackerSheet', label: 'Tracker Sheet' },
+  { key: 'trackerRow', label: 'Tracker Row' },
+  { key: 'trackerYear', label: 'Tracker Year' },
+  { key: 'trackerCycle', label: 'Tracker Cycle' },
+  { key: 'previousTrackerCheckbox', label: 'Previous Tracker Checkbox' },
+  { key: 'previousTrackerRemarks', label: 'Previous Tracker Remarks' },
+  { key: 'trackerSyncedAt', label: 'Tracker Synced At' },
+  { key: 'syncError', label: 'Sync Error' },
+  { key: 'reinspectionOf', label: 'Reinspection Of' },
+  { key: 'dataQualityFlags', label: 'Data Quality Flags' },
+  { key: 'pmsCompletion', label: 'PMS Completion' }
+]);
 
 Object.freeze(PMS.CONFIG);

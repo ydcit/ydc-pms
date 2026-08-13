@@ -110,9 +110,12 @@ PMS.Util = (function () {
     return '';
   }
 
-  function allChecklistItems() {
+  function allChecklistItems(sectionKey) {
     var result = [];
-    PMS.CONFIG.CHECKLIST.forEach(function (group) {
+    var groups = sectionKey === 'INFRA_SECURITY' && PMS.CONFIG.INFRA_CHECKLIST
+      ? PMS.CONFIG.INFRA_CHECKLIST
+      : PMS.CONFIG.CHECKLIST;
+    groups.forEach(function (group) {
       group.items.forEach(function (item) {
         result.push({
           key: item.key,

@@ -618,6 +618,24 @@ PMS.Users = (function () {
     return findByEmailUnlocked(usersSheet(false), email);
   }
 
+  /**
+   * Continuity lookup for a temporary Google user key that was previously
+   * bound while the visitor's real Workspace email was available. The hash is
+   * never accepted from the browser and an ambiguous binding fails closed.
+   */
+  function findByIdentityKey(identityHashValue) {
+    var identityHash = normalizeIdentityHash(identityHashValue, false);
+    if (!identityHash) return null;
+    ensureLegacyMigration();
+    var matches = allProfilesUnlocked(usersSheet(false)).filter(function (profile) {
+      return profile.active !== false && profile.identityKeyHash === identityHash;
+    });
+    if (matches.length > 1) {
+      PMS.Util.fail('A Google identity key is bound to more than one PMS user.', 'DATA_INTEGRITY_ERROR');
+    }
+    return matches.length ? matches[0] : null;
+  }
+
   function listProfiles() {
     ensureLegacyMigration();
     return allProfilesUnlocked(usersSheet(false));
@@ -719,6 +737,7 @@ PMS.Users = (function () {
     },
     migrateLegacyProfiles: migrateLegacyProfiles,
     findByEmail: findByEmail,
+    findByIdentityKey: findByIdentityKey,
     listProfiles: listProfiles,
     directoryDiagnostics: directoryDiagnostics,
     upsert: upsert,

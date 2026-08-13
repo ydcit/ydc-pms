@@ -2550,6 +2550,195 @@
     background: rgba(180, 83, 9, 0.14);
   }
 
+  /* Infrastructure evidence uploads ----------------------------------------- */
+
+  .infra-evidence {
+    display: grid;
+    gap: 16px;
+  }
+
+  .evidence-grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .evidence-card {
+    display: grid;
+    align-content: start;
+    gap: 12px;
+    min-width: 0;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    transition: border-color 130ms var(--ease), box-shadow 130ms var(--ease);
+  }
+
+  .evidence-card.has-selection {
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.05);
+  }
+
+  .evidence-card.has-error {
+    border-color: var(--danger);
+    box-shadow: var(--ring-danger);
+  }
+
+  .evidence-card__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+  }
+
+  .evidence-card__header > div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .evidence-card__header strong {
+    color: var(--ink);
+    font-size: 13.5px;
+    font-weight: 620;
+    line-height: 1.4;
+  }
+
+  .evidence-card__header p {
+    color: var(--muted);
+    font-size: 11.75px;
+    line-height: 1.5;
+  }
+
+  .evidence-card__icon {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    place-items: center;
+    border-radius: var(--r-sm);
+    background: var(--accent-soft);
+    color: var(--accent-press);
+  }
+
+  .evidence-card__icon .icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .evidence-current {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--success-line);
+    border-radius: var(--r-sm);
+    background: var(--success-soft);
+  }
+
+  .evidence-current span {
+    color: var(--success);
+    font-size: 10.5px;
+    font-weight: 620;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+  }
+
+  .evidence-current a {
+    overflow: hidden;
+    color: var(--success);
+    font-size: 12.5px;
+    font-weight: 570;
+    text-decoration: underline;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .evidence-picker {
+    position: relative;
+    display: grid;
+    gap: 2px;
+    justify-items: center;
+    min-height: 92px;
+    padding: 20px 14px;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface-soft);
+    text-align: center;
+    cursor: pointer;
+    overflow: hidden;
+    transition: border-color 130ms var(--ease), background 130ms var(--ease), box-shadow 130ms var(--ease);
+  }
+
+  .evidence-picker:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .evidence-picker:focus-within {
+    border-color: var(--accent);
+    box-shadow: var(--ring);
+  }
+
+  .evidence-picker__input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .evidence-picker__action {
+    color: var(--accent-press);
+    font-size: 12.5px;
+    font-weight: 620;
+  }
+
+  .evidence-picker small {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .evidence-selection {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .evidence-selection > div {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .evidence-selection strong,
+  .evidence-selection span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .evidence-selection strong {
+    color: var(--ink-soft);
+    font-size: 12px;
+    font-weight: 570;
+  }
+
+  .evidence-selection span {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .evidence-selection .text-button {
+    flex: none;
+    font-size: 11.5px;
+  }
+
   .checklist-groups {
     display: grid;
     gap: 14px;
@@ -2947,6 +3136,15 @@
     .derived-cycle > div + div {
       border-left: 0;
       border-top: 1px solid var(--line);
+    }
+
+    .evidence-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .evidence-selection {
+      align-items: flex-start;
+      flex-direction: column;
     }
 
     .rollover-form {

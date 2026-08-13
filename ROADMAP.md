@@ -1,14 +1,16 @@
 # Preventive Maintenance Web App — Implementation Roadmap
 
-**Status:** Version 1 implemented; pending Apps Script owner setup, deployment, and pilot validation  
-**Approval:** Implementation was explicitly authorized after PRD review  
-**Change policy:** `Code.js` remains unchanged. During normal version-1 operation, existing asset data stays read-only; the approved existing-tab writes are the matched asset's T1/T2/T3 checkbox and paired Remarks cell after a fully completed record, plus the explicit administrator-controlled annual rollover of D2 and D:I.
+**Status:** Version 1.1 implemented; pending deploying-owner Drive authorization, deployment, and pilot validation
+**Version:** 1.1
+**Updated:** 2026-08-13
+**Approval:** Implementation was explicitly authorized after PRD review
+**Change policy:** `Code.js` remains unchanged. During normal version-1.1 operation, existing asset data stays read-only; the approved existing-tab writes are the matched asset's T1/T2/T3 checkbox and paired Remarks cell after a fully completed record, plus the explicit administrator-controlled annual rollover of D2 and D:I.
 
 ## Delivery strategy
 
 Build the web app in small gates so identity and section isolation are proven before questionnaire data can be written. Every phase has an explicit exit check. Tracker synchronization is added only after the new response row, last-column completion logic, and failure recovery are verified.
 
-## Gate 0 — Product approval
+## Gate 0 — Product approval (complete)
 
 ### Work
 
@@ -26,7 +28,7 @@ Build the web app in small gates so identity and section isolation are proven be
 - Storage, authentication, registration, and historical-compliance choices recorded.
 - Explicit authorization to begin implementation received.
 
-## Phase 1 — Application skeleton and contracts
+## Phase 1 — Application skeleton and contracts (implemented)
 
 ### Planned files
 
@@ -40,6 +42,7 @@ Server-side Apps Script:
 - `PmsUsers.js` — persistent user directory, access roster, and legacy-profile migration.
 - `PmsAssets.js` — bounded asset reads, normalization, section filtering, revalidation.
 - `PmsRecords.js` — response schema, append, idempotency, duplicate/reinspection logic.
+- `PmsEvidence.js` — trusted Infra Drive uploads, validation, signed descriptors, and stored-file verification.
 - `PmsTracker.js` — controlled term-checkbox and full-assessment remarks synchronization.
 - `PmsRollover.js` — dry-run, year close/open, bounded reset, reconciliation, and rollover audit.
 - `PmsMetrics.js` — compliance and dashboard aggregation.
@@ -61,27 +64,30 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Add a collision-safe `PMS_` function naming convention or namespace.
 - Define constants for the two exact PMS tab names, their A/B/C asset contract, and D/E, F/G, H/I cycle mappings.
 - Derive cycle IDs from dates; do not hardcode 2026 or a finite year list.
-- Define the 20 checklist items and 10 peripheral types once on the server.
+- Define the 20 Service Desk checklist items, 10 peripheral types, four Infra checks, six Infra asset types, and two evidence destinations once on the server.
 - Add explicit business time-zone handling using `Asia/Manila` in new logic.
-- Review manifest scopes and API dependencies needed by the approved name-resolution option.
+- Declare `userinfo.email` and full Drive scope explicitly; keep the two evidence-folder IDs server-side.
 - Confirm the existing legacy Form updater still loads without changes.
 
 ### Exit criteria
 
 - Web-app shell renders from new files.
 - No existing workbook cells or files are changed.
+- The 70-column Service Desk schema and 62-column Infra schema are unique, section-routed, and finish with `PMS Completion`.
 - Configuration and schema tests pass for both sections and all cycle boundaries.
 
-## Phase 2 — Authentication and section registration
+## Phase 2 — Authentication and section registration (implemented; multi-account verification pending)
 
 ### Work
 
 - Configure a test deployment restricted to the YDC Workspace organization.
 - Declare `userinfo.email` in the manifest so Session identity is populated, and prove active-user email behavior with at least two non-owner YDC accounts.
+- Never use `Session.getEffectiveUser()` as the visitor identity in an execute-as-owner deployment.
 - Enforce the allowed domain on the server.
 - Require the signed-in email to exist in `PMS Users`, always permitting configured administrators.
 - Resolve the display name using the approved approach.
 - Implement first-use display-name and section registration backed by `PMS Users`.
+- Bind a server-hashed temporary active-user key for returning-technician continuity when `ActiveUser` is blank; deny registration and administrator functions on that path.
 - Lock section changes behind administrator authorization.
 - Add access-denied, not-provisioned, account-disabled, identity-unavailable, and authorization-required states.
 
@@ -93,18 +99,21 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Malformed roster row alongside a valid one.
 - Non-YDC account.
 - Blank/unavailable active email.
+- Blank active email with a unique active temporary-key binding, no binding, and an ambiguous binding.
 - First-time registration for each section.
 - Returning user.
+- Administrator call with a live `ActiveUser` versus temporary-key continuity only.
 - Attempted browser tampering with email, role, or section.
 
 ### Exit criteria
 
 - Two test users are reliably identified from their Google account alone, with no code prompt.
 - A non-rostered YDC account is refused with an actionable provisioning message.
+- Registration and administrator functions require a live `ActiveUser` email; continuity fallback never elevates access.
 - Cross-section server calls are rejected.
 - No technician needs direct workbook edit access under the selected deployment model.
 
-## Phase 3 — Dashboard shell and read-only data adapter
+## Phase 3 — Dashboard shell and read-only data adapter (implemented)
 
 ### Work
 
@@ -114,6 +123,8 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Add short-lived caching and bounded reads.
 - Build current-cycle banner and empty/loading/error states.
 - Implement the searchable asset combobox data source.
+- Return tracker year and T1/T2/T3 completion flags as presentation data so the browser can evaluate the cycle derived from the selected maintenance date.
+- Hide an asset only when it is already complete for that selected cycle in the matching tracker year; a T1 completion must not remove it from T2 or T3.
 - Add a read-only adapter for approved legacy checkbox completion metrics.
 
 ### Test cases
@@ -123,6 +134,8 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - `SPARE`, `DEFECTIVE`, and unusual statuses are excluded.
 - Blank tags are excluded and duplicates are de-duplicated.
 - Blank location remains visible as a data-quality state.
+- Changing the maintenance date between T1, T2, and T3 refreshes availability against that derived cycle.
+- A selected date whose year differs from the tracker year does not inherit an unrelated current tracker checkbox.
 
 ### Exit criteria
 
@@ -130,7 +143,7 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - No cross-section tag can be discovered through client calls.
 - Existing tabs remain unchanged during this read-only phase.
 
-## Phase 4 — Questionnaire modal
+## Phase 4 — Section-specific questionnaire modal (implemented)
 
 ### Work
 
@@ -139,11 +152,13 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Add `Maintenance Performed On` with year/cycle derivation.
 - Add searchable asset selection with read-only status and location.
 - Add conditional observed-location capture.
-- Add the ten peripheral tag inputs with chip behavior.
-- Add all six checklist categories, category progress, and overall progress.
-- Add explicit N/A handling for applicable items.
+- Render the Service Desk variant with ten peripheral tag inputs, six checklist categories, explicit N/A handling, category progress, and overall progress.
+- Render the Infrastructure & Security variant with `IT-IS Asset Type` before Asset tag; allow only Switch, Firewall, Access Point, OMADA Controller, Server, and FortiAnalyzer.
+- Filter known Infra tag prefixes by asset type and flag unknown future prefixes without exposing another section's assets.
+- Add the three Physical Checking items and one Digital Checking item for Infra.
+- Add the two Infra evidence pickers, saved-evidence links, per-file validation state, and `6/6` overall progress.
 - Add assessment result, findings, action, and recommendation.
-- Add **Save progress** for an `INCOMPLETE` record and **Complete PMS** for a 100% record.
+- Add **Save progress** for an `INCOMPLETE` record and **Complete PMS** only when the active section's full completion rule is met.
 - Add review screen, unsaved-change warning, accessible focus management, and mobile full-screen behavior.
 
 ### Test cases
@@ -152,26 +167,34 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Older valid dates and future invalid dates.
 - N/A denominator calculations.
 - Multiple peripheral tags of the same type.
+- All six Infra asset types, known prefix mismatches, and unknown prefixes.
+- Infra progress at 0/6 through 6/6, with completion blocked until four checks and both evidence files are ready.
+- Save/reload an Infra draft with one or both evidence files already attached.
 - Empty and incorrect master locations.
 - Keyboard-only and small-screen completion.
 
 ### Exit criteria
 
 - Every PRD field is represented.
-- Overall progress is correct; incomplete work can be saved, but **Complete PMS** cannot run below 100% applicable.
+- Service Desk and Infra users receive only their own questionnaire variant and asset source.
+- Overall progress is correct; incomplete work can be saved, but **Complete PMS** cannot run below 100% applicable for Service Desk or below `6/6` for Infra.
 - Client-side validation is helpful but never treated as authoritative.
 
-## Phase 5 — New response storage and server validation
+## Phase 5 — Separate response storage, evidence, and server validation (implemented)
 
 ### Work
 
-- Create only the approved new storage tab or tabs.
-- Create and verify stable headers before accepting writes.
+- Use `PMS Records` for Service Desk and create `PMS Records - Infra & Security` for the separate Infra schema.
+- Create and verify stable 70-column and 62-column headers before accepting writes; keep `PMS Completion` last in both.
 - Add final server-side identity, registration, section, asset, status, date, cycle, checklist, and assessment validation.
 - Use a script lock around record creation.
 - Generate a unique record ID and accept a client idempotency key.
 - Detect prior completion for asset + year + cycle and classify repeat work as reinspection.
 - Create an incomplete response row once, then update that same row by record ID as progress is saved.
+- Save an Infra draft first, then upload each selected file to its fixed server-configured Drive folder and commit its trusted metadata immediately.
+- Limit each file to 10 MiB; allowlist safe formats, reject scripts/executables/HTML/SVG and suspicious signatures, sanitize names, and calculate SHA-256.
+- Sign evidence descriptors against immutable record context and re-open/re-hash both files before completion and tracker reconciliation.
+- Preserve existing Drive ACLs and never create public sharing links.
 - Make `PMS Completion` the final physical column and populate its visual percentage/status value.
 - For a 100% record, write the full technician assessment into the correct cycle Remarks cell, preserving existing remarks.
 - Set the paired cycle checkbox only after the remarks write succeeds.
@@ -182,7 +205,11 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 ### Test cases
 
 - Valid record for each section.
+- Infra records are written only to `PMS Records - Infra & Security`; Service Desk records remain in `PMS Records`.
 - Manually injected wrong-section tag.
+- Manually injected evidence folder, uploader, asset, date, type, metadata, or signature.
+- Empty, oversized, disallowed, moved, trashed, changed, or inaccessible evidence file.
+- Interrupted first upload, interrupted second upload, reload, and safe retry without losing the committed file descriptor.
 - Asset changed from `INPROD` after the modal loaded.
 - Double-click and network retry.
 - Existing completion followed by a reinspection.
@@ -197,11 +224,12 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 ### Exit criteria
 
 - Save progress produces exactly one resumable row and one stable record ID.
+- Infra completion requires four checks and two verified evidence files (`6/6`).
 - Successful completion produces a verified remarks block, checked term, and final-column `COMPLETED` value.
 - Duplicate retries do not create duplicate rows.
 - Failure cannot leave an unchecked assessment marked complete or a checked asset without its assessment.
 
-## Phase 6 — Dashboard metrics and activity
+## Phase 6 — Dashboard metrics and activity (implemented; reconciliation verification pending)
 
 ### Work
 
@@ -209,6 +237,7 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - De-duplicate by asset + year + cycle.
 - Merge pre-existing and newly synchronized completion flags by unique asset/year/cycle union when approved.
 - Add section-scoped technician dashboard and recent activity.
+- Aggregate authorized metrics, recent activity, archive, duplicate detection, and reconciliation across both response tabs.
 - Add administrator filters and combined view.
 - Populate year filters dynamically from stored cycle IDs.
 - Add completion by location and pending-by-location views.
@@ -228,7 +257,7 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Dashboard totals reconcile to a separately calculated read-only sample.
 - User-scoped and administrator-scoped views pass authorization tests.
 
-## Phase 7 — Annual rollover and scalability
+## Phase 7 — Annual rollover and scalability (implemented; full rollover test pending)
 
 ### Work
 
@@ -260,7 +289,7 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Only the intended year and D:I operational tracker cells change.
 - Waiting new-year records reconcile without duplicates.
 
-## Phase 8 — Quality assurance and pilot
+## Phase 8 — Quality assurance and pilot (pending)
 
 ### Work
 
@@ -269,6 +298,7 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Verify Chrome desktop and mobile layouts.
 - Verify keyboard navigation, focus trapping, labels, contrast, and error announcements.
 - Conduct a pilot with one Service Desk and one Infrastructure & Security technician.
+- In the Infra pilot, verify both fixed Drive destinations, 10 MiB enforcement, draft recovery, evidence integrity checks, and `6/6` completion.
 - Reconcile pilot records against displayed dashboard metrics.
 - Review Apps Script execution logs and quotas.
 
@@ -279,12 +309,13 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Pilot metrics reconcile exactly.
 - Product owner signs off for production deployment.
 
-## Phase 9 — Controlled production release
+## Phase 9 — Controlled production release (pending)
 
 ### Work
 
 - Create a versioned production web-app deployment.
 - Restrict access to the approved Workspace organization.
+- Have the deploying owner authorize the added full Drive scope and run readiness checks for both fixed evidence folders before releasing Infra users.
 - Publish a short user guide and owner/admin runbook.
 - Communicate the cycle definition and compliance target.
 - Monitor initial submissions, failures, latency, and quota usage.
@@ -293,6 +324,7 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 ### Exit criteria
 
 - Production identity and section isolation are verified.
+- Both evidence destinations are readable by the deploying owner, uploads preserve existing ACLs, and a production Infra completion verifies both files.
 - First production records and metrics reconcile.
 - Support owner and escalation path are documented.
 
@@ -309,7 +341,7 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 
 | Risk | Mitigation |
 | --- | --- |
-| Active user email unavailable in chosen deployment mode | Declare `userinfo.email` in the manifest, fall back to `getEffectiveUser()`, and block rather than guess identity; `PMS_diagnoseSignIn` reports what Google actually returned |
+| Active user email unavailable in chosen deployment mode | Declare `userinfo.email`; use a unique server-hashed temporary-key binding only for an existing active technician; never use `getEffectiveUser()`, and require live `ActiveUser` for registration/admin |
 | Full Google account name unavailable from Session | Let the user confirm an email-derived display name once and persist it in `PMS Users` |
 | Unapproved domain account opens the deployment | Require a `PMS Users` roster row before any session is created |
 | One malformed roster row blocks all sign-ins | Skip unreadable rows with a logged warning; validate strictly only for the email being looked up |
@@ -319,6 +351,10 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 | Historical denominator changes with current status | Label version-1 metrics as live compliance; add a cycle-scope snapshot after approval |
 | Large Service Desk asset list is hard to use | Section-scoped searchable combobox and short-lived cache |
 | Duplicate rows from retries | Idempotency key, lock, and record verification |
+| Infra evidence is spoofed, moved, or changed | Fixed server-side folders, signed record-bound descriptors, stored metadata, SHA-256 verification, and revalidation before tracker synchronization |
+| Unsafe or oversized evidence is uploaded | 10 MiB per-file limit, extension/MIME allowlist, content-signature checks, and explicit script/executable/HTML/SVG denial |
+| Drive permissions broaden unintentionally | Execute uploads under the deploying owner, retain inherited folder ACLs, and never change sharing or publish a link |
+| Deploying owner has not authorized the Drive scope | Require owner reauthorization and evidence-folder readiness checks before production release |
 | Remarks written but checkbox/final status fails | Ordered writes, prior-value audit fields, `SYNC FAILED`, and reconciliation retry |
 | Existing remarks are overwritten or duplicated | Append with a record-ID marker; preserve prior value and upsert the same record block on retry |
 | Maintenance date maps to a different tracker year | Complete an archived past year in records without a tracker write; keep an ahead-of-tracker year as `SYNC REQUIRED`; never check the wrong term |
@@ -329,17 +365,16 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 
 ## Suggested later enhancements
 
-These are intentionally outside version 1:
+These are intentionally outside version 1.1:
 
 - Cycle-scope snapshots for audit-grade historical compliance.
 - Scheduled reminders as cycle deadlines approach.
 - Follow-up ownership and closure workflow.
 - Exportable compliance reports.
 - Asset QR/barcode scanning.
-- Attachment/photo evidence.
 - Automatic issue/ticket integration.
 - Offline drafts.
 
 ## Current handoff checkpoint
 
-Implementation is complete. The remaining gates are owner/admin bootstrap, organization-restricted web-app deployment, two-account authorization testing, and the controlled pilot described in Phase 8.
+Version 1.1 implementation is complete, including the section-specific Infra questionnaire and dedicated response tab. The remaining gates are deploying-owner authorization of the full Drive scope, both evidence-folder readiness checks, organization-restricted deployment, two-account identity/authorization testing, and the controlled Service Desk/Infra pilot described in Phase 8.

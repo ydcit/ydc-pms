@@ -14,6 +14,15 @@ function PMS_include(filename) {
 
 function PMS_publicConfig_() {
   var current = PMS.Util.currentCycle();
+  var evidence = {};
+  Object.keys(PMS.CONFIG.EVIDENCE).forEach(function (key) {
+    evidence[key] = {
+      key: key,
+      label: PMS.CONFIG.EVIDENCE[key].label,
+      maxBytes: PMS.CONFIG.MAX_EVIDENCE_BYTES,
+      accept: '.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff,.pdf,.txt,.log,.md,.csv,.json,.xml,.yaml,.yml,.zip,.cfg,.conf,.config,.ini,.bak,.backup'
+    };
+  });
   return {
     appName: PMS.CONFIG.APP_NAME,
     allowedDomain: PMS.CONFIG.ALLOWED_DOMAIN,
@@ -32,6 +41,25 @@ function PMS_publicConfig_() {
     currentCycle: current,
     peripherals: PMS.CONFIG.PERIPHERALS,
     checklist: PMS.CONFIG.CHECKLIST,
+    infraAssetTypes: PMS.CONFIG.INFRA_ASSET_TYPES,
+    infraChecklist: PMS.CONFIG.INFRA_CHECKLIST,
+    evidence: evidence,
+    questionnaires: {
+      SERVICE_DESK: {
+        key: 'SERVICE_DESK',
+        peripherals: PMS.CONFIG.PERIPHERALS,
+        checklist: PMS.CONFIG.CHECKLIST,
+        assetTypes: [],
+        evidence: []
+      },
+      INFRA_SECURITY: {
+        key: 'INFRA_SECURITY',
+        peripherals: [],
+        checklist: PMS.CONFIG.INFRA_CHECKLIST,
+        assetTypes: PMS.CONFIG.INFRA_ASSET_TYPES,
+        evidence: evidence
+      }
+    },
     assessmentResults: PMS.CONFIG.ASSESSMENT_RESULTS
   };
 }
@@ -72,7 +100,7 @@ function PMS_buildBootstrap_() {
       isAdmin: context.isAdmin,
       role: context.role,
       active: context.active,
-      identitySource: 'GOOGLE_ACCOUNT'
+      identitySource: context.identitySource
     },
     profile: {
       section: context.section,
@@ -169,6 +197,15 @@ function PMS_apiSaveRecord(payload, mode) {
   return PMS_jsonResponse_(PMS.Records.save(payload, mode));
 }
 
+/**
+ * Receives a form element as the sole google.script.run argument. Its `file`
+ * field arrives as an Apps Script Blob; all destination and identity values are
+ * resolved and verified again on the server.
+ */
+function PMS_apiUploadInfraEvidence(uploadForm) {
+  return PMS_jsonResponse_(PMS.Evidence.upload(uploadForm));
+}
+
 function PMS_apiGetRecord(recordId) {
   return PMS_jsonResponse_(PMS.Records.clientRecord(recordId));
 }
@@ -192,15 +229,19 @@ function PMS_apiAdminSetUserSection(userEmail, sectionKey) {
 function PMS_adminSetup() {
   PMS.Auth.requireAdmin();
   var users = PMS.Users.ensureSheet();
-  var sheet = PMS.Records.responseSheet(true);
+  var serviceDeskSheet = PMS.Records.responseSheet(true, 'SERVICE_DESK');
+  var infraSheet = PMS.Records.responseSheet(true, 'INFRA_SECURITY');
   var baseline = PMS.Records.ensureTrackerBaseline();
   return {
     ok: true,
     userSheetName: users.getName(),
-    sheetName: sheet.getName(),
-    columns: PMS.CONFIG.RECORD_COLUMNS.length,
+    recordSheets: [
+      { name: serviceDeskSheet.getName(), columns: PMS.CONFIG.RECORD_COLUMNS.length },
+      { name: infraSheet.getName(), columns: PMS.CONFIG.INFRA_RECORD_COLUMNS.length }
+    ],
     baseline: baseline,
-    message: 'PMS Users and PMS Records are ready.'
+    evidence: PMS.Evidence.readiness(),
+    message: 'PMS Users, both section record sheets, and evidence folders are ready.'
   };
 }
 
@@ -225,13 +266,15 @@ function PMS_setupDeployment_() {
   if (admins.indexOf(email) < 0) admins.push(email);
   PropertiesService.getScriptProperties().setProperty(PMS.CONFIG.ADMIN_EMAILS_PROPERTY, admins.join(','));
   var userMigration = PMS.Users.migrateLegacyProfiles();
+  var evidence = PMS.Evidence.readiness();
   return {
     ok: true,
     administrator: email,
     administrators: admins,
     identity: PMS.Auth.diagnostics(),
     userDirectory: userMigration,
-    message: 'Deployment administrator configured. Deploy the web app to execute as the owner and restrict access to ydc.com.ph.'
+    evidence: evidence,
+    message: 'Deployment administrator and evidence storage configured. Deploy the web app to execute as the owner and restrict access to ydc.com.ph.'
   };
 }
 
@@ -241,6 +284,7 @@ function PMS_setupDeployment_() {
  * PMS Users roster. Changes no data.
  */
 function PMS_diagnoseSignIn() {
+  PMS.Auth.requireAdmin();
   return PMS.Auth.diagnostics();
 }
 
@@ -252,6 +296,7 @@ function PMS_diagnoseSignIn() {
  * fails, the underlying error and stack.
  */
 function PMS_logSignInReport() {
+  PMS.Auth.requireAdmin();
   var report = {};
   try {
     report.diagnostics = PMS.Auth.diagnostics();

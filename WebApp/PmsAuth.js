@@ -8,28 +8,21 @@ var PMS = PMS || {};
  *   2. The email must belong to the configured Workspace domain.
  *   3. The email must exist in the `PMS Users` sheet and must not be disabled.
  *
- * There is no email code, one-time password, or second factor. The domain
- * deployment plus the `PMS Users` roster is the authorization boundary, so the
- * browser is still never trusted for email, section, or role.
+ * If Google temporarily withholds a returning visitor's email, a previously
+ * bound, script-specific temporary user key may resolve that existing profile.
+ * It cannot register a new user or grant administrator privileges. The browser
+ * is never trusted for email, section, or role.
  */
 PMS.Auth = (function () {
   function sessionEmail() {
-    // getActiveUser() is the visitor. When the web app executes as the owner,
-    // Google only exposes it for accounts in the owner's Workspace domain, and
-    // only when the userinfo.email scope has been granted. getEffectiveUser()
-    // is the fallback so the owner can always run editor-side setup.
-    var candidates = [
-      function () { return Session.getActiveUser().getEmail(); },
-      function () { return Session.getEffectiveUser().getEmail(); }
-    ];
-    for (var index = 0; index < candidates.length; index += 1) {
-      var value = '';
-      try {
-        value = PMS.Util.normalizeEmail(candidates[index]());
-      } catch (error) {
-        console.warn('A Google account email source was unavailable: ' + error.message);
-      }
-      if (value) return value;
+    // Only ActiveUser identifies the visitor. In an execute-as-owner web app,
+    // EffectiveUser is the deployment owner for every request and must never be
+    // used as an identity fallback; doing so would attribute every technician's
+    // work (and administrator privileges) to that owner.
+    try {
+      return PMS.Util.normalizeEmail(Session.getActiveUser().getEmail());
+    } catch (error) {
+      console.warn('The signed-in Google account email is unavailable: ' + error.message);
     }
     return '';
   }
@@ -57,9 +50,23 @@ PMS.Auth = (function () {
     return requireDomain(email);
   }
 
+  function resolveIdentity() {
+    var liveEmail = sessionEmail();
+    if (liveEmail) {
+      return { email: requireDomain(liveEmail), source: 'GOOGLE_ACCOUNT', profile: null };
+    }
+    var identityHash = temporaryIdentityHash();
+    var profile = identityHash ? PMS.Users.findByIdentityKey(identityHash) : null;
+    if (profile && profile.email && profile.active !== false) {
+      return { email: requireDomain(profile.email), source: 'TEMPORARY_KEY', profile: profile };
+    }
+    failIdentityUnavailable();
+  }
+
   /**
-   * Hash of Google's temporary user key. Retained only as an audit value in
-   * `PMS Users`; it is never used to authenticate or to resolve a profile.
+   * Hash of Google's temporary user key. It is bound only after a live email
+   * has identified the user, and can later restore that existing technician
+   * profile when Google withholds the email. It never grants admin privileges.
    */
   function temporaryIdentityHash() {
     var key = '';
@@ -129,7 +136,7 @@ PMS.Auth = (function () {
     return null;
   }
 
-  function recordLogin(email, profile) {
+  function recordLogin(email, profile, identitySource) {
     if (!profile) return profile;
     var touchCache = CacheService.getScriptCache();
     var touchCacheKey = 'PMS_USER_TOUCH_' + PMS.Util.hashText(email).slice(0, 24);
@@ -140,7 +147,7 @@ PMS.Auth = (function () {
     }
     var updated = PMS.Users.touchLogin(email, {
       identityKeyHash: temporaryIdentityHash(),
-      identitySource: 'GOOGLE_ACCOUNT'
+      identitySource: identitySource || 'GOOGLE_ACCOUNT'
     }) || profile;
     try {
       touchCache.put(touchCacheKey, '1', 900);
@@ -169,10 +176,11 @@ PMS.Auth = (function () {
   }
 
   function buildContext() {
-    var email = currentEmail();
-    var profile = recordLogin(email, resolveProfile(email));
+    var identity = resolveIdentity();
+    var email = identity.email;
+    var profile = recordLogin(email, identity.profile || resolveProfile(email), identity.source);
     var name = profile && profile.name ? profile.name : displayNameFromEmail(email);
-    var administrator = isAdmin(email);
+    var administrator = identity.source === 'GOOGLE_ACCOUNT' && isAdmin(email);
     return {
       email: email,
       name: name,
@@ -184,7 +192,7 @@ PMS.Auth = (function () {
         : '',
       isAdmin: administrator,
       role: administrator ? 'ADMIN' : 'TECHNICIAN',
-      identitySource: 'GOOGLE_ACCOUNT',
+      identitySource: identity.source,
       registeredAt: profile ? profile.registeredAt : '',
       updatedAt: profile ? profile.updatedAt : '',
       lastLoginAt: profile ? profile.lastLoginAt : ''
@@ -245,6 +253,9 @@ PMS.Auth = (function () {
     var context = getContext();
     if (!context.registered) {
       PMS.Util.fail('Complete IT section registration before using administrator tools.', 'REGISTRATION_REQUIRED');
+    }
+    if (context.identitySource !== 'GOOGLE_ACCOUNT') {
+      PMS.Util.fail('Google must expose your live Workspace email for administrator actions. Reload and sign in again.', 'IDENTITY_UNAVAILABLE');
     }
     if (!context.isAdmin) {
       PMS.Util.fail('Administrator access is required.', 'ACCESS_DENIED');

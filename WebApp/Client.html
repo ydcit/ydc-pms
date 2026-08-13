@@ -11,13 +11,19 @@
       assets: [],
       assetMap: new Map(),
       peripherals: [],
+      serviceDeskChecklistGroups: [],
+      infraChecklistGroups: [],
       checklistGroups: [],
+      infraAssetTypes: [],
+      evidenceConfig: {},
+      infraEvidence: { firmware: null, backup: null },
       peripheralValues: {},
       checklistValues: {},
       currentStep: 1,
       recordId: '',
       idempotencyKey: '',
       selectedAsset: null,
+      loadedAssetTag: '',
       dirty: false,
       modalOpen: false,
       busy: false,
@@ -114,6 +120,53 @@
         ]
       }
     ];
+
+    var FALLBACK_INFRA_ASSET_TYPES = [
+      'Switch',
+      'Firewall',
+      'Access Point',
+      'OMADA Controller',
+      'Server',
+      'FortiAnalyzer'
+    ];
+
+    var FALLBACK_INFRA_CHECKLIST = [
+      {
+        key: 'physical',
+        label: 'Physical Checking',
+        description: 'Cabling, power, and supporting equipment',
+        items: [
+          { key: 'infraPowerCables', label: 'Power Cables Checked' },
+          { key: 'infraDataCables', label: 'Data Cables Checked' },
+          { key: 'infraPowerSupplyUps', label: 'Power Supply / UPS Checked' }
+        ]
+      },
+      {
+        key: 'digital',
+        label: 'Digital Checking',
+        description: 'Firmware currency and device readiness',
+        items: [
+          { key: 'infraFirmwareLatest', label: 'Firmware Version at latest' }
+        ]
+      }
+    ];
+
+    var DEFAULT_EVIDENCE_BYTES = 10 * 1024 * 1024;
+    var DEFAULT_EVIDENCE_ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp';
+    var FALLBACK_EVIDENCE = {
+      firmware: {
+        key: 'firmware',
+        label: 'Latest Firmware Version Evidence',
+        maxBytes: DEFAULT_EVIDENCE_BYTES,
+        accept: DEFAULT_EVIDENCE_ACCEPT
+      },
+      backup: {
+        key: 'backup',
+        label: 'Configurations / Backup / Checkpoints Evidence',
+        maxBytes: DEFAULT_EVIDENCE_BYTES,
+        accept: DEFAULT_EVIDENCE_ACCEPT
+      }
+    };
 
     function byId(id) {
       return document.getElementById(id);
@@ -247,7 +300,9 @@
       document.querySelectorAll('button').forEach(function (button) {
         if (button.closest('#busy-overlay')) return;
         if (state.busy) {
-          button.dataset.wasDisabled = button.disabled ? 'true' : 'false';
+          if (button.dataset.wasDisabled === undefined) {
+            button.dataset.wasDisabled = button.disabled ? 'true' : 'false';
+          }
           button.disabled = true;
         } else if (button.dataset.wasDisabled !== undefined) {
           button.disabled = button.dataset.wasDisabled === 'true';
@@ -348,7 +403,7 @@
       return normalized.length ? normalized : FALLBACK_PERIPHERALS.slice();
     }
 
-    function normalizeChecklist(value) {
+    function normalizeChecklist(value, fallback) {
       var source = value;
       if (!Array.isArray(source) && source && typeof source === 'object') {
         source = Object.keys(source).map(function (key) {
@@ -404,21 +459,88 @@
         }
       }
 
-      return groups.length ? groups : FALLBACK_CHECKLIST.slice();
+      return groups.length ? groups : (fallback || FALLBACK_CHECKLIST).slice();
+    }
+
+    function normalizeStringOptions(value, fallback) {
+      var seen = {};
+      var options = toArray(value).map(function (entry) {
+        return normalizeText(typeof entry === 'string' ? entry : pick(entry, ['label', 'name', 'value', 'title'], ''));
+      }).filter(function (entry) {
+        var key = entry.toUpperCase();
+        if (!entry || seen[key]) return false;
+        seen[key] = true;
+        return true;
+      });
+      return options.length ? options : (fallback || []).slice();
+    }
+
+    function normalizeAccept(value) {
+      if (Array.isArray(value)) return value.map(normalizeText).filter(Boolean).join(',');
+      return normalizeText(value) || DEFAULT_EVIDENCE_ACCEPT;
+    }
+
+    function normalizeEvidenceConfig(value) {
+      var source = value && typeof value === 'object' ? value : {};
+      var sharedMax = asNumber(pick(source, ['maxBytes', 'maximumBytes', 'fileSizeLimit'], DEFAULT_EVIDENCE_BYTES), DEFAULT_EVIDENCE_BYTES);
+      var sharedAccept = normalizeAccept(pick(source, ['accept', 'acceptedTypes', 'mimeTypes'], DEFAULT_EVIDENCE_ACCEPT));
+      var normalized = {};
+      Object.keys(FALLBACK_EVIDENCE).forEach(function (kind) {
+        var fallback = FALLBACK_EVIDENCE[kind];
+        var item = source[kind] || source[fallback.key] || {};
+        normalized[kind] = {
+          key: kind,
+          label: normalizeText(pick(item, ['label', 'name', 'title'], fallback.label)) || fallback.label,
+          maxBytes: Math.max(1, asNumber(pick(item, ['maxBytes', 'maximumBytes', 'fileSizeLimit'], sharedMax), sharedMax)),
+          accept: normalizeAccept(pick(item, ['accept', 'acceptedTypes', 'mimeTypes'], sharedAccept))
+        };
+      });
+      return normalized;
+    }
+
+    function questionnaireConfig(kind) {
+      var questionnaires = state.config.questionnaires || {};
+      if (kind === 'infra') {
+        return questionnaires.infraSecurity || questionnaires.INFRA_SECURITY || questionnaires.infra || {};
+      }
+      return questionnaires.serviceDesk || questionnaires.SERVICE_DESK || {};
+    }
+
+    function normalizedCompletedCycles(asset) {
+      var value = pick(asset, ['completedCycles', 'cycles'], []);
+      var output = [];
+      if (Array.isArray(value)) {
+        value.forEach(function (entry) {
+          var cycle = normalizeText(typeof entry === 'string' ? entry : pick(entry, ['cycleId', 'cycle', 'key'], ''));
+          var completed = typeof entry === 'object' ? pick(entry, ['completed', 'checked', 'done'], true) : true;
+          if (cycle && completed !== false) output.push(cycle.toUpperCase());
+        });
+      } else if (value && typeof value === 'object') {
+        Object.keys(value).forEach(function (key) {
+          var entry = value[key];
+          var completed = typeof entry === 'object' ? pick(entry, ['completed', 'checked', 'done'], true) : entry;
+          if (completed === true || normalizeText(completed).toUpperCase() === 'COMPLETED') output.push(normalizeText(key).toUpperCase());
+        });
+      } else {
+        normalizeText(value).split(/[|,;\s]+/).filter(Boolean).forEach(function (cycle) { output.push(cycle.toUpperCase()); });
+      }
+      return output.filter(function (cycle, index) { return output.indexOf(cycle) === index; });
     }
 
     function normalizeAssets(value) {
       var seen = new Set();
       return toArray(value).map(function (asset) {
         if (typeof asset === 'string') {
-          return { tag: normalizeTag(asset), status: 'INPROD', location: '', sourceTab: '' };
+          return { tag: normalizeTag(asset), status: 'INPROD', location: '', sourceTab: '', completedCycles: [] };
         }
         return {
           tag: normalizeTag(pick(asset, ['tag', 'assetTag', 'asset', 'id'], '')),
           status: normalizeText(pick(asset, ['status', 'equipmentStatus'], 'INPROD')).toUpperCase(),
           location: normalizeText(pick(asset, ['location', 'masterLocation'], '')),
           sourceTab: normalizeText(pick(asset, ['sourceTab', 'sheetName', 'source'], '')),
-          row: pick(asset, ['row', 'sourceRow'], null)
+          row: pick(asset, ['row', 'sourceRow'], null),
+          trackerYear: asNumber(pick(asset, ['trackerYear', 'year'], 0), 0),
+          completedCycles: normalizedCompletedCycles(asset)
         };
       }).filter(function (asset) {
         if (!asset.tag || seen.has(asset.tag)) return false;
@@ -429,6 +551,10 @@
 
     function sectionKey() {
       return normalizeText(pick(state.profile, ['sectionKey', 'section', 'itSection'], pick(state.user, ['sectionKey', 'section'], '')));
+    }
+
+    function isInfraSection() {
+      return sectionKey().toUpperCase() === 'INFRA_SECURITY';
     }
 
     function sectionLabel(key) {
@@ -450,17 +576,25 @@
     }
 
     function initializeSchema() {
+      var serviceDesk = questionnaireConfig('serviceDesk');
+      var infra = questionnaireConfig('infra');
       state.sections = normalizeSections(state.config.sections);
-      state.peripherals = normalizePeripherals(state.config.peripherals);
-      state.checklistGroups = normalizeChecklist(state.config.checklist);
+      state.peripherals = normalizePeripherals(pick(serviceDesk, ['peripherals'], state.config.peripherals));
+      state.serviceDeskChecklistGroups = normalizeChecklist(pick(serviceDesk, ['checklist'], state.config.checklist), FALLBACK_CHECKLIST);
+      state.infraChecklistGroups = normalizeChecklist(pick(infra, ['checklist'], state.config.infraChecklist || FALLBACK_INFRA_CHECKLIST), FALLBACK_INFRA_CHECKLIST);
+      state.checklistGroups = isInfraSection() ? state.infraChecklistGroups : state.serviceDeskChecklistGroups;
+      state.infraAssetTypes = normalizeStringOptions(pick(infra, ['assetTypes', 'types'], state.config.infraAssetTypes), FALLBACK_INFRA_ASSET_TYPES);
+      state.evidenceConfig = normalizeEvidenceConfig(pick(infra, ['evidence'], state.config.evidence));
       state.assets = normalizeAssets(state.bootstrap.assets);
       state.assetMap = new Map();
       state.assets.forEach(function (asset) { state.assetMap.set(asset.tag, asset); });
       resetFormData();
+      applyQuestionnaireMode();
       renderRegistrationOptions();
       renderAssetOptions();
       renderPeripheralSchema();
       renderChecklistSchema();
+      renderEvidenceUI();
     }
 
     function applyBootstrap(data) {
@@ -679,9 +813,10 @@
       byId('dashboard-eyebrow').textContent = sectionLabel(sectionKey()) || 'PMS workspace';
       byId('dashboard-title').textContent = 'Maintenance overview';
       byId('dashboard-welcome').textContent = 'Welcome back, ' + (userName() || 'technician') + '. Track this cycle’s preventive maintenance coverage.';
+      var hasOpenAsset = hasAnyOpenAssetCycle();
       [byId('new-record-button'), byId('empty-new-record')].forEach(function (button) {
-        button.disabled = state.assets.length === 0;
-        button.title = state.assets.length ? 'Open the preventive maintenance questionnaire' : 'Every INPROD asset in your section is already checked off in the tracker';
+        button.disabled = !hasOpenAsset;
+        button.title = hasOpenAsset ? 'Open the preventive maintenance questionnaire' : 'No INPROD assets are available in your IT section';
       });
       byId('cycle-badge').textContent = cycle;
       byId('cycle-banner-title').textContent = year + ' ' + cycle + ' preventive maintenance';
@@ -1409,21 +1544,66 @@
       };
     }
 
+    function assetCompletedForCycle(asset, derived) {
+      if (!derived) return false;
+      if (asset.trackerYear && asset.trackerYear !== derived.year) return false;
+      var cycles = toArray(asset && asset.completedCycles).map(function (cycle) { return normalizeText(cycle).toUpperCase(); });
+      return cycles.indexOf(derived.cycleId.toUpperCase()) >= 0 || cycles.indexOf(derived.cycle.toUpperCase()) >= 0;
+    }
+
+    function inferredInfraAssetType(tag) {
+      var match = /-([A-Z]+)-\d+[A-Z0-9]*$/.exec(normalizeTag(tag));
+      if (!match) return '';
+      return {
+        AP: 'Access Point',
+        SW: 'Switch',
+        FW: 'Firewall',
+        SVR: 'Server'
+      }[match[1]] || '';
+    }
+
+    function assetMatchesInfraType(asset) {
+      if (!isInfraSection()) return true;
+      var selectedType = normalizeText(byId('infra-asset-type').value);
+      if (!selectedType) return true;
+      var inferred = inferredInfraAssetType(asset.tag);
+      // Unknown and future prefixes stay visible; the server is authoritative.
+      return !inferred || inferred === selectedType;
+    }
+
+    function availableAssets() {
+      var derived = deriveCycle(byId('maintenance-date').value);
+      return state.assets.filter(function (asset) {
+        if (state.loadedAssetTag && asset.tag === state.loadedAssetTag) return true;
+        return !assetCompletedForCycle(asset, derived) && assetMatchesInfraType(asset);
+      });
+    }
+
+    function hasAnyOpenAssetCycle() {
+      // A technician may enter a valid historical maintenance date. Current
+      // tracker flags only block their matching tracker year and cycle after
+      // the date is selected, so the modal stays available whenever assets exist.
+      return state.assets.length > 0;
+    }
+
     function renderAssetOptions() {
       state.combobox.activeIndex = -1;
-      byId('asset-help').textContent = state.assets.length
-        ? ('Search ' + formatNumber(state.assets.length) + ' INPROD assets still awaiting PMS in ' + sectionLabel(sectionKey()) + '.')
-        : 'Every INPROD asset in your section is already checked off in the tracker.';
+      var available = availableAssets();
+      var derived = deriveCycle(byId('maintenance-date').value);
+      byId('asset-help').textContent = available.length
+        ? ('Search ' + formatNumber(available.length) + ' eligible INPROD assets for ' + (derived ? derived.cycleId : 'the selected cycle') + ' in ' + sectionLabel(sectionKey()) + '.')
+        : ('No INPROD assets match the selected cycle' + (isInfraSection() && byId('infra-asset-type').value ? ' and asset type' : '') + '.');
       renderAssetList();
     }
 
     /** Prefix matches rank above substring matches, then location matches. */
     function matchingAssets(query) {
       var term = normalizeTag(query);
-      if (!term) return state.assets.slice();
+      var eligible = availableAssets();
+      if (!term) return eligible;
       var starts = [];
       var contains = [];
-      state.assets.forEach(function (asset) {
+      eligible.forEach(function (asset) {
         var position = asset.tag.indexOf(term);
         if (position === 0) starts.push(asset);
         else if (position > 0) contains.push(asset);
@@ -1441,9 +1621,9 @@
       if (!matches.length) {
         var empty = document.createElement('p');
         empty.className = 'combobox__empty';
-        empty.textContent = state.assets.length
+        empty.textContent = availableAssets().length
           ? 'No asset matches that search.'
-          : 'No assets are awaiting PMS in your section.';
+          : 'No assets are awaiting PMS for this cycle and asset type.';
         parts.panel.appendChild(empty);
         return;
       }
@@ -1517,7 +1697,6 @@
 
     function openAssetList(refilter) {
       var parts = assetCombobox();
-      if (!state.assets.length) return;
       if (refilter !== false) renderAssetList();
       parts.panel.hidden = false;
       parts.wrap.classList.add('is-open');
@@ -1584,6 +1763,214 @@
         event.stopPropagation();
         closeAssetList();
       }
+    }
+
+    function renderInfraAssetTypeOptions() {
+      var select = byId('infra-asset-type');
+      var current = normalizeText(select.value);
+      select.replaceChildren();
+      var placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Select an IT-IS asset type';
+      select.appendChild(placeholder);
+      state.infraAssetTypes.forEach(function (assetType) {
+        var option = document.createElement('option');
+        option.value = assetType;
+        option.textContent = assetType;
+        select.appendChild(option);
+      });
+      if (state.infraAssetTypes.indexOf(current) >= 0) select.value = current;
+    }
+
+    function applyQuestionnaireMode() {
+      var infra = isInfraSection();
+      renderInfraAssetTypeOptions();
+      byId('infra-asset-type-field').hidden = !infra;
+      byId('infra-asset-type').required = infra;
+      byId('service-desk-peripherals').hidden = infra;
+      byId('infra-evidence').hidden = !infra;
+      byId('review-asset-type-row').hidden = !infra;
+      byId('review-evidence-row').hidden = !infra;
+      byId('stepper-step-2-label').textContent = infra ? 'Evidence' : 'Peripherals';
+      byId('step-2-title').textContent = infra ? 'Maintenance evidence' : 'Included peripheral asset tags';
+      byId('step-2-description').textContent = infra
+        ? 'Attach firmware and configuration, backup, or checkpoint evidence for this asset.'
+        : 'Add every tagged peripheral included in this maintenance. These fields are optional.';
+      byId('step-3-description').textContent = infra
+        ? 'Complete all physical and digital checks for the infrastructure asset.'
+        : 'Complete every applicable check. Use N/A only where the checklist explicitly allows it.';
+      byId('modal-progress-title').textContent = infra ? 'PMS completion' : 'Checklist progress';
+      byId('modal-progress').setAttribute('aria-label', infra ? 'Infrastructure PMS completion progress' : 'Questionnaire checklist progress');
+    }
+
+    function evidenceInput(kind) {
+      return byId(kind + '-evidence-file');
+    }
+
+    function evidenceFile(kind) {
+      var input = evidenceInput(kind);
+      return input && input.files && input.files.length ? input.files[0] : null;
+    }
+
+    function evidenceDescriptor(value, kind) {
+      var source = value && typeof value === 'object' ? value : null;
+      if (!source) return null;
+      if (source.descriptor && typeof source.descriptor === 'object') source = source.descriptor;
+      if (source.evidence && typeof source.evidence === 'object') {
+        source = source.evidence[kind] || source.evidence;
+      }
+      if (!source || typeof source !== 'object') return null;
+      var descriptor = Object.assign({}, source);
+      descriptor.fileId = normalizeText(pick(source, ['fileId', 'id'], ''));
+      descriptor.fileName = normalizeText(pick(source, ['fileName', 'name', 'title'], ''));
+      descriptor.url = normalizeText(pick(source, ['url', 'webViewLink', 'fileUrl'], ''));
+      descriptor.mimeType = normalizeText(pick(source, ['mimeType', 'contentType'], ''));
+      descriptor.sizeBytes = asNumber(pick(source, ['sizeBytes', 'size'], 0), 0);
+      return descriptor.fileId && descriptor.url ? descriptor : null;
+    }
+
+    function recordEvidence(source, kind) {
+      if (source.evidence && source.evidence[kind]) return evidenceDescriptor(source.evidence[kind], kind);
+      var direct = source[kind + 'Evidence'] || source['evidence' + kind.charAt(0).toUpperCase() + kind.slice(1)];
+      if (direct) return evidenceDescriptor(direct, kind);
+      var prefix = kind === 'firmware' ? 'firmwareEvidence' : 'backupEvidence';
+      var flattened = {
+        fileId: source[prefix + 'FileId'],
+        fileName: source[prefix + 'FileName'],
+        url: source[prefix + 'Url'],
+        mimeType: source[prefix + 'MimeType'],
+        sizeBytes: source[prefix + 'SizeBytes'],
+        sha256: source[prefix + 'Sha256'],
+        uploadedAt: source[prefix + 'UploadedAt'],
+        uploadedBy: source[prefix + 'UploadedBy'],
+        signature: source[prefix + 'Signature']
+      };
+      return evidenceDescriptor(flattened, kind);
+    }
+
+    function safeEvidenceUrl(value) {
+      var url = normalizeText(value);
+      if (!/^https:\/\//i.test(url)) return '';
+      try {
+        return new URL(url).protocol === 'https:' ? url : '';
+      } catch (ignore) {
+        return '';
+      }
+    }
+
+    function formatBytes(value) {
+      var bytes = Math.max(0, asNumber(value, 0));
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0) + ' KiB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MiB';
+    }
+
+    function evidenceConfig(kind) {
+      return state.evidenceConfig[kind] || FALLBACK_EVIDENCE[kind];
+    }
+
+    function fileMatchesAccept(file, accept) {
+      var tokens = normalizeAccept(accept).toLowerCase().split(',').map(normalizeText).filter(Boolean);
+      var name = normalizeText(file.name).toLowerCase();
+      var mime = normalizeText(file.type).toLowerCase();
+      return tokens.some(function (token) {
+        if (token.charAt(0) === '.') return name.slice(-token.length) === token;
+        if (token.slice(-2) === '/*') return mime.indexOf(token.slice(0, -1)) === 0;
+        return mime === token;
+      });
+    }
+
+    function setEvidenceError(kind, message) {
+      var card = byId(kind + '-evidence-card');
+      var error = byId(kind + '-evidence-error');
+      error.textContent = normalizeText(message);
+      error.hidden = !error.textContent;
+      card.classList.toggle('has-error', Boolean(error.textContent));
+      evidenceInput(kind).setAttribute('aria-invalid', error.textContent ? 'true' : 'false');
+    }
+
+    function clearEvidenceError(kind) {
+      setEvidenceError(kind, '');
+      evidenceInput(kind).removeAttribute('aria-invalid');
+    }
+
+    function validateEvidenceFile(kind, showError) {
+      var file = evidenceFile(kind);
+      if (!file) return true;
+      var config = evidenceConfig(kind);
+      var message = '';
+      if (file.size <= 0) message = 'Choose a non-empty evidence file.';
+      else if (file.size > config.maxBytes) message = 'The selected file exceeds the ' + formatBytes(config.maxBytes) + ' limit.';
+      else if (!fileMatchesAccept(file, config.accept)) message = 'Choose a supported evidence file type.';
+      if (message && showError) setEvidenceError(kind, message);
+      if (!message) clearEvidenceError(kind);
+      return !message;
+    }
+
+    function evidenceReady(kind) {
+      var selected = evidenceFile(kind);
+      return Boolean((selected && validateEvidenceFile(kind, false)) || state.infraEvidence[kind]);
+    }
+
+    function evidenceReadyCount() {
+      return ['firmware', 'backup'].filter(evidenceReady).length;
+    }
+
+    function renderEvidenceKind(kind) {
+      var config = evidenceConfig(kind);
+      var descriptor = state.infraEvidence[kind];
+      var file = evidenceFile(kind);
+      var card = byId(kind + '-evidence-card');
+      var current = byId(kind + '-evidence-current');
+      var link = byId(kind + '-evidence-link');
+      var url = descriptor ? safeEvidenceUrl(descriptor.url) : '';
+      byId(kind + '-evidence-label').textContent = config.label;
+      evidenceInput(kind).accept = config.accept;
+      byId(kind + '-evidence-help').textContent = 'Supported document, image, archive, or configuration file. Maximum ' + formatBytes(config.maxBytes) + '.';
+      current.hidden = !descriptor;
+      if (descriptor) {
+        link.textContent = descriptor.fileName || 'Open current evidence';
+        if (url) {
+          link.href = url;
+          link.removeAttribute('aria-disabled');
+        } else {
+          link.removeAttribute('href');
+          link.setAttribute('aria-disabled', 'true');
+        }
+      }
+      card.classList.toggle('has-selection', Boolean(file || descriptor));
+      byId(kind + '-evidence-clear').hidden = !file;
+      if (file) {
+        byId(kind + '-evidence-file-name').textContent = file.name;
+        byId(kind + '-evidence-file-meta').textContent = formatBytes(file.size) + (descriptor ? ' - replacement selected' : ' - ready to upload');
+      } else if (descriptor) {
+        byId(kind + '-evidence-file-name').textContent = descriptor.fileName || 'Evidence attached';
+        byId(kind + '-evidence-file-meta').textContent = (descriptor.sizeBytes ? formatBytes(descriptor.sizeBytes) + ' - ' : '') + 'saved with this draft';
+      } else {
+        byId(kind + '-evidence-file-name').textContent = 'No file selected';
+        byId(kind + '-evidence-file-meta').textContent = 'Required when completing PMS';
+      }
+    }
+
+    function renderEvidenceUI() {
+      if (!byId('firmware-evidence-card')) return;
+      ['firmware', 'backup'].forEach(renderEvidenceKind);
+      byId('review-evidence').textContent = evidenceReadyCount() + ' of 2 ready';
+      updateChecklistProgress();
+    }
+
+    function clearEvidenceSelection(kind) {
+      evidenceInput(kind).value = '';
+      clearEvidenceError(kind);
+      renderEvidenceUI();
+      markDirty();
+    }
+
+    function onEvidenceFileChange(event) {
+      var kind = event.currentTarget.dataset.evidenceKind;
+      if (!validateEvidenceFile(kind, true)) event.currentTarget.value = '';
+      renderEvidenceUI();
+      markDirty();
     }
 
     function renderPeripheralSchema() {
@@ -1827,6 +2214,22 @@
       };
     }
 
+    function calculateFormProgress() {
+      var checklist = calculateChecklistProgress();
+      if (!isInfraSection()) return checklist;
+      var evidenceCompleted = evidenceReadyCount();
+      var applicable = checklist.applicable + 2;
+      var completed = checklist.completed + evidenceCompleted;
+      return {
+        total: checklist.total + 2,
+        applicable: applicable,
+        completed: completed,
+        na: checklist.na,
+        evidenceCompleted: evidenceCompleted,
+        percent: applicable ? Math.round(completed / applicable * 100) : 0
+      };
+    }
+
     function updateChecklistInputs() {
       allChecklistItems().forEach(function (item) {
         var row = document.querySelector('[data-checklist-item="' + CSS.escape(item.key) + '"]');
@@ -1853,7 +2256,7 @@
         if (track) setProgress(track, track.querySelector('.progress-fill'), progress.percent);
       });
 
-      var overall = calculateChecklistProgress();
+      var overall = calculateFormProgress();
       var label = overall.completed + ' of ' + overall.applicable + ' complete';
       if (overall.na) label += ' · ' + overall.na + ' N/A';
       byId('modal-progress-label').textContent = label;
@@ -1862,7 +2265,9 @@
       byId('review-final-status').textContent = overall.percent + '% — ' + (overall.percent === 100 ? 'READY TO COMPLETE' : 'INCOMPLETE');
       byId('review-status-chip').textContent = overall.percent === 100 ? 'READY' : 'INCOMPLETE';
       byId('review-status-chip').className = 'status-chip ' + (overall.percent === 100 ? 'status-chip--success' : 'status-chip--warning');
-      byId('review-hint').textContent = overall.percent === 100 ? 'The checklist is complete. Finish the required assessment and select Complete PMS.' : 'Complete all applicable checklist items before finalizing PMS.';
+      byId('review-hint').textContent = overall.percent === 100
+        ? (isInfraSection() ? 'All required maintenance checks and evidence are ready. Finish the assessment and select Complete PMS.' : 'The checklist is complete. Finish the required assessment and select Complete PMS.')
+        : (isInfraSection() ? 'Complete all four checks and attach both evidence files before finalizing PMS.' : 'Complete all applicable checklist items before finalizing PMS.');
       setProgress(byId('review-progress'), byId('review-progress-fill'), overall.percent);
       updateFooterActions();
     }
@@ -1876,6 +2281,8 @@
       state.recordId = '';
       state.idempotencyKey = createIdempotencyKey();
       state.selectedAsset = null;
+      state.loadedAssetTag = '';
+      state.infraEvidence = { firmware: null, backup: null };
       state.dirty = false;
       state.submittedCompletion = '';
     }
@@ -1889,6 +2296,7 @@
       byId('questionnaire-form').reset();
       byId('maintenance-date').max = currentManilaDate();
       byId('maintenance-date').value = currentManilaDate();
+      byId('infra-asset-type').value = '';
       byId('asset-tag').value = '';
       closeAssetList();
       byId('observed-location').value = '';
@@ -1900,6 +2308,10 @@
       byId('asset-findings').value = '';
       byId('action-taken').value = '';
       byId('recommendation').value = '';
+      ['firmware', 'backup'].forEach(function (kind) {
+        evidenceInput(kind).value = '';
+        clearEvidenceError(kind);
+      });
       byId('form-alert').hidden = true;
       byId('record-save-state').textContent = '';
       document.querySelectorAll('.field-error').forEach(function (error) {
@@ -1909,14 +2321,16 @@
       document.querySelectorAll('.field.has-error, .search-input.has-error').forEach(function (field) { field.classList.remove('has-error'); });
       renderAllPeripheralChips();
       updateChecklistInputs();
+      renderAssetOptions();
+      renderEvidenceUI();
       updateChecklistProgress();
       updateDerivedCycle();
       updateReview();
     }
 
     function openNewRecord() {
-      if (!state.assets.length) {
-        showToast('No eligible assets', 'Your section currently has no INPROD assets available for maintenance.', 'warning');
+      if (!hasAnyOpenAssetCycle()) {
+        showToast('No eligible assets', 'No INPROD assets are available in your IT section.', 'warning');
         return;
       }
       resetFormData();
@@ -1946,9 +2360,11 @@
       state.recordId = normalizeText(source.recordId || source.id);
       state.idempotencyKey = normalizeText(source.idempotencyKey) || createIdempotencyKey();
       state.submittedCompletion = normalizeText(source.pmsCompletion);
+      state.loadedAssetTag = normalizeTag(source.assetTag);
       byId('questionnaire-form').reset();
       byId('maintenance-date').max = currentManilaDate();
       byId('maintenance-date').value = normalizeText(source.maintenanceDate);
+      byId('infra-asset-type').value = normalizeText(source.assetType);
       byId('asset-tag').value = normalizeTag(source.assetTag);
       selectAsset(byId('asset-tag').value, false);
       byId('location-incorrect').checked = Boolean(source.locationDiscrepancy);
@@ -1972,11 +2388,14 @@
       });
 
       var assessment = source.assessment || {};
+      state.infraEvidence.firmware = recordEvidence(source, 'firmware');
+      state.infraEvidence.backup = recordEvidence(source, 'backup');
       byId('assessment-result').value = normalizeText(assessment.result || source.assessmentResult);
       byId('asset-findings').value = normalizeText(assessment.findings || source.findings || source.assetFindings);
       byId('action-taken').value = normalizeText(assessment.actionTaken || source.actionTaken);
       byId('recommendation').value = normalizeText(assessment.recommendation || source.recommendation);
       renderAllPeripheralChips();
+      renderEvidenceUI();
       updateChecklistInputs();
       updateChecklistProgress();
       updateDerivedCycle();
@@ -2019,6 +2438,15 @@
           openAssetList();
           selectAsset(event.target.value, false);
         }
+        if (event.target.id === 'infra-asset-type') {
+          clearFieldError('infra-asset-type', 'infra-asset-type-error');
+          renderAssetOptions();
+          if (state.selectedAsset && !assetMatchesInfraType(state.selectedAsset) && state.selectedAsset.tag !== state.loadedAssetTag) {
+            byId('asset-tag').value = '';
+            state.selectedAsset = null;
+            byId('asset-snapshot').hidden = true;
+          }
+        }
         if (event.target.id === 'location-incorrect') updateObservedLocationVisibility();
         if (event.target.id === 'assessment-result') applyAssessmentShortcut();
       }
@@ -2033,6 +2461,12 @@
       clearFieldError('maintenance-date', 'maintenance-date-error');
       if (date && date > currentManilaDate()) {
         setFieldError('maintenance-date', 'maintenance-date-error', 'Maintenance date cannot be in the future.');
+      }
+      renderAssetOptions();
+      if (state.selectedAsset && assetCompletedForCycle(state.selectedAsset, derived) && state.selectedAsset.tag !== state.loadedAssetTag) {
+        byId('asset-tag').value = '';
+        state.selectedAsset = null;
+        byId('asset-snapshot').hidden = true;
       }
       updateReview();
     }
@@ -2091,6 +2525,8 @@
       byId('review-asset').textContent = state.selectedAsset ? state.selectedAsset.tag : (normalizeTag(byId('asset-tag').value) || 'Not selected');
       var derived = deriveCycle(byId('maintenance-date').value);
       byId('review-cycle').textContent = derived ? derived.cycleId : 'Not selected';
+      byId('review-asset-type').textContent = normalizeText(byId('infra-asset-type').value) || 'Not selected';
+      byId('review-evidence').textContent = evidenceReadyCount() + ' of 2 ready';
     }
 
     function setStep(nextStep, validate) {
@@ -2119,9 +2555,9 @@
 
     function updateFooterActions() {
       if (!byId('complete-pms')) return;
-      var progress = calculateChecklistProgress();
+      var progress = calculateFormProgress();
       byId('complete-pms').disabled = state.busy || progress.percent !== 100;
-      byId('complete-pms').title = progress.percent === 100 ? 'Finalize and synchronize this PMS record' : 'Complete all applicable checklist items first';
+      byId('complete-pms').title = progress.percent === 100 ? 'Finalize and synchronize this PMS record' : (isInfraSection() ? 'Complete all checks and attach both evidence files first' : 'Complete all applicable checklist items first');
     }
 
     function setFieldError(inputId, errorId, message) {
@@ -2172,6 +2608,7 @@
       clearFieldError('maintenance-date', 'maintenance-date-error');
       clearFieldError('asset-tag', 'asset-error');
       clearFieldError('observed-location', 'observed-location-error');
+      clearFieldError('infra-asset-type', 'infra-asset-type-error');
 
       if (!derived) {
         valid = false;
@@ -2183,11 +2620,21 @@
         setFieldError('maintenance-date', 'maintenance-date-error', 'Maintenance date cannot be in the future.');
       }
 
+      if (isInfraSection() && !normalizeText(byId('infra-asset-type').value)) {
+        valid = false;
+        first = first || byId('infra-asset-type');
+        setFieldError('infra-asset-type', 'infra-asset-type-error', 'Select the IT-IS asset type.');
+      }
+
       selectAsset(byId('asset-tag').value, true);
       if (!state.selectedAsset) {
         valid = false;
         first = first || byId('asset-tag');
         if (!normalizeTag(byId('asset-tag').value)) setFieldError('asset-tag', 'asset-error', 'Select an asset tag.');
+      } else if (state.selectedAsset.tag !== state.loadedAssetTag && (assetCompletedForCycle(state.selectedAsset, derived) || !assetMatchesInfraType(state.selectedAsset))) {
+        valid = false;
+        first = first || byId('asset-tag');
+        setFieldError('asset-tag', 'asset-error', 'Select an asset that is eligible for this cycle and asset type.');
       }
 
       var observedRequired = state.selectedAsset && (!state.selectedAsset.location || byId('location-incorrect').checked);
@@ -2198,7 +2645,7 @@
       }
 
       if (!valid) {
-        showFormAlert('Add a valid maintenance date, eligible asset, and any required observed location.');
+        showFormAlert(isInfraSection() ? 'Add a valid maintenance date, IT-IS asset type, eligible asset, and any required observed location.' : 'Add a valid maintenance date, eligible asset, and any required observed location.');
         if (focusFirst && first) first.focus();
       }
       return valid;
@@ -2254,12 +2701,18 @@
       return {
         recordId: state.recordId || undefined,
         idempotencyKey: state.idempotencyKey,
+        formType: sectionKey(),
         maintenanceDate: byId('maintenance-date').value,
+        assetType: isInfraSection() ? normalizeText(byId('infra-asset-type').value) : '',
         assetTag: state.selectedAsset ? state.selectedAsset.tag : normalizeTag(byId('asset-tag').value),
         observedLocation: normalizeText(byId('observed-location').value),
         locationDiscrepancy: Boolean(state.selectedAsset && (!state.selectedAsset.location || byId('location-incorrect').checked)),
         peripherals: peripherals,
         checklist: checklist,
+        evidence: isInfraSection() ? {
+          firmware: state.infraEvidence.firmware || null,
+          backup: state.infraEvidence.backup || null
+        } : {},
         assessment: {
           result: byId('assessment-result').value,
           findings: normalizeText(byId('asset-findings').value),
@@ -2269,17 +2722,150 @@
       };
     }
 
+    function validateSelectedEvidenceFiles() {
+      var valid = true;
+      var firstInvalid = null;
+      ['firmware', 'backup'].forEach(function (kind) {
+        if (!validateEvidenceFile(kind, true)) {
+          valid = false;
+          firstInvalid = firstInvalid || evidenceInput(kind);
+        }
+      });
+      if (!valid) {
+        setStep(2, false);
+        showFormAlert('Choose supported evidence files that are within the size limit.');
+        if (firstInvalid) firstInvalid.focus();
+      }
+      return valid;
+    }
+
+    function validateInfraCompletionEvidence() {
+      var missing = [];
+      ['firmware', 'backup'].forEach(function (kind) {
+        if (evidenceReady(kind)) {
+          clearEvidenceError(kind);
+          return;
+        }
+        missing.push(kind);
+        setEvidenceError(kind, 'Attach this evidence before completing PMS.');
+      });
+      if (!missing.length) return true;
+      setStep(2, false);
+      showFormAlert('Attach both required evidence files before completing PMS.');
+      evidenceInput(missing[0]).focus();
+      return false;
+    }
+
+    function prepareEvidenceUploadForm(kind) {
+      var form = byId('infra-evidence-upload-form');
+      byId('infra-upload-record-id').value = state.recordId;
+      byId('infra-upload-idempotency-key').value = state.idempotencyKey;
+      byId('infra-upload-asset-tag').value = state.selectedAsset ? state.selectedAsset.tag : normalizeTag(byId('asset-tag').value);
+      byId('infra-upload-asset-type').value = normalizeText(byId('infra-asset-type').value);
+      byId('infra-upload-maintenance-date').value = byId('maintenance-date').value;
+      byId('infra-upload-evidence-kind').value = kind;
+      return form;
+    }
+
+    function uploadInfraEvidence(kind) {
+      var input = evidenceInput(kind);
+      var file = evidenceFile(kind);
+      if (!file) return Promise.resolve(state.infraEvidence[kind] || null);
+
+      var form = prepareEvidenceUploadForm(kind);
+      var originalParent = input.parentNode;
+      var originalNextSibling = input.nextSibling;
+      var originalName = input.getAttribute('name');
+      input.setAttribute('name', 'file');
+      form.appendChild(input);
+
+      return serverCall('PMS_apiUploadInfraEvidence', form)
+        .then(function (result) {
+          var descriptor = evidenceDescriptor(result && result.descriptor, kind);
+          if (!descriptor) {
+            throw clientError('The upload completed without a valid evidence receipt. Try uploading the file again.', 'EVIDENCE_RECEIPT_INVALID');
+          }
+          state.infraEvidence[kind] = descriptor;
+          input.value = '';
+          clearEvidenceError(kind);
+          return descriptor;
+        })
+        .finally(function () {
+          if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+            originalParent.insertBefore(input, originalNextSibling);
+          } else {
+            originalParent.appendChild(input);
+          }
+          if (originalName === null) input.removeAttribute('name');
+          else input.setAttribute('name', originalName);
+          renderEvidenceUI();
+        });
+    }
+
+    function uploadSelectedInfraEvidence() {
+      var kinds = ['firmware', 'backup'].filter(function (kind) { return Boolean(evidenceFile(kind)); });
+      return kinds.reduce(function (chain, kind, index) {
+        return chain.then(function () {
+          var config = evidenceConfig(kind);
+          setBusy(true, 'Uploading ' + config.label + ' (' + (index + 1) + ' of ' + kinds.length + ')\u2026');
+          return uploadInfraEvidence(kind);
+        });
+      }, Promise.resolve());
+    }
+
+    function finishSuccessfulSave(result, mode) {
+      state.recordId = normalizeText(result.recordId) || state.recordId;
+      state.submittedCompletion = normalizeText(result.pmsCompletion);
+      state.loadedAssetTag = state.selectedAsset ? state.selectedAsset.tag : state.loadedAssetTag;
+      state.dirty = false;
+      applySaveResultToDashboard(result);
+      var decision = completionDecision(result.pmsCompletion || result.syncStatus || (mode === 'COMPLETE' ? 'COMPLETED' : 'INCOMPLETE'));
+      var defaultMessage = mode === 'COMPLETE' ? ('Record ' + state.recordId + ' was finalized.') : ('Draft ' + state.recordId + ' was saved.');
+      showToast(mode === 'COMPLETE' ? (decision.label === 'COMPLETED' ? 'PMS completed' : 'PMS saved for synchronization') : 'Progress saved', normalizeText(result.message) || defaultMessage, decision.label === 'COMPLETED' || mode === 'SAVE' ? 'success' : 'warning', 8500);
+      requestCloseModal(true);
+    }
+
+    function saveServiceDeskRecord(mode) {
+      return serverCall('PMS_apiSaveRecord', buildPayload(), mode)
+        .then(function (result) { finishSuccessfulSave(result, mode); });
+    }
+
+    function saveInfraRecord(mode) {
+      // File inputs must be sent as the sole google.script.run form argument.
+      // Persist a draft first so each evidence upload has a stable record ID.
+      return serverCall('PMS_apiSaveRecord', buildPayload(), 'SAVE')
+        .then(function (draft) {
+          state.recordId = normalizeText(draft.recordId) || state.recordId;
+          state.loadedAssetTag = state.selectedAsset ? state.selectedAsset.tag : state.loadedAssetTag;
+          state.submittedCompletion = normalizeText(draft.pmsCompletion);
+          if (!state.recordId) {
+            throw clientError('The draft was saved without a record ID. Reload and try again.', 'DRAFT_ID_MISSING');
+          }
+          byId('record-save-state').textContent = 'Draft ' + state.recordId + ' saved';
+          return uploadSelectedInfraEvidence();
+        })
+        .then(function () {
+          setBusy(true, mode === 'COMPLETE' ? 'Finalizing and synchronizing PMS\u2026' : 'Saving evidence and draft\u2026');
+          return serverCall('PMS_apiSaveRecord', buildPayload(), mode);
+        })
+        .then(function (result) { finishSuccessfulSave(result, mode); });
+    }
+
     function saveRecord(mode) {
       clearFormAlert();
       if (!validateCoreFields(true)) {
         setStep(1, false);
         return;
       }
+      if (isInfraSection() && !validateSelectedEvidenceFiles()) return;
       if (mode === 'COMPLETE') {
-        var progress = calculateChecklistProgress();
+        if (isInfraSection() && !validateInfraCompletionEvidence()) return;
+        var progress = calculateFormProgress();
         if (progress.percent !== 100) {
           setStep(3, false);
-          showFormAlert('Complete every applicable checklist item before finalizing PMS.');
+          showFormAlert(isInfraSection()
+            ? 'Complete all four maintenance checks and attach both evidence files before finalizing PMS.'
+            : 'Complete every applicable checklist item before finalizing PMS.');
           return;
         }
         if (!validateAssessment(true)) {
@@ -2288,20 +2874,14 @@
         }
       }
 
-      var payload = buildPayload();
+      var request = isInfraSection() ? saveInfraRecord(mode) : saveServiceDeskRecord(mode);
       setBusy(true, mode === 'COMPLETE' ? 'Finalizing and synchronizing PMS…' : 'Saving your progress…');
-      serverCall('PMS_apiSaveRecord', payload, mode)
-        .then(function (result) {
-          state.recordId = normalizeText(result.recordId) || state.recordId;
-          state.submittedCompletion = normalizeText(result.pmsCompletion);
-          state.dirty = false;
-          applySaveResultToDashboard(result);
-          var decision = completionDecision(result.pmsCompletion || result.syncStatus || (mode === 'COMPLETE' ? 'COMPLETED' : 'INCOMPLETE'));
-          var defaultMessage = mode === 'COMPLETE' ? ('Record ' + state.recordId + ' was finalized.') : ('Draft ' + state.recordId + ' was saved.');
-          showToast(mode === 'COMPLETE' ? (decision.label === 'COMPLETED' ? 'PMS completed' : 'PMS saved for synchronization') : 'Progress saved', normalizeText(result.message) || defaultMessage, decision.label === 'COMPLETED' || mode === 'SAVE' ? 'success' : 'warning', 8500);
-          requestCloseModal(true);
-        })
+      request
         .catch(function (error) {
+          // Preserve successful uploads and the saved draft so a partial
+          // failure can be retried without uploading the first file again.
+          state.dirty = true;
+          renderEvidenceUI();
           showFormAlert(errorMessage(error));
           showToast(mode === 'COMPLETE' ? 'Could not complete PMS' : 'Could not save progress', errorMessage(error), 'danger', 8500);
         })
@@ -2393,6 +2973,12 @@
       });
       byId('questionnaire-form').addEventListener('input', onFormInput);
       byId('questionnaire-form').addEventListener('change', onFormInput);
+      ['firmware', 'backup'].forEach(function (kind) {
+        evidenceInput(kind).addEventListener('change', onEvidenceFileChange);
+        byId(kind + '-evidence-clear').addEventListener('click', function () {
+          clearEvidenceSelection(kind);
+        });
+      });
       byId('asset-tag').addEventListener('focus', function () { openAssetList(); });
       byId('asset-tag').addEventListener('keydown', onAssetKeydown);
       byId('asset-tag').addEventListener('blur', function () {

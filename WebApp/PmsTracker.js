@@ -1,17 +1,43 @@
 var PMS = PMS || {};
 
 PMS.Tracker = (function () {
+  function maintenanceDateText(value) {
+    return Object.prototype.toString.call(value) === '[object Date]'
+      ? Utilities.formatDate(value, PMS.CONFIG.TIME_ZONE, 'yyyy-MM-dd')
+      : String(value || '').slice(0, 10);
+  }
+
+  function checklistState(value) {
+    return String(value || '').toUpperCase() === 'DONE' ? 'Checked' : 'Not checked';
+  }
+
+  function infraAuditLines(record) {
+    if (String(record.itSection || '') !== 'INFRA_SECURITY') return [];
+    return [
+      'IT-IS Asset Type: ' + (record.assetType || 'Not recorded'),
+      'Physical - Power Cables: ' + checklistState(record.infraPowerCables),
+      'Physical - Data Cables: ' + checklistState(record.infraDataCables),
+      'Physical - Power Supply / UPS: ' + checklistState(record.infraPowerSupplyUps),
+      'Digital - Firmware Version at Latest: ' + checklistState(record.infraFirmwareLatest),
+      'Latest Firmware Evidence: ' + (record.firmwareEvidenceUrl || 'Not uploaded') +
+        (record.firmwareEvidenceFileName ? ' (' + record.firmwareEvidenceFileName + ')' : ''),
+      'Configurations / Backup / Checkpoints Evidence: ' + (record.backupEvidenceUrl || 'Not uploaded') +
+        (record.backupEvidenceFileName ? ' (' + record.backupEvidenceFileName + ')' : '')
+    ];
+  }
+
   function assessmentBlock(record) {
     return [
       '[PMS Record: ' + record.recordId + ']',
       'Technician: ' + record.technicianName + ' <' + record.technicianEmail + '>',
-      'Maintenance Performed On: ' + record.maintenanceDate,
+      'Maintenance Performed On: ' + maintenanceDateText(record.maintenanceDate)
+    ].concat(infraAuditLines(record)).concat([
       'Assessment Result: ' + record.assessmentResult,
       'Asset Findings: ' + record.assetFindings,
       'Action Taken: ' + record.actionTaken,
       'Recommendation: ' + record.recommendation,
       '[End PMS Record: ' + record.recordId + ']'
-    ].join('\n');
+    ]).join('\n');
   }
 
   function appendAssessment(existingRemarks, record) {
@@ -61,6 +87,12 @@ PMS.Tracker = (function () {
 
   function syncCompletedRecord(record, beforeTrackerWrite) {
     var section = PMS.Util.section(record.itSection);
+    if (section.key === 'INFRA_SECURITY') {
+      // Evidence may be moved, deleted, or replaced while a future-year record
+      // waits for rollover. Re-verify both files immediately before any tracker
+      // remarks or checkbox write, including reconciliation retries.
+      PMS.Evidence.verifyRecordEvidence(record);
+    }
     var sheet = PMS.Assets.sheetForSection(section.key);
     var trackerYear = Number(sheet.getRange(PMS.CONFIG.TRACKER_YEAR_ROW, PMS.CONFIG.TRACKER_YEAR_COLUMN).getValue());
     if (!trackerYear) {
