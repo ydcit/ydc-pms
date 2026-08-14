@@ -3,7 +3,7 @@ var PMS = PMS || {};
 PMS.Assets = (function () {
   // Bumped when the browser-visible asset shape/eligibility behavior changes so
   // prior picker results are never reused after a deployment.
-  var CACHE_VERSION = 4;
+  var CACHE_VERSION = 5;
   var CACHE_CHUNK_SIZE = 80000;
   var MAX_CACHE_CHUNKS = 100;
 
@@ -158,8 +158,8 @@ PMS.Assets = (function () {
     return Object.keys(PMS.CONFIG.CYCLES);
   }
 
-  /** Column span covering every cycle checkbox, read as one range. */
-  function cycleCheckboxSpan() {
+  /** Column span covering every cycle status, read as one range. */
+  function cycleStatusSpan() {
     var columns = cycleKeys().map(function (key) {
       return PMS.CONFIG.CYCLES[key].checkboxColumn;
     });
@@ -181,9 +181,9 @@ PMS.Assets = (function () {
     var values = sheet
       .getRange(PMS.CONFIG.ASSET_DATA_START_ROW, 1, rowCount, 3)
       .getDisplayValues();
-    // Checkboxes must be read with getValues(); a display value renders the
-    // boolean as the text "TRUE"/"FALSE" and would compare incorrectly.
-    var span = cycleCheckboxSpan();
+    // Read native values so the migration remains compatible with both legacy
+    // checkbox booleans and the current COMPLETED text status.
+    var span = cycleStatusSpan();
     var cycleValues = sheet
       .getRange(PMS.CONFIG.ASSET_DATA_START_ROW, span.first, rowCount, span.last - span.first + 1)
       .getValues();
@@ -193,7 +193,7 @@ PMS.Assets = (function () {
       var completedCycles = [];
       cycleKeys().forEach(function (key) {
         var offset = PMS.CONFIG.CYCLES[key].checkboxColumn - span.first;
-        var done = cycleValues[index][offset] === true;
+        var done = PMS.Util.isTrackerComplete(cycleValues[index][offset]);
         cycles[key] = done;
         if (done) completedCycles.push(key);
       });

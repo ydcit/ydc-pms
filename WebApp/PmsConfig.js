@@ -12,6 +12,7 @@ PMS.CONFIG = {
   ASSET_DATA_START_ROW: 4,
   TRACKER_YEAR_ROW: 2,
   TRACKER_YEAR_COLUMN: 4,
+  TRACKER_COMPLETED_VALUE: 'COMPLETED',
   CACHE_SECONDS: 300,
   ROLLOVER_TOKEN_SECONDS: 300,
   // Sign-in requires the signed-in Google account email to exist in the
@@ -19,8 +20,8 @@ PMS.CONFIG = {
   // self-register instead.
   REQUIRE_DIRECTORY_ENTRY: true,
   // Controls which assets the questionnaire's asset picker hides as already
-  // completed, based on the T1/T2/T3 checkboxes in the section tracker sheet.
-  //   ANY_CYCLE     - hide once T1, T2, or T3 is checked for the tracker year.
+  // completed, based on the T1/T2/T3 status cells in the section tracker sheet.
+  //   ANY_CYCLE     - hide once T1, T2, or T3 is COMPLETED for the tracker year.
   //   CURRENT_CYCLE - hide only for the cycle being worked on, so an asset
   //                   completed in T1 is still offered in T2 and T3.
   // This affects the picker only. Dashboard eligibility and compliance always
@@ -51,6 +52,8 @@ PMS.CONFIG = {
     })
   }),
   CYCLES: Object.freeze({
+    // checkboxColumn is retained as a compatibility key for existing records
+    // and the obsolete-lock cleanup; the live cells now contain status text.
     T1: Object.freeze({ key: 'T1', startMonth: 1, endMonth: 4, endDay: 30, checkboxColumn: 4, remarksColumn: 5 }),
     T2: Object.freeze({ key: 'T2', startMonth: 5, endMonth: 8, endDay: 31, checkboxColumn: 6, remarksColumn: 7 }),
     T3: Object.freeze({ key: 'T3', startMonth: 9, endMonth: 12, endDay: 31, checkboxColumn: 8, remarksColumn: 9 })

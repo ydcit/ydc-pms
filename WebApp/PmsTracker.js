@@ -188,6 +188,152 @@ PMS.Tracker = (function () {
     };
   }
 
+  function normalizedTrackerStatus(value) {
+    if (PMS.Util.isTrackerComplete(value)) return PMS.CONFIG.TRACKER_COMPLETED_VALUE;
+    var normalized = String(value === null || value === undefined ? '' : value).trim().toUpperCase();
+    if (!normalized || normalized === 'FALSE') return '';
+    PMS.Util.fail('Unexpected tracker status value: ' + normalized + '.', 'DATA_INTEGRITY_ERROR');
+  }
+
+  function statusValidationRule() {
+    return SpreadsheetApp.newDataValidation()
+      .requireValueInList([PMS.CONFIG.TRACKER_COMPLETED_VALUE], false)
+      .setAllowInvalid(false)
+      .build();
+  }
+
+  function statusMigrationPlan(sectionKey) {
+    var section = PMS.Util.section(sectionKey);
+    var sheet = PMS.Assets.sheetForSection(section.key);
+    var startRow = PMS.CONFIG.ASSET_DATA_START_ROW;
+    var lastSheetRow = sheet.getLastRow();
+    var lastAssetRow = 0;
+    if (lastSheetRow >= startRow) {
+      var tags = sheet.getRange(startRow, 1, lastSheetRow - startRow + 1, 1).getDisplayValues();
+      for (var tagIndex = tags.length - 1; tagIndex >= 0; tagIndex -= 1) {
+        if (PMS.Util.normalizeAssetTag(tags[tagIndex][0])) {
+          lastAssetRow = startRow + tagIndex;
+          break;
+        }
+      }
+    }
+    var rowCount = lastAssetRow >= startRow ? lastAssetRow - startRow + 1 : 0;
+    var completed = 0;
+    var pending = 0;
+    if (!rowCount) {
+      return {
+        section: section.key,
+        sheet: sheet,
+        sheetName: sheet.getName(),
+        startRow: startRow,
+        rowCount: 0,
+        columns: [],
+        completed: 0,
+        pending: 0
+      };
+    }
+    var columns = Object.keys(PMS.CONFIG.CYCLES).map(function (cycleKey) {
+      var column = PMS.CONFIG.CYCLES[cycleKey].checkboxColumn;
+      var range = sheet.getRange(startRow, column, rowCount, 1);
+      var formulas = range.getFormulas();
+      var formulaRow = formulas.findIndex(function (row) { return Boolean(row[0]); });
+      if (formulaRow >= 0) {
+        PMS.Util.fail(
+          'Tracker status migration refused to replace a formula at ' + sheet.getName() + '!' +
+            range.getCell(formulaRow + 1, 1).getA1Notation() + '.',
+          'DATA_INTEGRITY_ERROR'
+        );
+      }
+      var output = range.getValues().map(function (row) {
+        var status = normalizedTrackerStatus(row[0]);
+        if (status) completed += 1;
+        else pending += 1;
+        return [status];
+      });
+      return { cycle: cycleKey, column: column, range: range, values: output };
+    });
+    return {
+      section: section.key,
+      sheet: sheet,
+      sheetName: sheet.getName(),
+      startRow: startRow,
+      rowCount: rowCount,
+      columns: columns,
+      completed: completed,
+      pending: pending
+    };
+  }
+
+  /**
+   * Converts the live T1/T2/T3 checkbox columns to compact, non-interactive
+   * COMPLETED status text. Every sheet is fully preflighted before any write so an
+   * unexpected manual value cannot be overwritten silently.
+   */
+  function migrateStatusColumns(sectionKey) {
+    var keys = sectionKey
+      ? [PMS.Util.section(sectionKey).key]
+      : Object.keys(PMS.CONFIG.SECTIONS);
+    var plans = keys.map(statusMigrationPlan);
+    plans.forEach(function (plan) {
+      plan.columns.forEach(function (item) {
+        item.range
+          .setDataValidation(statusValidationRule())
+          .setValues(item.values)
+          .setHorizontalAlignment('center')
+          .setVerticalAlignment('middle');
+        if (plan.sheet.getColumnWidth(item.column) < 96) {
+          plan.sheet.setColumnWidth(item.column, 96);
+        }
+      });
+    });
+    SpreadsheetApp.flush();
+
+    var results = plans.map(function (plan) {
+      plan.columns.forEach(function (item) {
+        var values = item.range.getDisplayValues();
+        var validations = item.range.getDataValidations();
+        var invalidRow = -1;
+        for (var index = 0; index < values.length; index += 1) {
+          var value = String(values[index][0] || '').trim().toUpperCase();
+          if (value !== '' && value !== PMS.CONFIG.TRACKER_COMPLETED_VALUE) {
+            invalidRow = plan.startRow + index;
+            break;
+          }
+          var validation = validations[index][0];
+          if (!validation || validation.getCriteriaType() !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST) {
+            invalidRow = plan.startRow + index;
+            break;
+          }
+          var criteriaValues = validation.getCriteriaValues();
+          var allowedValues = Array.isArray(criteriaValues[0]) ? criteriaValues[0].map(String) : [];
+          if (validation.getAllowInvalid() || allowedValues.length !== 1 ||
+              allowedValues[0] !== PMS.CONFIG.TRACKER_COMPLETED_VALUE || criteriaValues[1] !== false) {
+            invalidRow = plan.startRow + index;
+            break;
+          }
+        }
+        if (invalidRow >= 0) {
+          PMS.Util.fail(
+            'Tracker status migration verification failed at ' + plan.sheetName + '!' +
+              item.range.getCell(invalidRow - plan.startRow + 1, 1).getA1Notation() + '.',
+            'SYNC_FAILED'
+          );
+        }
+      });
+      return {
+        section: plan.section,
+        sheetName: plan.sheetName,
+        completed: plan.completed,
+        pending: plan.pending,
+        rows: plan.rowCount
+      };
+    });
+    Object.keys(PMS.CONFIG.SECTIONS).forEach(function (key) {
+      if (keys.indexOf(key) >= 0) PMS.Assets.invalidate(key);
+    });
+    return { status: PMS.CONFIG.TRACKER_COMPLETED_VALUE, sheets: results };
+  }
+
   function rangeContainsCell(range, cell) {
     var row = cell.getRow();
     var column = cell.getColumn();
@@ -313,9 +459,9 @@ PMS.Tracker = (function () {
     // unrelated/manual protection intact.
     removeLegacyCycleProtectionsFromSheet(sheet);
 
-    var checkboxCell = sheet.getRange(row, cycleConfig.checkboxColumn);
+    var statusCell = sheet.getRange(row, cycleConfig.checkboxColumn);
     var remarksCell = sheet.getRange(row, cycleConfig.remarksColumn);
-    var previousCheckbox = checkboxCell.getValue();
+    var previousStatus = statusCell.getValue();
     var previousRemarks = remarksCell.getDisplayValue();
     var nextRemarks = appendAssessment(previousRemarks, record);
     var prepared = {
@@ -323,7 +469,9 @@ PMS.Tracker = (function () {
       sheetName: sheet.getName(),
       row: row,
       trackerYear: trackerYear,
-      previousCheckbox: previousCheckbox,
+      // Keep the legacy property name because it is part of the existing PMS
+      // Records schema; the stored value may now be COMPLETED instead of a boolean.
+      previousCheckbox: previousStatus,
       previousRemarks: previousRemarks,
       error: ''
     };
@@ -340,18 +488,23 @@ PMS.Tracker = (function () {
       protectedWriteFailure(sheet, remarksCell, 'remarks', error);
     }
     if (remarksCell.getDisplayValue().indexOf('[PMS Record: ' + record.recordId + ']') < 0) {
-      PMS.Util.fail('Remarks verification failed; the checkbox was not changed.', 'SYNC_FAILED');
+      PMS.Util.fail('Remarks verification failed; the tracker status was not changed.', 'SYNC_FAILED');
     }
     try {
-      if (previousCheckbox !== true) {
-        checkboxCell.setValue(true);
-        SpreadsheetApp.flush();
+      var statusNeedsWrite = String(statusCell.getDisplayValue() || '') !== PMS.CONFIG.TRACKER_COMPLETED_VALUE;
+      statusCell.setDataValidation(statusValidationRule());
+      if (statusNeedsWrite) {
+        statusCell
+          .setValue(PMS.CONFIG.TRACKER_COMPLETED_VALUE)
+          .setHorizontalAlignment('center')
+          .setVerticalAlignment('middle');
       }
+      SpreadsheetApp.flush();
     } catch (error) {
-      protectedWriteFailure(sheet, checkboxCell, 'checkbox', error);
+      protectedWriteFailure(sheet, statusCell, 'completion status', error);
     }
-    if (checkboxCell.getValue() !== true) {
-      PMS.Util.fail('Tracker checkbox verification failed.', 'SYNC_FAILED');
+    if (String(statusCell.getDisplayValue() || '') !== PMS.CONFIG.TRACKER_COMPLETED_VALUE) {
+      PMS.Util.fail('Tracker completion status verification failed.', 'SYNC_FAILED');
     }
 
     // The asset list is cached, and this asset has just become completed. Drop
@@ -368,7 +521,7 @@ PMS.Tracker = (function () {
       sheetName: sheet.getName(),
       row: row,
       trackerYear: trackerYear,
-      previousCheckbox: previousCheckbox,
+      previousCheckbox: previousStatus,
       previousRemarks: previousRemarks,
       syncedAt: PMS.Util.nowIso(),
       error: ''
@@ -394,9 +547,9 @@ PMS.Tracker = (function () {
           assetTag: PMS.Util.normalizeAssetTag(row[0]),
           status: PMS.Util.cleanText(row[1], 100).toUpperCase(),
           location: PMS.Util.cleanText(row[2], 500),
-          T1: { checkbox: row[3] === true, remarks: PMS.Util.cleanText(row[4], PMS.CONFIG.MAX_REMARKS_CELL_LENGTH) },
-          T2: { checkbox: row[5] === true, remarks: PMS.Util.cleanText(row[6], PMS.CONFIG.MAX_REMARKS_CELL_LENGTH) },
-          T3: { checkbox: row[7] === true, remarks: PMS.Util.cleanText(row[8], PMS.CONFIG.MAX_REMARKS_CELL_LENGTH) }
+          T1: { checkbox: PMS.Util.isTrackerComplete(row[3]), status: PMS.Util.isTrackerComplete(row[3]) ? PMS.CONFIG.TRACKER_COMPLETED_VALUE : String(row[3] || ''), remarks: PMS.Util.cleanText(row[4], PMS.CONFIG.MAX_REMARKS_CELL_LENGTH) },
+          T2: { checkbox: PMS.Util.isTrackerComplete(row[5]), status: PMS.Util.isTrackerComplete(row[5]) ? PMS.CONFIG.TRACKER_COMPLETED_VALUE : String(row[5] || ''), remarks: PMS.Util.cleanText(row[6], PMS.CONFIG.MAX_REMARKS_CELL_LENGTH) },
+          T3: { checkbox: PMS.Util.isTrackerComplete(row[7]), status: PMS.Util.isTrackerComplete(row[7]) ? PMS.CONFIG.TRACKER_COMPLETED_VALUE : String(row[7] || ''), remarks: PMS.Util.cleanText(row[8], PMS.CONFIG.MAX_REMARKS_CELL_LENGTH) }
         };
       }).filter(function (item) { return Boolean(item.assetTag); })
     };
@@ -434,6 +587,8 @@ PMS.Tracker = (function () {
   return {
     assessmentBlock: assessmentBlock,
     removeLegacyCycleProtections: removeLegacyCycleProtections,
+    migrateStatusColumns: migrateStatusColumns,
+    statusValidationRule: statusValidationRule,
     syncCompletedRecord: syncCompletedRecord,
     trackerRows: trackerRows,
     reconcilePending: reconcilePending

@@ -273,6 +273,30 @@ function PMS_removeLegacyTrackerProtections() {
 }
 
 /**
+ * One-time, idempotent migration from tracker checkboxes to the non-interactive
+ * COMPLETED status used by the web app. Legacy TRUE values are preserved as
+ * completed; FALSE becomes blank. Remarks and all other columns are untouched.
+ */
+function PMS_migrateTrackerStatusCells() {
+  var admin = PMS.Auth.requireAdmin();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    PMS.Util.fail('Another maintenance operation is running. Try the status migration again shortly.', 'BUSY');
+  }
+  var result;
+  try {
+    result = PMS.Tracker.migrateStatusColumns();
+  } finally {
+    lock.releaseLock();
+  }
+  result.ok = true;
+  result.migratedBy = admin.email;
+  result.migratedAt = PMS.Util.nowIso();
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
  * Visible editor entry point for initial deployment setup. The static
  * administrator allowlist prevents another domain user from bootstrapping
  * themselves through google.script.run.

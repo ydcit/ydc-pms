@@ -142,6 +142,16 @@ PMS.Util = (function () {
     return separator >= 0 ? value.slice(separator + 1).trim() : value.trim();
   }
 
+  /**
+   * Accepts both the current text status and legacy checkbox booleans during
+   * migration. COMPLETED is the only value newly written by the application.
+   */
+  function isTrackerComplete(value) {
+    if (value === true) return true;
+    var normalized = String(value === null || value === undefined ? '' : value).trim().toUpperCase();
+    return normalized === 'TRUE' || normalized === 'DONE' || normalized === 'COMPLETED';
+  }
+
   function serializeTags(value) {
     var values = Array.isArray(value) ? value : String(value || '').split(/[,|\n]/);
     var seen = {};
@@ -186,6 +196,7 @@ PMS.Util = (function () {
     allChecklistItems: allChecklistItems,
     progressText: progressText,
     completionState: completionState,
+    isTrackerComplete: isTrackerComplete,
     serializeTags: serializeTags,
     publicError: publicError,
     daysBetween: daysBetween

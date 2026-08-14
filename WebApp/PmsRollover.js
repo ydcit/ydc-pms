@@ -118,8 +118,13 @@ PMS.Rollover = (function () {
     var lastRow = sheet.getLastRow();
     if (lastRow >= PMS.CONFIG.ASSET_DATA_START_ROW) {
       var count = lastRow - PMS.CONFIG.ASSET_DATA_START_ROW + 1;
-      var resetValues = Array.from({ length: count }, function () { return [false, '', false, '', false, '']; });
+      var resetValues = Array.from({ length: count }, function () { return ['', '', '', '', '', '']; });
       sheet.getRange(PMS.CONFIG.ASSET_DATA_START_ROW, 4, count, 6).setValues(resetValues);
+      Object.keys(PMS.CONFIG.CYCLES).forEach(function (cycleKey) {
+        sheet
+          .getRange(PMS.CONFIG.ASSET_DATA_START_ROW, PMS.CONFIG.CYCLES[cycleKey].checkboxColumn, count, 1)
+          .setDataValidation(PMS.Tracker.statusValidationRule());
+      });
     }
     yearCell.setValue(nextYear);
     SpreadsheetApp.flush();
@@ -129,7 +134,7 @@ PMS.Rollover = (function () {
     if (lastRow >= PMS.CONFIG.ASSET_DATA_START_ROW) {
       var verify = sheet.getRange(PMS.CONFIG.ASSET_DATA_START_ROW, 4, lastRow - PMS.CONFIG.ASSET_DATA_START_ROW + 1, 6).getValues();
       var dirty = verify.some(function (row) {
-        return row[0] === true || row[1] !== '' || row[2] === true || row[3] !== '' || row[4] === true || row[5] !== '';
+        return row.some(function (value) { return String(value === null || value === undefined ? '' : value) !== ''; });
       });
       if (dirty) PMS.Util.fail('Tracker reset verification failed for ' + sheet.getName() + '.', 'SYNC_FAILED');
     }

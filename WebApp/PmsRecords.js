@@ -477,7 +477,7 @@ PMS.Records = (function () {
           recordId: record.recordId,
           pmsCompletion: record.pmsCompletion,
           syncStatus: 'INCOMPLETE',
-          message: 'Progress saved. No PMS tracker checkbox was changed.'
+          message: 'Progress saved. No PMS tracker status was changed.'
         };
       } else {
         record.pmsCompletion = PMS.Util.progressText(100, record.completedItems, record.applicableItems, 'SYNCING');

@@ -1379,12 +1379,12 @@
         recovery.classList.add('sync-recovery--running');
       } else if (needsRetry) {
         detail.textContent = pending > 0
-          ? 'Some completed records have not updated their tracker checkbox and remarks. Retry the pending synchronization.'
+          ? 'Some completed records have not updated their tracker status and remarks. Retry the pending synchronization.'
           : 'The last recovery job reported a failure. Retry to confirm the tracker is synchronized.';
         chip.className += 'status-chip--danger';
         recovery.classList.add('sync-recovery--attention');
       } else if (pending > 0) {
-        detail.textContent = 'Completed PMS records are waiting to update their tracker checkbox and remarks.';
+        detail.textContent = 'Completed PMS records are waiting to update their tracker status and remarks.';
         chip.className += 'status-chip--warning';
         recovery.classList.add('sync-recovery--attention');
       } else {
