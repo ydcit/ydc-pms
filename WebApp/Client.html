@@ -39,12 +39,15 @@
         // Asset picker for the create form. Loaded per section on demand rather
         // than at bootstrap, and cached here so reopening the form is instant.
         assetCache: {}, assets: [], assetSection: '', assetsLoading: false,
-        assetCombobox: { open: false, activeIndex: -1, matches: [] }
+        assetCombobox: { open: false, activeIndex: -1, matches: [] },
+        // Server responses by request signature, so paging back is free.
+        cache: {}
       },
       archive: {
         open: false, page: 1, totalPages: 1, direction: 'DESC',
-        token: 0, searchTimer: null, lastFocus: null
+        token: 0, searchTimer: null, lastFocus: null, cache: {}
       },
+      listsWarmed: false,
       legacyImport: {
         open: false,
         stage: 'PREPARE',
@@ -883,6 +886,75 @@
       if (state.bootstrap.rolloverDeferred && userIsAdmin()) loadRolloverStatus();
       // Ticket counts are also deferred, for the same reason.
       loadTicketSummary();
+      warmListCaches();
+    }
+
+    /* ------------------------------------------------------------------------
+       List caches
+
+       Both dialogs page, sort, filter and search server-side, so every one of
+       those actions used to be a round trip that ended in a spreadsheet read.
+       The server now caches its own projection, but the round trip itself still
+       costs the best part of a second, and going back to a page you just looked
+       at should not cost anything at all.
+
+       Payloads are held per request signature: change anything about the request
+       and it is a different entry. Nothing is served beyond LIST_CACHE_TTL, and
+       any write clears the lot, so a stale page cannot outlive the thing it
+       describes.
+       ------------------------------------------------------------------------ */
+
+    var LIST_CACHE_TTL = 45000;
+
+    function listCacheKey(request) {
+      var source = request || {};
+      // Built from sorted keys so two equivalent requests share one entry
+      // regardless of the order the fields were assembled in.
+      return Object.keys(source).sort().map(function (key) {
+        return key + '=' + normalizeText(source[key]);
+      }).join('&');
+    }
+
+    function readListCache(store, request) {
+      var entry = store[listCacheKey(request)];
+      if (!entry) return null;
+      if (Date.now() - entry.at > LIST_CACHE_TTL) return null;
+      return entry.payload;
+    }
+
+    function writeListCache(store, request, payload) {
+      store[listCacheKey(request)] = { at: Date.now(), payload: payload };
+    }
+
+    /**
+     * Forgets every cached page.
+     *
+     * Called after anything that writes, because a completed record or a moved
+     * ticket changes rows, counts and totals across pages this cache cannot
+     * reason about individually.
+     */
+    function clearListCaches() {
+      state.archive.cache = {};
+      state.tickets.cache = {};
+    }
+
+    /**
+     * Fetches the first page of both dialogs in the background.
+     *
+     * Deliberately after the dashboard has painted and behind a delay: it is the
+     * difference between a dialog that opens instantly and one that opens on a
+     * spinner, but it must never be the reason first paint was slow. Failures are
+     * swallowed whole; nothing on screen depends on this.
+     */
+    function warmListCaches() {
+      if (state.listsWarmed) return;
+      state.listsWarmed = true;
+      window.setTimeout(function () {
+        loadCompletedRecords({ page: 1 }, { silent: true }).catch(function () {});
+        window.setTimeout(function () {
+          loadTickets({ page: 1 }, { silent: true }).catch(function () {});
+        }, 400);
+      }, 900);
     }
 
     function loadRolloverStatus() {
@@ -1139,20 +1211,51 @@
       });
     }
 
-    function loadCompletedRecords(overrides) {
+    /**
+     * Loads a page of completed records.
+     *
+     * options.silent fetches into the cache without touching the screen, which is
+     * what the background warm-up uses. options.refresh skips both caches, this
+     * one and the server's, which is what the Refresh button is for.
+     */
+    function loadCompletedRecords(overrides, options) {
+      var settings = options || {};
       var request = archiveRequest(overrides);
+      if (settings.refresh) request.refresh = true;
       state.archive.page = asNumber(request.page, 1) || 1;
+
+      if (!settings.refresh) {
+        var cached = readListCache(state.archive.cache, request);
+        if (cached) {
+          // A cache hit must still count as the newest request, or a slower
+          // response already in flight would overwrite it when it lands.
+          state.archive.token += 1;
+          if (!settings.silent) renderCompletedRecords(cached);
+          return Promise.resolve(cached);
+        }
+      }
+
       state.archive.token += 1;
       var token = state.archive.token;
-      setArchiveBusy(true);
+      if (!settings.silent) setArchiveBusy(true);
       return serverCall('PMS_apiCompletedRecords', request)
         .then(function (data) {
+          // Cached even when superseded: the response is still a true answer to
+          // the request that asked for it, and the user may come back to it.
+          writeListCache(state.archive.cache, request, data);
           // Ignore a slower in-flight response that a newer request superseded.
-          if (token !== state.archive.token) return data;
+          if (settings.silent || token !== state.archive.token) return data;
           renderCompletedRecords(data);
           return data;
         })
         .catch(function (error) {
+          // A background warm-up says nothing on screen, and a superseded
+          // response is not this request's business. Neither rejects: most
+          // callers are event handlers with nowhere to put a rejection.
+          if (settings.silent) {
+            console.warn('Completed records could not be pre-fetched: ' + errorMessage(error));
+            return;
+          }
           if (token !== state.archive.token) return;
           setArchiveBusy(false);
           byId('archive-empty').hidden = false;
@@ -1321,17 +1424,21 @@
       }
 
       var resultCell = document.createElement('td');
+      resultCell.className = 'archive-col-assessment';
       var resultWrap = document.createElement('div');
-      resultWrap.className = 'archive-asset';
-      var resultText = document.createElement('span');
-      resultText.textContent = normalizeText(record.assessmentResult) || 'Not assessed';
-      resultWrap.appendChild(resultText);
-      // An unresolved repair belongs next to the assessment that found it: the
-      // row reads "Follow-up required" and then says what is tracking it.
-      var openTickets = toArray(record.openTickets);
-      if (openTickets.length) resultWrap.appendChild(ticketLinkList(openTickets));
+      resultWrap.className = 'assessment-cell';
+      resultWrap.appendChild(assessmentTag(record.assessmentResult));
+      // Tickets belong next to the assessment that found them: the row reads
+      // "Follow-up required" and then says what is tracking it. Closed ones are
+      // included, because a repair that was completed is the answer to "what
+      // happened about this" rather than something to hide.
+      var assetTickets = toArray(record.assetTickets);
+      if (assetTickets.length) {
+        resultWrap.appendChild(ticketLinkList(assetTickets, asNumber(record.totalTicketCount, assetTickets.length)));
+      }
       resultCell.appendChild(resultWrap);
 
+      var openTicketCount = asNumber(record.openTicketCount, 0);
       var actionCell = document.createElement('td');
       var actions = document.createElement('div');
       actions.className = 'table-actions';
@@ -1358,8 +1465,8 @@
         var fileTicket = document.createElement('button');
         fileTicket.className = 'table-action table-action--accent';
         fileTicket.type = 'button';
-        fileTicket.textContent = openTickets.length ? 'File another' : 'File ticket';
-        fileTicket.title = openTickets.length
+        fileTicket.textContent = openTicketCount ? 'File another' : 'File ticket';
+        fileTicket.title = openTicketCount
           ? normalizeText(record.assetTag) + ' already has an open ticket. File a second one only for a different fault.'
           : 'Open a findings ticket for ' + normalizeText(record.assetTag);
         fileTicket.addEventListener('click', function () { fileTicketFromRecord(record); });
@@ -1372,33 +1479,69 @@
       return row;
     }
 
+    /*
+      How an assessment result reads as a colour. Keyed on the configured
+      wording, with anything unrecognised falling through to neutral rather than
+      guessing, so a result added to the config later is merely uncoloured
+      instead of miscoloured.
+    */
+    var ASSESSMENT_TONE = {
+      'NO FINDINGS': 'assessment-tag--clear',
+      'FINDINGS RESOLVED': 'assessment-tag--resolved',
+      'FOLLOW-UP REQUIRED': 'assessment-tag--followup'
+    };
+
+    function assessmentTag(result) {
+      var text = normalizeText(result);
+      var tag = document.createElement('span');
+      var tone = ASSESSMENT_TONE[text.toUpperCase()] || '';
+      tag.className = 'assessment-tag' + (tone ? ' ' + tone : '');
+      tag.textContent = text || 'Not assessed';
+      return tag;
+    }
+
     /**
-     * Clickable chips for a set of open tickets.
+     * Clickable chips for the tickets raised against one asset.
      *
-     * Shared by the archive rows and the asset snapshot so an outstanding repair
-     * looks and behaves the same wherever it surfaces.
+     * Open ones are amber and come first; closed ones are green, because a
+     * repair that was completed is good news rather than a warning. The total is
+     * passed separately so the list can say what it is not showing: the server
+     * caps how many tickets travel per row but always counts them all.
      */
-    function ticketLinkList(tickets) {
+    function ticketLinkList(tickets, total) {
       var list = document.createElement('div');
       list.className = 'ticket-links';
-      toArray(tickets).forEach(function (ticket) {
+      var shown = toArray(tickets);
+      shown.forEach(function (ticket) {
         var id = normalizeText(ticket.ticketId);
         if (!id) return;
+        var status = normalizeText(ticket.statusLabel) || ticketLabel(ticket.status);
+        var isOpen = ticket.isActive !== false;
         var chip = document.createElement('button');
         chip.type = 'button';
-        chip.className = 'ticket-link';
-        chip.title = normalizeText(ticket.summary) || ('Open ' + id);
+        chip.className = 'ticket-link ' + (isOpen ? 'ticket-link--open' : 'ticket-link--closed');
+        chip.title = (normalizeText(ticket.summary) || id) + ' · ' + status +
+          (isOpen ? '' : ' · no longer open');
         var label = document.createElement('span');
         label.className = 'ticket-link__id';
         label.textContent = id;
         chip.appendChild(label);
-        var status = document.createElement('span');
-        status.className = 'ticket-link__status';
-        status.textContent = normalizeText(ticket.statusLabel) || ticketLabel(ticket.status);
-        chip.appendChild(status);
+        var statusText = document.createElement('span');
+        statusText.className = 'ticket-link__status';
+        statusText.textContent = status;
+        chip.appendChild(statusText);
         chip.addEventListener('click', function () { openTicketFromArchive(id); });
         list.appendChild(chip);
       });
+
+      var hidden = asNumber(total, shown.length) - shown.length;
+      if (hidden > 0) {
+        var more = document.createElement('span');
+        more.className = 'ticket-links__more';
+        more.textContent = '+' + formatNumber(hidden) + ' more';
+        more.title = 'Open the tickets list to see the rest of this asset\u2019s history.';
+        list.appendChild(more);
+      }
       return list;
     }
 
@@ -1587,19 +1730,37 @@
       });
     }
 
-    function loadTickets(overrides) {
+    /** Same contract as loadCompletedRecords: silent warms, refresh bypasses. */
+    function loadTickets(overrides, options) {
+      var settings = options || {};
       var request = ticketsRequest(overrides);
+      if (settings.refresh) request.refresh = true;
       state.tickets.page = asNumber(request.page, 1) || 1;
+
+      if (!settings.refresh) {
+        var cached = readListCache(state.tickets.cache, request);
+        if (cached) {
+          state.tickets.token += 1;
+          if (!settings.silent) renderTickets(cached);
+          return Promise.resolve(cached);
+        }
+      }
+
       state.tickets.token += 1;
       var token = state.tickets.token;
-      setTicketsBusy(true);
+      if (!settings.silent) setTicketsBusy(true);
       return serverCall('PMS_apiTickets', request)
         .then(function (data) {
-          if (token !== state.tickets.token) return data;
+          writeListCache(state.tickets.cache, request, data);
+          if (settings.silent || token !== state.tickets.token) return data;
           renderTickets(data);
           return data;
         })
         .catch(function (error) {
+          if (settings.silent) {
+            console.warn('Tickets could not be pre-fetched: ' + errorMessage(error));
+            return;
+          }
           if (token !== state.tickets.token) return;
           setTicketsBusy(false);
           byId('tickets-empty').hidden = false;
@@ -1961,6 +2122,9 @@
      */
     function applyTicketWriteResult(result) {
       var payload = result || {};
+      // Rows, counts and totals have all just moved. The response carries the
+      // page the user is looking at, but every other cached page is now a lie.
+      clearListCaches();
       if (payload.history && payload.ticket) {
         renderTicketDetail({
           ticket: payload.ticket,
@@ -2555,6 +2719,7 @@
           }]);
           renderRecordTicketsFiled();
           closeRecordTicketForm('File another ticket');
+          clearListCaches();
           byId('record-ticket-remarks').value = '';
           updateRecordTicketRequirement();
           updateFooterActions();
@@ -3303,6 +3468,8 @@
       setLegacyImportBusy(true, 'Importing batch ' + execution.chunks + '... ' + formatNumber(execution.processed) + ' processed');
       return serverCall('PMS_apiExecuteLegacyImport', state.legacyImport.request, state.legacyImport.confirmationToken)
         .then(function (result) {
+          // An import writes records in bulk; nothing cached survives it.
+          clearListCaches();
           if (!state.legacyImport.open) throw clientError('The import window was closed.', 'LEGACY_IMPORT_CLOSED');
           absorbLegacyImportBatch(result || {});
           if (legacyImportHasMore(result)) return executeLegacyImportChunk();
@@ -4603,9 +4770,12 @@
       state.idempotencyKey = normalizeText(source.idempotencyKey) || createIdempotencyKey();
       state.submittedCompletion = normalizeText(source.pmsCompletion);
       state.loadedAssetTag = normalizeTag(source.assetTag);
+      // Stored as it arrived. The server sends a counted object now, and
+      // assetTicketsFor still understands a bare array from an older payload,
+      // so coercing either way here would throw one of the two shapes away.
       state.recordAssetTickets = {
         tag: normalizeTag(source.assetTag),
-        tickets: toArray(source.assetTickets)
+        tickets: source.assetTickets || []
       };
       byId('questionnaire-form').reset();
       byId('maintenance-date').max = currentManilaDate();
@@ -4779,10 +4949,31 @@
      */
     function assetTicketsFor(tag) {
       var key = normalizeTag(tag);
-      if (!key) return [];
-      if (state.recordAssetTickets.tag === key) return toArray(state.recordAssetTickets.tickets);
+      var empty = { tickets: [], openCount: 0, closedCount: 0, total: 0 };
+      if (!key) return empty;
+      // A loaded record brings the asset's full ticket history, closed ones
+      // included. The picker only carries what is open, which is all it needs to
+      // warn with, so its entry is shaped into the same form here.
+      if (state.recordAssetTickets.tag === key) {
+        var loaded = state.recordAssetTickets.tickets || {};
+        if (Array.isArray(loaded)) return countedTickets(loaded);
+        return {
+          tickets: toArray(loaded.tickets),
+          openCount: asNumber(loaded.openCount, 0),
+          closedCount: asNumber(loaded.closedCount, 0),
+          total: asNumber(loaded.total, toArray(loaded.tickets).length)
+        };
+      }
       var asset = state.assetMap.get(key);
-      return asset ? toArray(asset.openTickets) : [];
+      return asset ? countedTickets(toArray(asset.openTickets)) : empty;
+    }
+
+    /** Wraps a bare ticket array in the counts the renderer expects. */
+    function countedTickets(tickets) {
+      var list = toArray(tickets);
+      var open = 0;
+      list.forEach(function (ticket) { if (ticket.isActive !== false) open += 1; });
+      return { tickets: list, openCount: open, closedCount: list.length - open, total: list.length };
     }
 
     /**
@@ -4796,32 +4987,47 @@
     function renderAssetTickets(tag) {
       var holder = byId('selected-asset-tickets');
       if (!holder) return;
-      var tickets = assetTicketsFor(tag);
+      var entry = assetTicketsFor(tag);
+      var tickets = toArray(entry.tickets);
       holder.replaceChildren();
       holder.hidden = !tickets.length;
       if (!tickets.length) return;
 
+      /*
+        Amber only while something is still open. Once every repair on the asset
+        has been closed this is history, not a warning, and colouring it as one
+        would train people to ignore the panel that matters.
+      */
+      var open = asNumber(entry.openCount, 0);
+      holder.className = 'asset-tickets' + (open ? '' : ' asset-tickets--closed');
+
       var heading = document.createElement('p');
       heading.className = 'asset-tickets__title';
-      heading.appendChild(iconSvg('alert-triangle'));
+      heading.appendChild(iconSvg(open ? 'alert-triangle' : 'check-circle'));
       var headingText = document.createElement('span');
-      headingText.textContent = tickets.length === 1
-        ? 'This asset has an open repair ticket'
-        : 'This asset has ' + formatNumber(tickets.length) + ' open repair tickets';
+      headingText.textContent = open
+        ? (open === 1
+          ? 'This asset has an open repair ticket'
+          : 'This asset has ' + formatNumber(open) + ' open repair tickets')
+        : (tickets.length === 1
+          ? 'This asset has one closed repair ticket'
+          : 'This asset has ' + formatNumber(asNumber(entry.total, tickets.length)) + ' closed repair tickets');
       heading.appendChild(headingText);
       holder.appendChild(heading);
 
       var list = document.createElement('ul');
       list.className = 'asset-tickets__list';
       tickets.forEach(function (ticket) {
+        var isOpen = ticket.isActive !== false;
         var item = document.createElement('li');
+        if (!isOpen) item.className = 'is-closed';
         var head = document.createElement('div');
         head.className = 'asset-tickets__head';
         var id = document.createElement('strong');
         id.textContent = normalizeText(ticket.ticketId) || '—';
         head.appendChild(id);
         var status = document.createElement('span');
-        status.className = 'status-chip status-chip--info';
+        status.className = 'status-chip ' + (isOpen ? 'status-chip--info' : 'status-chip--success');
         status.textContent = normalizeText(ticket.statusLabel) || ticketLabel(ticket.status);
         head.appendChild(status);
         item.appendChild(head);
@@ -4832,8 +5038,9 @@
           summaryText.textContent = summary;
           item.appendChild(summaryText);
         }
+        // What still has to happen only matters while the ticket is open.
         var action = normalizeText(ticket.actionRequired);
-        if (action) {
+        if (action && isOpen) {
           var actionText = document.createElement('small');
           actionText.textContent = 'Action required: ' + action;
           item.appendChild(actionText);
@@ -4841,6 +5048,15 @@
         list.appendChild(item);
       });
       holder.appendChild(list);
+
+      var hidden = asNumber(entry.total, tickets.length) - tickets.length;
+      if (hidden > 0) {
+        var more = document.createElement('p');
+        more.className = 'asset-tickets__more';
+        more.textContent = formatNumber(hidden) + ' older ticket' + (hidden === 1 ? '' : 's') +
+          ' on this asset are not shown.';
+        holder.appendChild(more);
+      }
     }
 
     function updateObservedLocationVisibility() {
@@ -5255,6 +5471,8 @@
     }
 
     function finishSuccessfulSave(result, mode) {
+      // A saved record changes the completed list and can change ticket counts.
+      clearListCaches();
       state.recordId = normalizeText(result.recordId) || state.recordId;
       state.submittedCompletion = normalizeText(result.pmsCompletion);
       state.loadedAssetTag = state.selectedAsset ? state.selectedAsset.tag : state.loadedAssetTag;
@@ -5419,7 +5637,11 @@
       document.querySelectorAll('[data-close-tickets]').forEach(function (element) {
         element.addEventListener('click', closeTicketsModal);
       });
-      byId('tickets-refresh').addEventListener('click', function () { loadTickets({ page: 1 }); });
+      // Refresh means refresh: past both caches, all the way to the sheet.
+      byId('tickets-refresh').addEventListener('click', function () {
+        clearListCaches();
+        loadTickets({ page: 1 }, { refresh: true });
+      });
       byId('tickets-new').addEventListener('click', function () { showTicketCreate(null); });
       byId('ticket-detail-back').addEventListener('click', function () { showTicketsView('list'); });
       byId('ticket-create-back').addEventListener('click', function () { showTicketsView('list'); });
@@ -5485,7 +5707,10 @@
       document.querySelectorAll('[data-close-archive]').forEach(function (element) {
         element.addEventListener('click', closeArchiveModal);
       });
-      byId('archive-refresh').addEventListener('click', function () { loadCompletedRecords({ page: 1 }); });
+      byId('archive-refresh').addEventListener('click', function () {
+        clearListCaches();
+        loadCompletedRecords({ page: 1 }, { refresh: true });
+      });
       byId('archive-prev').addEventListener('click', function () {
         if (state.archive.page > 1) loadCompletedRecords({ page: state.archive.page - 1 });
       });

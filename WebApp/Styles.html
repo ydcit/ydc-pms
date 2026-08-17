@@ -1799,6 +1799,21 @@
     margin: 0;
   }
 
+  /*
+     A floor on the table's width, the same trick the legacy import table uses.
+     Seven columns squeezed into a narrow viewport left the assessment column
+     about as wide as a word, which is what broke the ticket pills in it. Below
+     this width the wrapper scrolls horizontally instead of crushing cells.
+  */
+  #archive-table-wrap table,
+  #tickets-table-wrap table {
+    min-width: 900px;
+  }
+
+  .archive-col-assessment {
+    min-width: 176px;
+  }
+
   .archive-dialog__body thead th {
     position: sticky;
     top: 0;
@@ -1949,45 +1964,139 @@
     font-size: 11.5px;
   }
 
+  /* --------------------------------------------------------------------------
+     Assessment result and the tickets raised from it
+     -------------------------------------------------------------------------- */
+
   /*
-     An open repair shown against the record that found it. A button rather than a
-     chip because it navigates to the ticket, so it has to look pressable while
-     staying small enough to sit under a cell's own text.
+     The assessment cell stacks a coloured verdict over the tickets raised from
+     it. Both are laid out as blocks rather than inline, because a table cell is
+     as narrow as the table lets it be and inline content wrapped mid-pill.
+  */
+  .assessment-cell {
+    display: grid;
+    gap: 6px;
+    justify-items: start;
+  }
+
+  /*
+     Colour carries the verdict at a glance: green is finished, blue had findings
+     that were dealt with, amber still needs somebody. The text is kept as the
+     primary signal and the colour as reinforcement, so the column is still
+     readable to anyone who cannot separate the hues.
+  */
+  .assessment-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--surface-soft);
+    color: var(--ink-soft);
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+
+  .assessment-tag::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .assessment-tag--clear {
+    border-color: var(--success-line);
+    background: var(--success-soft);
+    color: var(--success);
+  }
+
+  .assessment-tag--resolved {
+    border-color: var(--info-line);
+    background: var(--info-soft);
+    color: var(--info);
+  }
+
+  .assessment-tag--followup {
+    border-color: var(--warning-line);
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+
+  /*
+     Tickets raised against the row's asset. Buttons rather than chips because
+     they navigate to the ticket, so they have to look pressable while still
+     fitting under the verdict above them.
+
+     One per line, not wrapped inline: at the width this column gets, a pill
+     holding an id and a status broke across three lines and stopped reading as a
+     single control.
   */
   .ticket-links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 4px;
+    display: grid;
+    gap: 3px;
+    justify-items: start;
+    width: 100%;
   }
 
   .ticket-link {
     display: inline-flex;
-    align-items: center;
-    gap: 6px;
+    align-items: baseline;
+    gap: 5px;
+    max-width: 100%;
     padding: 2px 8px;
-    border: 1px solid var(--warning-line);
+    border: 1px solid var(--line-strong);
     border-radius: 999px;
-    background: var(--warning-soft);
-    color: var(--warning);
+    background: var(--surface);
+    color: var(--ink-soft);
     font: inherit;
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 600;
+    white-space: nowrap;
     cursor: pointer;
     transition: border-color 130ms var(--ease), background 130ms var(--ease);
   }
 
-  .ticket-link:hover {
-    border-color: var(--warning);
-  }
-
   .ticket-link__id {
     font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
   }
 
   .ticket-link__status {
-    padding-left: 6px;
-    border-left: 1px solid var(--warning-line);
+    font-weight: 550;
+    opacity: 0.85;
+  }
+
+  /* Still open: amber, matching the warning language used elsewhere. */
+  .ticket-link--open {
+    border-color: var(--warning-line);
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+
+  .ticket-link--open:hover {
+    border-color: var(--warning);
+    background: #fef3c7;
+  }
+
+  /* Closed: quieter, because it is history rather than something to act on. */
+  .ticket-link--closed {
+    border-color: var(--success-line);
+    background: var(--success-soft);
+    color: var(--success);
+  }
+
+  .ticket-link--closed:hover {
+    border-color: var(--success);
+  }
+
+  .ticket-links__more {
+    color: var(--muted);
+    font-size: 10.5px;
     font-weight: 550;
   }
 
@@ -2159,13 +2268,34 @@
     gap: 6px;
   }
 
+  /*
+     Three fixed columns rather than auto-fit.
+
+     auto-fit at a 150px minimum packed all six fields onto one row, which left
+     each about as wide as its own label. A record id is 44 unbroken characters
+     and a filer is a name plus a date, so both spilled: the id wrapped
+     mid-token and "Aug 17, 2026" broke across two lines. Three columns give two
+     tidy rows with room for the longest value either can hold.
+  */
   .ticket-detail__grid {
     display: grid;
-    gap: 14px;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px 20px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     margin: 0;
     padding-top: 16px;
     border-top: 1px solid var(--line);
+  }
+
+  @media (max-width: 720px) {
+    .ticket-detail__grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 480px) {
+    .ticket-detail__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   .ticket-detail__grid dt {
@@ -2180,6 +2310,19 @@
     margin: 4px 0 0;
     font-size: 13.5px;
     font-weight: 550;
+    /* A record id has no spaces to break at, so permit a break anywhere. */
+    overflow-wrap: anywhere;
+  }
+
+  /*
+     Identifiers, set slightly smaller and monospaced. A wrapped record id reads
+     as an identifier this way rather than as broken prose, and the digits line
+     up with the ticket id above it.
+  */
+  .ticket-detail__grid dd.is-identifier {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
   }
 
   .ticket-detail__block h3 {
@@ -2888,6 +3031,26 @@
   }
 
   .asset-tickets__list small {
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+
+  /* Every repair closed: history, so it drops the warning colouring. */
+  .asset-tickets--closed {
+    border-color: var(--line);
+    background: var(--surface-soft);
+  }
+
+  .asset-tickets--closed .asset-tickets__title {
+    color: var(--success);
+  }
+
+  .asset-tickets__list li.is-closed strong {
+    color: var(--ink-soft);
+  }
+
+  .asset-tickets__more {
+    margin: 0;
     color: var(--muted);
     font-size: 11.5px;
   }

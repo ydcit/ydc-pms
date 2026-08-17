@@ -372,13 +372,41 @@ PMS.Tickets = (function () {
   */
   var readMemo = { tickets: null, log: null };
 
+  /*
+    Cache version and generation.
+
+    The version is part of the key, so a deployment that changes the parsed
+    ticket shape ignores anything an older one stored. The generation is bumped
+    by every write, which is what makes caching a list safe: paging through
+    tickets stops touching the sheet, and the moment anybody files or moves one,
+    every cached slice for every viewer is unreachable.
+  */
+  var CACHE_VERSION = 1;
+  var GENERATION_PROPERTY = 'PMS_TICKETS_GENERATION';
+
+  function cacheKey(name) {
+    return 'PMS_TICKETS_V' + CACHE_VERSION + '_' + PMS.Util.generation(GENERATION_PROPERTY) + '_' + name;
+  }
+
   function invalidateReadMemo() {
     readMemo.tickets = null;
     readMemo.log = null;
+    // Anyone else's cached page is now unreachable rather than merely stale.
+    PMS.Util.bumpGeneration(GENERATION_PROPERTY);
   }
 
-  function readTickets() {
-    if (readMemo.tickets) return readMemo.tickets;
+  function readTickets(forceRefresh) {
+    if (!forceRefresh && readMemo.tickets) return readMemo.tickets;
+
+    var key = cacheKey('ROWS');
+    if (!forceRefresh) {
+      var cached = PMS.Util.cacheGet(key);
+      if (Array.isArray(cached)) {
+        readMemo.tickets = cached;
+        return cached;
+      }
+    }
+
     var sheet = ticketSheet(false);
     if (!sheet || sheet.getLastRow() < 2) {
       readMemo.tickets = [];
@@ -391,6 +419,7 @@ PMS.Tickets = (function () {
       tickets.push(rowToTicket(row, index + 2));
     });
     readMemo.tickets = tickets;
+    PMS.Util.cachePut(key, tickets);
     return tickets;
   }
 
@@ -739,9 +768,9 @@ PMS.Tickets = (function () {
   }
 
   /** Visible tickets for the caller, before any user filter is applied. */
-  function scopedTickets(context) {
+  function scopedTickets(context, forceRefresh) {
     var restrictToSection = PMS.CONFIG.TICKET_VISIBILITY === 'OWN_SECTION' && !context.isAdmin;
-    return readTickets().filter(function (ticket) {
+    return readTickets(forceRefresh).filter(function (ticket) {
       return restrictToSection ? ticket.section === context.section : true;
     });
   }
@@ -764,7 +793,8 @@ PMS.Tickets = (function () {
 
   function list(context, options) {
     var request = options && typeof options === 'object' ? options : {};
-    var scoped = scopedTickets(context);
+    // The browser's Refresh button asks for the sheet itself, not the cache.
+    var scoped = scopedTickets(context, Boolean(request.refresh));
     var counts = countByStatus(scoped);
 
     var sectionSet = {};
@@ -1068,6 +1098,86 @@ PMS.Tickets = (function () {
   }
 
   /*
+    How many tickets one asset contributes to a payload. A machine with a long
+    repair history would otherwise put an unbounded list behind every row of the
+    archive; the counts are always exact, so the browser can say what it is not
+    showing.
+  */
+  var HISTORY_PER_ASSET = 6;
+
+  /**
+   * Every ticket on a set of assets, open and closed, keyed by tag.
+   *
+   * Separate from openByAsset rather than a flag on it, because the two answer
+   * different questions and want different data. The picker asks "is there an
+   * outstanding repair I should know about before I start", and wants only what
+   * is open. A view of a record asks "what has been raised against this machine",
+   * and a repair that was completed is part of that answer — often the most
+   * useful part, since it says the fault was dealt with.
+   */
+  function ticketsByAsset(assetTags) {
+    var wanted = {};
+    var tags = Array.isArray(assetTags) ? assetTags : [assetTags];
+    tags.forEach(function (value) {
+      var tag = PMS.Util.normalizeAssetTag(value);
+      if (tag) wanted[tag] = true;
+    });
+    var index = {};
+    if (!Object.keys(wanted).length) return index;
+
+    var grouped = {};
+    readTickets().forEach(function (ticket) {
+      var tag = PMS.Util.normalizeAssetTag(ticket.assetTag);
+      if (!wanted[tag]) return;
+      if (!grouped[tag]) grouped[tag] = [];
+      grouped[tag].push(ticket);
+    });
+
+    Object.keys(grouped).forEach(function (tag) {
+      var all = grouped[tag].slice().sort(function (a, b) {
+        // Anything still open outranks anything closed, whatever the dates say.
+        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+        if (a.isActive) {
+          var rank = ACTIVE_STATUSES.indexOf(a.status) - ACTIVE_STATUSES.indexOf(b.status);
+          if (rank !== 0) return rank;
+        }
+        return String(b.updatedAt).localeCompare(String(a.updatedAt));
+      });
+      var openCount = 0;
+      all.forEach(function (ticket) { if (ticket.isActive) openCount += 1; });
+      index[tag] = {
+        tickets: all.slice(0, HISTORY_PER_ASSET).map(function (ticket) {
+          return {
+            ticketId: ticket.ticketId,
+            status: ticket.status,
+            statusLabel: statusLabel(ticket.status),
+            isActive: ticket.isActive,
+            section: ticket.section,
+            summary: ticket.summary,
+            actionRequired: ticket.actionRequired,
+            sourceRecordId: ticket.sourceRecordId,
+            cycleId: ticket.cycleId,
+            updatedAt: ticket.updatedAt,
+            resolvedAt: ticket.resolvedAt
+          };
+        }),
+        openCount: openCount,
+        closedCount: all.length - openCount,
+        total: all.length
+      };
+    });
+    return index;
+  }
+
+  /** Every ticket on one asset, open first, with exact counts. */
+  function ticketsForAsset(assetTag) {
+    var tag = PMS.Util.normalizeAssetTag(assetTag);
+    var empty = { tickets: [], openCount: 0, closedCount: 0, total: 0 };
+    if (!tag) return empty;
+    return ticketsByAsset([tag])[tag] || empty;
+  }
+
+  /*
     Precedence when a record has several tickets: report the one needing the
     most attention. OPEN outranks IN_PROGRESS because nobody has picked it up
     yet, and ON_HOLD ranks last of the active states because it is waiting on
@@ -1116,6 +1226,8 @@ PMS.Tickets = (function () {
     hasForRecord: hasForRecord,
     openByAsset: openByAsset,
     openForAsset: openForAsset,
+    ticketsByAsset: ticketsByAsset,
+    ticketsForAsset: ticketsForAsset,
     trackerStatusForRecord: trackerStatusForRecord
   };
 })();

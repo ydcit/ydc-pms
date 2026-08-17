@@ -1,143 +1,26 @@
 var PMS = PMS || {};
 
 PMS.Assets = (function () {
-  // Bumped when the browser-visible asset shape/eligibility behavior changes so
-  // prior picker results are never reused after a deployment.
-  var CACHE_VERSION = 5;
-  var CACHE_CHUNK_SIZE = 80000;
-  var MAX_CACHE_CHUNKS = 100;
+  /*
+    Bumped when the browser-visible asset shape or eligibility behaviour changes,
+    so a deployment never reads picker results built by an older version. It is
+    part of the cache key rather than of the stored value, which is what lets the
+    generic cache helper stay ignorant of what it holds.
+  */
+  var CACHE_VERSION = 6;
 
   function spreadsheet() {
     return SpreadsheetApp.openById(PMS.CONFIG.SPREADSHEET_ID);
   }
 
   function cacheBaseKey(sectionKey) {
-    return 'PMS_ASSETS_' + PMS.Util.section(sectionKey).key;
+    return 'PMS_ASSETS_V' + CACHE_VERSION + '_' + PMS.Util.section(sectionKey).key;
   }
 
-  function cacheManifestKey(baseKey) {
-    return baseKey + '_MANIFEST';
-  }
-
-  function cacheChunkKey(baseKey, index) {
-    return baseKey + '_CHUNK_' + index;
-  }
-
-  function allCacheKeys(baseKey) {
-    var keys = [baseKey, cacheManifestKey(baseKey)];
-    for (var index = 0; index < MAX_CACHE_CHUNKS; index += 1) {
-      keys.push(cacheChunkKey(baseKey, index));
-    }
-    return keys;
-  }
-
-  function clearCache(cache, baseKey) {
-    cache.removeAll(allCacheKeys(baseKey));
-  }
-
-  function parseManifest(value) {
-    if (!value) return null;
-    try {
-      var manifest = JSON.parse(value);
-      var validChunkCount = Number.isInteger(manifest.chunks) &&
-        manifest.chunks > 0 && manifest.chunks <= MAX_CACHE_CHUNKS;
-      var validLength = Number.isInteger(manifest.encodedLength) && manifest.encodedLength > 0;
-      var validGeneration = typeof manifest.generation === 'string' &&
-        /^[A-Za-z0-9_-]{8,64}$/.test(manifest.generation);
-      var validChecksum = typeof manifest.checksum === 'string' && manifest.checksum.length > 0;
-      if (manifest.version !== CACHE_VERSION || !validChunkCount || !validLength ||
-          !validGeneration || !validChecksum) {
-        return null;
-      }
-      return manifest;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function checksum(value) {
-    var digest = Utilities.computeDigest(
-      Utilities.DigestAlgorithm.SHA_256,
-      value,
-      Utilities.Charset.UTF_8
-    );
-    return Utilities.base64EncodeWebSafe(digest);
-  }
-
-  function encodeCacheValue(value) {
-    return Utilities.base64EncodeWebSafe(value, Utilities.Charset.UTF_8);
-  }
-
-  function decodeCacheValue(value) {
-    return Utilities.newBlob(Utilities.base64DecodeWebSafe(value))
-      .getDataAsString('UTF-8');
-  }
-
-  function readCachedAssets(cache, baseKey) {
-    var manifest = parseManifest(cache.get(cacheManifestKey(baseKey)));
-    if (!manifest) return null;
-
-    var keys = [];
-    for (var index = 0; index < manifest.chunks; index += 1) {
-      keys.push(cacheChunkKey(baseKey, index));
-    }
-    var cachedChunks = cache.getAll(keys);
-    var prefix = manifest.generation + ':';
-    var encoded = '';
-    for (var chunkIndex = 0; chunkIndex < keys.length; chunkIndex += 1) {
-      var chunk = cachedChunks[keys[chunkIndex]];
-      if (typeof chunk !== 'string' || chunk.indexOf(prefix) !== 0) return null;
-      encoded += chunk.slice(prefix.length);
-    }
-    if (encoded.length !== manifest.encodedLength) return null;
-
-    try {
-      var json = decodeCacheValue(encoded);
-      if (checksum(json) !== manifest.checksum) return null;
-      var assets = JSON.parse(json);
-      return Array.isArray(assets) ? assets : null;
-    } catch (error) {
-      console.warn('Ignoring invalid chunked asset cache: ' + error.message);
-      return null;
-    }
-  }
-
-  function writeCachedAssets(cache, baseKey, assets) {
-    var json = JSON.stringify(assets);
-    var encoded = encodeCacheValue(json);
-    var chunks = [];
-    for (var offset = 0; offset < encoded.length; offset += CACHE_CHUNK_SIZE) {
-      chunks.push(encoded.slice(offset, offset + CACHE_CHUNK_SIZE));
-    }
-    if (!chunks.length || chunks.length > MAX_CACHE_CHUNKS) {
-      console.warn('Asset list is too large for the chunked cache.');
-      clearCache(cache, baseKey);
-      return;
-    }
-
-    var generation = Utilities.getUuid().replace(/-/g, '').slice(0, 16);
-    var values = {};
-    chunks.forEach(function (chunk, index) {
-      values[cacheChunkKey(baseKey, index)] = generation + ':' + chunk;
-    });
-    var manifest = {
-      version: CACHE_VERSION,
-      generation: generation,
-      chunks: chunks.length,
-      encodedLength: encoded.length,
-      checksum: checksum(json)
-    };
-
-    // Remove both legacy single-value entries and every possible prior chunk.
-    // The manifest is written last so readers never accept a partial write.
-    clearCache(cache, baseKey);
-    try {
-      cache.putAll(values, PMS.CONFIG.CACHE_SECONDS);
-      cache.put(cacheManifestKey(baseKey), JSON.stringify(manifest), PMS.CONFIG.CACHE_SECONDS);
-    } catch (error) {
-      clearCache(cache, baseKey);
-      throw error;
-    }
+  /** Cached eligible assets, or null when there is nothing trustworthy stored. */
+  function readCachedAssets(baseKey) {
+    var assets = PMS.Util.cacheGet(baseKey);
+    return Array.isArray(assets) ? assets : null;
   }
 
   function sheetForSection(sectionKey) {
@@ -224,11 +107,10 @@ PMS.Assets = (function () {
 
   function listEligible(sectionKey, forceRefresh) {
     var section = PMS.Util.section(sectionKey);
-    var cache = CacheService.getScriptCache();
     var cacheKey = cacheBaseKey(section.key);
     if (!forceRefresh && eligibleMemo[section.key]) return eligibleMemo[section.key];
     if (!forceRefresh) {
-      var cached = readCachedAssets(cache, cacheKey);
+      var cached = readCachedAssets(cacheKey);
       if (cached !== null) {
         eligibleMemo[section.key] = cached;
         return cached;
@@ -240,11 +122,7 @@ PMS.Assets = (function () {
       seen[asset.tag] = true;
       return true;
     });
-    try {
-      writeCachedAssets(cache, cacheKey, assets);
-    } catch (error) {
-      console.warn('Asset list could not be cached: ' + error.message);
-    }
+    PMS.Util.cachePut(cacheKey, assets);
     eligibleMemo[section.key] = assets;
     return assets;
   }
@@ -358,7 +236,7 @@ PMS.Assets = (function () {
 
   function invalidate(sectionKey) {
     delete eligibleMemo[PMS.Util.section(sectionKey).key];
-    clearCache(CacheService.getScriptCache(), cacheBaseKey(sectionKey));
+    PMS.Util.cacheDrop(cacheBaseKey(sectionKey));
   }
 
   return {

@@ -226,6 +226,194 @@ PMS.Util = (function () {
     return normalized.join(' | ');
   }
 
+  /* ------------------------------------------------------------ script cache
+
+     A value too large for a single CacheService entry, stored as base64 chunks
+     behind a manifest carrying a generation, a length and a checksum. A reader
+     accepts the value only when every chunk belongs to the same write and the
+     decoded JSON still matches its checksum, so a partial write or a half
+     expired one reads as a miss rather than as corruption.
+
+     The technique was proven on the asset picker in PmsAssets and now lives
+     here, because the completed-records list and the ticket list need exactly
+     the same thing: one sheet read serving many page requests.
+
+     Versioning is the caller's job, folded into the base key. That keeps this
+     helper ignorant of what it is storing while still letting a deployment that
+     changes a payload's shape refuse to read older entries.
+  */
+  var CACHE_CHUNK_SIZE = 80000;
+  var MAX_CACHE_CHUNKS = 100;
+
+  function cacheManifestKey(baseKey) { return baseKey + '_MANIFEST'; }
+  function cacheChunkKey(baseKey, index) { return baseKey + '_CHUNK_' + index; }
+
+  function cacheAllKeys(baseKey) {
+    var keys = [baseKey, cacheManifestKey(baseKey)];
+    for (var index = 0; index < MAX_CACHE_CHUNKS; index += 1) {
+      keys.push(cacheChunkKey(baseKey, index));
+    }
+    return keys;
+  }
+
+  function cacheChecksum(value) {
+    return Utilities.base64EncodeWebSafe(Utilities.computeDigest(
+      Utilities.DigestAlgorithm.SHA_256, value, Utilities.Charset.UTF_8
+    ));
+  }
+
+  function cacheParseManifest(value) {
+    if (!value) return null;
+    try {
+      var manifest = JSON.parse(value);
+      var validChunks = Number.isInteger(manifest.chunks) &&
+        manifest.chunks > 0 && manifest.chunks <= MAX_CACHE_CHUNKS;
+      var validLength = Number.isInteger(manifest.encodedLength) && manifest.encodedLength > 0;
+      var validGeneration = typeof manifest.generation === 'string' &&
+        /^[A-Za-z0-9_-]{8,64}$/.test(manifest.generation);
+      var validChecksum = typeof manifest.checksum === 'string' && manifest.checksum.length > 0;
+      if (!validChunks || !validLength || !validGeneration || !validChecksum) return null;
+      return manifest;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /** Drops every key a previous write of this base key could have used. */
+  function cacheDrop(baseKey) {
+    try {
+      CacheService.getScriptCache().removeAll(cacheAllKeys(baseKey));
+    } catch (error) {
+      console.warn('Cache entry ' + baseKey + ' could not be dropped: ' + error.message);
+    }
+  }
+
+  /** The cached value for a base key, or null on any doubt at all. */
+  function cacheGet(baseKey) {
+    try {
+      var cache = CacheService.getScriptCache();
+      var manifest = cacheParseManifest(cache.get(cacheManifestKey(baseKey)));
+      if (!manifest) return null;
+
+      var keys = [];
+      for (var index = 0; index < manifest.chunks; index += 1) {
+        keys.push(cacheChunkKey(baseKey, index));
+      }
+      var stored = cache.getAll(keys);
+      var prefix = manifest.generation + ':';
+      var encoded = '';
+      for (var position = 0; position < keys.length; position += 1) {
+        var chunk = stored[keys[position]];
+        if (typeof chunk !== 'string' || chunk.indexOf(prefix) !== 0) return null;
+        encoded += chunk.slice(prefix.length);
+      }
+      if (encoded.length !== manifest.encodedLength) return null;
+
+      var json = Utilities.newBlob(Utilities.base64DecodeWebSafe(encoded)).getDataAsString('UTF-8');
+      if (cacheChecksum(json) !== manifest.checksum) return null;
+      return JSON.parse(json);
+    } catch (error) {
+      console.warn('Ignoring unreadable cache entry ' + baseKey + ': ' + error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Stores a value under a base key, chunked as needed.
+   *
+   * The manifest is written last, so a reader that arrives mid-write sees no
+   * manifest and treats it as a miss. Too large to chunk is not an error: the
+   * caller carries on with the value it already computed.
+   */
+  function cachePut(baseKey, value, seconds) {
+    try {
+      var json = JSON.stringify(value);
+      var encoded = Utilities.base64EncodeWebSafe(json, Utilities.Charset.UTF_8);
+      var chunks = [];
+      for (var offset = 0; offset < encoded.length; offset += CACHE_CHUNK_SIZE) {
+        chunks.push(encoded.slice(offset, offset + CACHE_CHUNK_SIZE));
+      }
+      if (!chunks.length || chunks.length > MAX_CACHE_CHUNKS) {
+        console.warn('Value for ' + baseKey + ' is too large for the chunked cache.');
+        cacheDrop(baseKey);
+        return false;
+      }
+
+      var generation = Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+      var values = {};
+      chunks.forEach(function (chunk, index) {
+        values[cacheChunkKey(baseKey, index)] = generation + ':' + chunk;
+      });
+      var manifest = {
+        generation: generation,
+        chunks: chunks.length,
+        encodedLength: encoded.length,
+        checksum: cacheChecksum(json)
+      };
+
+      var cache = CacheService.getScriptCache();
+      var ttl = seconds || PMS.CONFIG.CACHE_SECONDS;
+      cacheDrop(baseKey);
+      cache.putAll(values, ttl);
+      cache.put(cacheManifestKey(baseKey), JSON.stringify(manifest), ttl);
+      return true;
+    } catch (error) {
+      console.warn('Value for ' + baseKey + ' could not be cached: ' + error.message);
+      cacheDrop(baseKey);
+      return false;
+    }
+  }
+
+  /* ------------------------------------------------------ cache generations
+
+     A stamp shared by every reader of one dataset, bumped by anything that
+     writes to it. Readers fold it into their cache key, so a single write
+     invalidates every cached slice of that data for every viewer at once.
+
+     The alternative was dropping keys by name on write, which works only while
+     the writer can enumerate whose caches it just invalidated. A legacy import
+     writes records belonging to many technicians and sections, and could not,
+     so it would have left other people reading a stale archive until the entry
+     expired on its own.
+  */
+  var generationMemo = {};
+
+  function generation(propertyKey) {
+    if (generationMemo[propertyKey] !== undefined) return generationMemo[propertyKey];
+    var stamp = '0';
+    try {
+      stamp = PropertiesService.getScriptProperties().getProperty(propertyKey) || '0';
+    } catch (error) {
+      console.warn('Generation ' + propertyKey + ' could not be read: ' + error.message);
+    }
+    generationMemo[propertyKey] = stamp;
+    return stamp;
+  }
+
+  /**
+   * Marks a dataset as changed. Never throws: the write that prompted it has
+   * already succeeded, and failing here must not undo it. The cost of a missed
+   * bump is bounded by the cache's own expiry.
+   */
+  function bumpGeneration(propertyKey) {
+    /*
+      A timestamp alone is not enough. Two writes inside the same millisecond
+      produce the same stamp, which leaves the key unchanged and the previous
+      write's cache entry still reachable — a stale read for as long as the entry
+      lives. The random suffix makes every bump a distinct key; ordering is
+      irrelevant, because this is only ever compared for equality.
+    */
+    var stamp = String(Date.now()) + '_' + Utilities.getUuid().replace(/-/g, '').slice(0, 8);
+    try {
+      PropertiesService.getScriptProperties().setProperty(propertyKey, stamp);
+      generationMemo[propertyKey] = stamp;
+    } catch (error) {
+      console.warn('Generation ' + propertyKey + ' could not be bumped: ' + error.message);
+      delete generationMemo[propertyKey];
+    }
+    return stamp;
+  }
+
   function publicError(error) {
     console.error(error && error.stack ? error.stack : error);
     var message = error && error.message ? error.message : 'An unexpected error occurred.';
@@ -262,6 +450,11 @@ PMS.Util = (function () {
     isTrackerComplete: isTrackerComplete,
     isTrackerAwaitingRepair: isTrackerAwaitingRepair,
     serializeTags: serializeTags,
+    cacheGet: cacheGet,
+    cachePut: cachePut,
+    cacheDrop: cacheDrop,
+    generation: generation,
+    bumpGeneration: bumpGeneration,
     publicError: publicError,
     daysBetween: daysBetween
   };

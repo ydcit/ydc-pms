@@ -292,6 +292,7 @@ PMS.Records = (function () {
     var targetRow = rowNumber || sheet.getLastRow() + 1;
     ensureRowCapacity(sheet, targetRow);
     sheet.getRange(targetRow, 1, 1, columns.length).setValues([objectToRow(record, columns)]);
+    markRecordsChanged();
     return targetRow;
   }
 
@@ -667,10 +668,11 @@ PMS.Records = (function () {
       // Lets a resumed draft know a findings ticket already exists, so the
       // technician is not asked to file a second one.
       tickets: PMS.Tickets.forRecord(record.recordId),
-      // Every unresolved ticket on this asset, including ones raised from an
-      // earlier cycle's record. Shown on the asset itself, because a repair
-      // still outstanding changes what this visit should be looking at.
-      assetTickets: PMS.Tickets.openForAsset(record.assetTag),
+      // Every ticket on this asset, open and closed, including ones raised from
+      // an earlier cycle's record. An outstanding repair changes what this visit
+      // should be looking at; a closed one is the evidence that a known fault
+      // was dealt with, so both belong on the asset.
+      assetTickets: PMS.Tickets.ticketsForAsset(record.assetTag),
       pmsCompletion: record.pmsCompletion
     };
   }
@@ -824,10 +826,58 @@ PMS.Records = (function () {
    * records in their registered section. The scope is enforced here from the
    * server-resolved context, never from a browser-supplied value.
    */
-  function completedList(context, options) {
-    var request = options && typeof options === 'object' ? options : {};
-    var isAdmin = Boolean(context.isAdmin);
-    var viewerEmail = PMS.Util.normalizeEmail(context.email);
+  /*
+    Cache version and generation for the completed-records projection.
+
+    The version is in the key, so a deployment that changes the projected shape
+    ignores what an older one stored. The generation is bumped by every record
+    write, which is what makes this cache safe rather than merely fast: paging,
+    sorting, filtering and searching all run against the cached projection, and
+    the moment any record changes, every cached scope for every viewer becomes
+    unreachable instead of stale.
+
+    Scope is in the key too, because it decides which rows exist at all. An
+    administrator's projection is not a superset another technician may read from:
+    that would leak other sections' records if the key were ever shared.
+  */
+  var COMPLETED_CACHE_VERSION = 1;
+  var GENERATION_PROPERTY = 'PMS_RECORDS_GENERATION';
+
+  function completedCacheKey(isAdmin, viewerEmail, section) {
+    // Spelled out rather than hashed: a digest would cost a Utilities round trip
+    // on a path whose whole purpose is to avoid round trips, and a legible key is
+    // easier to reason about when something is stale.
+    var scope = isAdmin
+      ? 'ALL'
+      : String(viewerEmail + '_' + section).replace(/[^A-Za-z0-9]+/g, '_');
+    return 'PMS_COMPLETED_V' + COMPLETED_CACHE_VERSION + '_' +
+      PMS.Util.generation(GENERATION_PROPERTY) + '_' + scope;
+  }
+
+  /**
+   * Marks the record sheets as changed.
+   *
+   * Called from the three places that write a record row rather than from the
+   * higher-level operations, so a path added later cannot forget: a save, a
+   * legacy import and a batched seed all funnel through those writes.
+   */
+  function markRecordsChanged() {
+    PMS.Util.bumpGeneration(GENERATION_PROPERTY);
+  }
+
+  /**
+   * Completed records the viewer may see, projected to what the list needs.
+   *
+   * The expensive half of completedList, split out so it can be cached whole.
+   * Filtering and paging deliberately stay outside: they change with every
+   * keystroke, while this changes only when somebody finishes maintenance.
+   */
+  function completedProjection(isAdmin, viewerEmail, section, forceRefresh) {
+    var key = completedCacheKey(isAdmin, viewerEmail, section);
+    if (!forceRefresh) {
+      var cached = PMS.Util.cacheGet(key);
+      if (Array.isArray(cached)) return cached;
+    }
 
     var scoped = readRecordFields(COMPLETED_FIELDS)
       .filter(function (record) {
@@ -835,7 +885,7 @@ PMS.Records = (function () {
         if (PMS.Util.completionState(cellText(record.pmsCompletion)) !== 'COMPLETED') return false;
         if (isAdmin) return true;
         return PMS.Util.normalizeEmail(cellText(record.technicianEmail)) === viewerEmail &&
-          cellText(record.itSection) === context.section;
+          cellText(record.itSection) === section;
       })
       .map(function (record) {
         var parts = cycleParts(record.cycleId);
@@ -858,6 +908,18 @@ PMS.Records = (function () {
           row: record._rowNumber
         };
       });
+
+    PMS.Util.cachePut(key, scoped);
+    return scoped;
+  }
+
+  function completedList(context, options) {
+    var request = options && typeof options === 'object' ? options : {};
+    var isAdmin = Boolean(context.isAdmin);
+    var viewerEmail = PMS.Util.normalizeEmail(context.email);
+    var scoped = completedProjection(
+      isAdmin, viewerEmail, context.section, Boolean(request.refresh)
+    );
 
     // Filter options come from everything in scope, so they stay stable while
     // the user narrows the list.
@@ -913,17 +975,31 @@ PMS.Records = (function () {
     var totalPages = showAll ? 1 : Math.max(1, Math.ceil(filtered.length / pageSize));
 
     /*
-      Outstanding repairs, attached to the page rather than to everything in
-      scope: one ticket-sheet read decorates the twenty rows about to be drawn,
-      and reading a thousand tickets to annotate rows nobody will look at is
-      what made this list slow the first time it was tried.
+      Tickets, attached to the page rather than to everything in scope: one
+      ticket read decorates the twenty rows about to be drawn, and annotating
+      rows nobody will look at is what made this list slow the first time it was
+      tried.
+
+      Closed tickets come too. A row whose asset was broken and then repaired
+      should say so; showing only open ones made a resolved repair look like it
+      never happened.
+
+      The projection is cached, so these are copies rather than the cached
+      objects themselves. Decorating in place would otherwise write the ticket
+      state into the cache and outlive the ticket sheet it came from.
     */
-    var pageRows = filtered.slice(start, start + pageSize);
-    var openTickets = PMS.Tickets.openByAsset(pageRows.map(function (record) {
+    var pageRows = filtered.slice(start, start + pageSize).map(function (record) {
+      return Object.assign({}, record);
+    });
+    var byAsset = PMS.Tickets.ticketsByAsset(pageRows.map(function (record) {
       return record.assetTag;
     }));
     pageRows.forEach(function (record) {
-      record.openTickets = openTickets[record.assetTag] || [];
+      var entry = byAsset[record.assetTag];
+      record.assetTickets = entry ? entry.tickets : [];
+      record.openTicketCount = entry ? entry.openCount : 0;
+      record.closedTicketCount = entry ? entry.closedCount : 0;
+      record.totalTicketCount = entry ? entry.total : 0;
     });
 
     return {
@@ -1150,6 +1226,7 @@ PMS.Records = (function () {
         group.records.map(function (record) { return objectToRow(record, columns); })
       );
     });
+    markRecordsChanged();
   }
 
   /**
@@ -1307,6 +1384,7 @@ PMS.Records = (function () {
     var appended = Object.keys(rowsBySection).reduce(function (total, sectionKey) {
       return total + rowsBySection[sectionKey].length;
     }, 0);
+    if (appended) markRecordsChanged();
     return { appended: appended, appendedBySection: appendedBySection };
   }
 
