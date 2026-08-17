@@ -2929,6 +2929,395 @@
   }
 
   /* --------------------------------------------------------------------------
+     Administrator legacy PMS import
+     -------------------------------------------------------------------------- */
+
+  .legacy-import-dialog {
+    position: relative;
+    display: flex;
+    width: min(100%, 980px);
+    max-height: min(94vh, 940px);
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: var(--r-xl);
+    background: var(--surface);
+    box-shadow: var(--shadow-xl);
+    animation: pop-in 220ms var(--ease);
+  }
+
+  .legacy-import-dialog__header {
+    flex: none;
+    padding: 22px 26px 15px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+
+  .legacy-import-dialog__title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+  }
+
+  .legacy-import-dialog__title-row h1 {
+    font-size: 21px;
+  }
+
+  .legacy-import-dialog__summary {
+    max-width: 690px;
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .legacy-import-steps {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 18px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .legacy-import-steps li {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 9px 5px 5px;
+    border-radius: var(--r-full);
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .legacy-import-steps li > span {
+    display: grid;
+    width: 25px;
+    height: 25px;
+    place-items: center;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-full);
+    background: var(--surface);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .legacy-import-steps li.is-current {
+    background: var(--accent-soft);
+    color: var(--accent-press);
+  }
+
+  .legacy-import-steps li.is-current > span {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+
+  .legacy-import-steps li.is-complete {
+    color: var(--success);
+  }
+
+  .legacy-import-steps li.is-complete > span {
+    border-color: var(--success-line);
+    background: var(--success-soft);
+    color: var(--success);
+  }
+
+  .legacy-import-dialog__form {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
+  .legacy-import-dialog__body {
+    min-height: 0;
+    flex: 1 1 auto;
+    padding: 22px 26px 26px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    background: var(--surface-soft);
+  }
+
+  .legacy-import-stage {
+    display: grid;
+    gap: 20px;
+  }
+
+  .legacy-import-cycle {
+    display: grid;
+    gap: 3px;
+    padding: 13px 15px;
+    border: 1px solid var(--accent-line);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-sm);
+    background: var(--accent-soft);
+  }
+
+  .legacy-import-cycle span {
+    color: var(--accent-press);
+    font-size: 11px;
+    font-weight: 620;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+  }
+
+  .legacy-import-cycle strong {
+    font-size: 17px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .legacy-import-cycle small {
+    color: var(--ink-soft);
+    font-size: 12px;
+  }
+
+  .legacy-import-local-count {
+    color: var(--muted);
+    font-size: 11.5px;
+    font-weight: 550;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .field-optional {
+    margin-left: 5px;
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 500;
+  }
+
+  .legacy-import-file-row {
+    display: grid;
+    align-items: end;
+    gap: 16px;
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 0.45fr);
+  }
+
+  .legacy-import-file-status {
+    display: flex;
+    min-height: 42px;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--ink-soft);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .legacy-import-file-status .icon {
+    flex: none;
+    color: var(--muted);
+  }
+
+  .legacy-import-summary {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0;
+  }
+
+  .legacy-import-summary__item {
+    display: grid;
+    gap: 5px;
+    padding: 13px 14px;
+    border: 1px solid var(--line);
+    border-top: 2px solid var(--line-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+  }
+
+  .legacy-import-summary__item dt {
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 620;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .legacy-import-summary__item dd {
+    margin: 0;
+    font-size: 21px;
+    font-weight: 660;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .legacy-import-summary__item--success { border-top-color: var(--success); }
+  .legacy-import-summary__item--warning { border-top-color: var(--warning); }
+  .legacy-import-summary__item--danger { border-top-color: var(--danger); }
+
+  .legacy-import-table-wrap {
+    max-height: 330px;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface);
+  }
+
+  .legacy-import-table-wrap:focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+  }
+
+  .legacy-import-table {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+
+  .legacy-import-table th,
+  .legacy-import-table td {
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .legacy-import-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--surface-sunken);
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .legacy-import-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .legacy-import-table td:first-child {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .legacy-import-table__empty {
+    padding: 28px 16px !important;
+    color: var(--muted);
+    text-align: center !important;
+  }
+
+  .legacy-import-table-note {
+    margin: -12px 0 0;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+
+  .legacy-import-confirmation {
+    display: grid;
+    gap: 14px;
+    padding: 17px;
+    border: 1px solid var(--warning-line);
+    border-radius: var(--r-md);
+    background: var(--warning-soft);
+  }
+
+  .legacy-import-confirmation .field {
+    max-width: 460px;
+  }
+
+  .legacy-import-results-icon {
+    display: grid;
+    place-items: center;
+    border-color: var(--success-line);
+    background: var(--success-soft);
+    color: var(--success);
+  }
+
+  .legacy-import-dialog__footer {
+    display: flex;
+    min-height: 65px;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 13px 26px;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+  }
+
+  .legacy-import-dialog__footer-state,
+  .legacy-import-dialog__footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .legacy-import-dialog__footer-state {
+    min-width: 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .legacy-import-dialog__footer-actions {
+    flex: none;
+  }
+
+  .spinner--small {
+    width: 15px;
+    height: 15px;
+  }
+
+  @media (max-width: 860px) {
+    .legacy-import-dialog {
+      width: 100%;
+      height: 100vh;
+      max-height: 100vh;
+      border-radius: 0;
+    }
+
+    .legacy-import-dialog__header {
+      padding: 18px 18px 13px;
+    }
+
+    .legacy-import-dialog__body {
+      padding: 18px;
+    }
+
+    .legacy-import-dialog__footer {
+      padding: 12px 18px;
+    }
+
+    .legacy-import-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .legacy-import-file-row {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .legacy-import-steps strong {
+      display: none;
+    }
+
+    .legacy-import-dialog__footer {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .legacy-import-dialog__footer-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .legacy-import-dialog__footer-actions .button {
+      width: 100%;
+    }
+
+    .legacy-import-summary {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* --------------------------------------------------------------------------
      Toasts and busy overlay
      -------------------------------------------------------------------------- */
 

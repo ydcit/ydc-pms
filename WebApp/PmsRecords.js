@@ -309,8 +309,25 @@ PMS.Records = (function () {
     return [sectionKey, PMS.Util.normalizeAssetTag(assetTag), cycleId].join('|');
   }
 
+  function legacySeedRecordId(sectionKey, assetTag, cycleId) {
+    var section = PMS.Util.section(sectionKey);
+    var normalizedTag = PMS.Util.normalizeAssetTag(assetTag);
+    var cycleMatch = /^(\d{4})-(T[123])$/.exec(String(cycleId || '').trim());
+    if (!normalizedTag || !cycleMatch) {
+      PMS.Util.fail('Cannot create a legacy import identifier from an invalid natural key.', 'VALIDATION_ERROR');
+    }
+    var naturalKey = completionKey(section.key, normalizedTag, cycleMatch[0]);
+    return [
+      'LEGACY-SEED',
+      cycleMatch[1],
+      section.key,
+      cycleMatch[2],
+      PMS.Util.hashText(naturalKey).slice(0, 32).toUpperCase()
+    ].join('-');
+  }
+
   function isMaintenanceRecord(record) {
-    return ['MAINTENANCE', 'REINSPECTION', 'LEGACY'].indexOf(String(record.recordType)) >= 0;
+    return ['MAINTENANCE', 'REINSPECTION', 'LEGACY', 'LEGACY_SEED'].indexOf(String(record.recordType)) >= 0;
   }
 
   function completedRecord(sectionKey, assetTag, cycleId, excludeRecordId) {
@@ -894,7 +911,8 @@ PMS.Records = (function () {
         technicianName: record.technicianName,
         assessmentResult: record.assessmentResult,
         pmsCompletion: record.pmsCompletion,
-        editable: PMS.Util.completionState(record.pmsCompletion) !== 'COMPLETED'
+        editable: record.recordType !== 'LEGACY_SEED' &&
+          PMS.Util.completionState(record.pmsCompletion) !== 'COMPLETED'
       });
     }
     return output;
@@ -955,6 +973,237 @@ PMS.Records = (function () {
       dataQualityFlags: legacyFlags.join(' | '),
       pmsCompletion: PMS.Util.progressText(data.checkbox ? 100 : 0, 0, 0, data.checkbox ? 'COMPLETED' : 'INCOMPLETE')
     };
+  }
+
+  function addDataQualityFlag(record, flag) {
+    var flags = String(record.dataQualityFlags || '').split('|').map(function (item) {
+      return item.trim();
+    }).filter(Boolean);
+    if (flags.indexOf(flag) < 0) flags.push(flag);
+    record.dataQualityFlags = flags.join(' | ');
+  }
+
+  function hasDataQualityFlag(record, flag) {
+    return String(record.dataQualityFlags || '').split('|').map(function (item) {
+      return item.trim();
+    }).indexOf(flag) >= 0;
+  }
+
+  function legacySeedRecordObject(data, timestamp) {
+    var cycle = data.cycle;
+    var asset = data.asset;
+    var admin = data.admin;
+    var sourceNote = PMS.Util.safeCellText(
+      data.sourceNote || 'Legacy source note not provided.',
+      PMS.CONFIG.MAX_TEXT_LENGTH
+    );
+    var flags = [
+      'LEGACY_IMPORT',
+      'ADMIN_BULK_SEED',
+      'LEGACY_CHECKLIST_NOT_CAPTURED',
+      'IMPORT_BATCH:' + data.batchId
+    ];
+    if (!data.sourceNote) flags.push('LEGACY_SOURCE_NOTE_NOT_CAPTURED');
+    if (data.historical) flags.push('HISTORICAL_NO_TRACKER_WRITE');
+    if (asset.status !== 'INPROD') flags.push('HISTORICAL_NON_INPROD_ASSET');
+    if (data.section === 'INFRA_SECURITY') flags.push('LEGACY_EVIDENCE_NOT_CAPTURED');
+
+    var record = {
+      recordId: data.recordId,
+      recordType: 'LEGACY_SEED',
+      schemaVersion: PMS.CONFIG.SCHEMA_VERSION,
+      formType: data.section === 'INFRA_SECURITY' ? 'INFRA_SECURITY_V1' : data.section,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      submittedAt: data.historical ? timestamp : '',
+      idempotencyKey: data.recordId,
+      technicianName: 'Legacy PMS Import',
+      // Deliberately blank: the importing administrator certified the legacy
+      // source but must not receive "My Completed" technician credit.
+      technicianEmail: '',
+      itSection: data.section,
+      maintenanceDate: data.maintenanceDate,
+      maintenanceYear: cycle.year,
+      cycle: cycle.cycle,
+      cycleId: cycle.cycleId,
+      cycleDeadline: cycle.deadline,
+      sourceSheet: asset.sheetName,
+      sourceRow: asset.row,
+      assetTag: asset.tag,
+      assetStatus: asset.status,
+      masterLocation: PMS.Util.safeCellText(asset.location, 500),
+      observedLocation: '',
+      locationDiscrepancy: 'NO',
+      assessmentResult: 'Legacy record',
+      assetFindings: sourceNote,
+      actionTaken: PMS.Util.safeCellText(
+        'Legacy PMS completion imported by ' + admin.name + ' <' + admin.email + '> on ' +
+          timestamp + '. Import batch: ' + data.batchId + '.',
+        PMS.CONFIG.MAX_TEXT_LENGTH
+      ),
+      recommendation: data.section === 'INFRA_SECURITY'
+        ? 'Detailed legacy checklist and Infrastructure evidence were not captured by this import.'
+        : 'Detailed legacy checklist results were not captured by this import.',
+      completedItems: 0,
+      applicableItems: 0,
+      completionPercent: 1,
+      trackerSheet: asset.sheetName,
+      trackerRow: asset.row,
+      trackerYear: data.trackerYear,
+      trackerCycle: cycle.cycle,
+      previousTrackerCheckbox: '',
+      previousTrackerRemarks: '',
+      trackerSyncedAt: '',
+      syncError: '',
+      reinspectionOf: '',
+      dataQualityFlags: flags.join(' | '),
+      pmsCompletion: PMS.Util.progressText(100, 0, 0, data.historical ? 'COMPLETED' : 'SYNCING')
+    };
+    if (data.section === 'INFRA_SECURITY') {
+      record.assetType = PMS.Validation.inferInfraAssetType(asset.tag) || '';
+      if (!record.assetType) addDataQualityFlag(record, 'ASSET_TYPE_UNVERIFIED');
+    }
+    return record;
+  }
+
+  function writeRecordObjectsBatch(sheet, records) {
+    if (!records.length) return;
+    var columns = definitionForSheet(sheet).columns;
+    var sorted = records.slice().sort(function (left, right) {
+      return Number(left._rowNumber) - Number(right._rowNumber);
+    });
+    var groups = [];
+    sorted.forEach(function (record) {
+      var current = groups[groups.length - 1];
+      if (current && Number(record._rowNumber) === current.startRow + current.records.length) {
+        current.records.push(record);
+      } else {
+        groups.push({ startRow: Number(record._rowNumber), records: [record] });
+      }
+    });
+    groups.forEach(function (group) {
+      ensureRowCapacity(sheet, group.startRow + group.records.length - 1);
+      sheet.getRange(group.startRow, 1, group.records.length, columns.length).setValues(
+        group.records.map(function (record) { return objectToRow(record, columns); })
+      );
+    });
+  }
+
+  /**
+   * Stages one already-authorized legacy-import chunk. Callers must hold the
+   * script lock and supply either a fresh item or its exact existing
+   * LEGACY_SEED record from the same locked revalidation pass.
+   */
+  function stageLegacySeedBatch(items) {
+    var list = Array.isArray(items) ? items : [];
+    if (!list.length) return [];
+    var sectionKey = list[0].section;
+    if (!list.every(function (item) { return item.section === sectionKey; })) {
+      PMS.Util.fail('A legacy import chunk must contain one IT section.', 'DATA_INTEGRITY_ERROR');
+    }
+    var sheet = responseSheet(true, sectionKey);
+    var timestamp = PMS.Util.nowIso();
+    var nextRow = sheet.getLastRow() + 1;
+    var records = list.map(function (item) {
+      var record = item.existing || legacySeedRecordObject(item, timestamp);
+      var expectedId = legacySeedRecordId(item.section, item.asset.tag, item.cycle.cycleId);
+      if (record.recordId !== expectedId || String(record.recordType) !== 'LEGACY_SEED' ||
+          completionKey(record.itSection, record.assetTag, record.cycleId) !==
+            completionKey(item.section, item.asset.tag, item.cycle.cycleId)) {
+        PMS.Util.fail('A legacy import record conflicts with its deterministic natural key.', 'DATA_INTEGRITY_ERROR');
+      }
+      if (item.existing && maintenanceDateText(record.maintenanceDate) !== item.maintenanceDate) {
+        PMS.Util.fail('A resumable legacy import has a different maintenance date.', 'IMPORT_PREVIEW_STALE');
+      }
+      if (item.existing && record._sheetName !== sheet.getName()) {
+        PMS.Util.fail('A legacy import record is stored in the wrong section sheet.', 'DATA_INTEGRITY_ERROR');
+      }
+      if (!item.existing) {
+        record._sheetName = sheet.getName();
+        record._rowNumber = nextRow;
+        nextRow += 1;
+      }
+      record.updatedAt = timestamp;
+      record.trackerYear = item.trackerYear;
+      record.trackerSheet = item.asset.sheetName;
+      record.trackerRow = item.asset.row;
+      record.trackerCycle = item.cycle.cycle;
+      record.syncError = '';
+      addDataQualityFlag(record, 'ADMIN_BULK_SEED');
+      if (item.historical) {
+        addDataQualityFlag(record, 'HISTORICAL_NO_TRACKER_WRITE');
+        if (item.asset.status !== 'INPROD') addDataQualityFlag(record, 'HISTORICAL_NON_INPROD_ASSET');
+        record.submittedAt = record.submittedAt || timestamp;
+        record.pmsCompletion = PMS.Util.progressText(100, 0, 0, 'COMPLETED');
+      } else {
+        record.pmsCompletion = PMS.Util.progressText(100, 0, 0, 'SYNCING');
+      }
+      return record;
+    });
+    writeRecordObjectsBatch(sheet, records);
+    SpreadsheetApp.flush();
+    return records;
+  }
+
+  function finalizeLegacySeedBatch(records, syncResults, failureMessage) {
+    var list = Array.isArray(records) ? records : [];
+    if (!list.length) return [];
+    var results = syncResults || {};
+    var timestamp = PMS.Util.nowIso();
+    list.forEach(function (record) {
+      var result = results[record.recordId] || {
+        status: 'SYNC_FAILED',
+        error: failureMessage || 'Legacy tracker synchronization did not return a result.'
+      };
+      record.updatedAt = timestamp;
+      record.trackerSheet = result.sheetName || record.trackerSheet;
+      record.trackerRow = result.row || record.trackerRow;
+      record.trackerYear = result.trackerYear || record.trackerYear;
+      if (!hasDataQualityFlag(record, 'TRACKER_PRIOR_STATE_CAPTURED') &&
+          result.previousCheckbox !== undefined) {
+        record.previousTrackerCheckbox = result.previousCheckbox;
+        record.previousTrackerRemarks = result.previousRemarks;
+        addDataQualityFlag(record, 'TRACKER_PRIOR_STATE_CAPTURED');
+      }
+      record.trackerSyncedAt = result.syncedAt || '';
+      record.syncError = result.error ? String(result.error).slice(0, 1500) : '';
+      if (result.status === 'COMPLETED') {
+        record.submittedAt = record.submittedAt || timestamp;
+        record.pmsCompletion = PMS.Util.progressText(100, 0, 0, 'COMPLETED');
+      } else {
+        record.pmsCompletion = PMS.Util.progressText(100, 0, 0, 'SYNC FAILED');
+      }
+    });
+    var sheet = sheetForStoredRecord(list[0]);
+    if (!list.every(function (record) { return record._sheetName === sheet.getName(); })) {
+      PMS.Util.fail('A legacy import finalize chunk crossed record sheets.', 'DATA_INTEGRITY_ERROR');
+    }
+    writeRecordObjectsBatch(sheet, list);
+    SpreadsheetApp.flush();
+    return list;
+  }
+
+  function stageLegacySeedTrackerState(records, preparedById) {
+    var list = Array.isArray(records) ? records : [];
+    var prepared = preparedById || {};
+    list.forEach(function (record) {
+      var state = prepared[record.recordId];
+      if (!state) PMS.Util.fail('Legacy tracker preparation is incomplete.', 'DATA_INTEGRITY_ERROR');
+      record.trackerSheet = state.sheetName || record.trackerSheet;
+      record.trackerRow = state.row || record.trackerRow;
+      record.trackerYear = state.trackerYear || record.trackerYear;
+      if (!hasDataQualityFlag(record, 'TRACKER_PRIOR_STATE_CAPTURED')) {
+        record.previousTrackerCheckbox = state.previousCheckbox;
+        record.previousTrackerRemarks = state.previousRemarks;
+        addDataQualityFlag(record, 'TRACKER_PRIOR_STATE_CAPTURED');
+      }
+      record.updatedAt = PMS.Util.nowIso();
+    });
+    if (!list.length) return list;
+    var sheet = sheetForStoredRecord(list[0]);
+    writeRecordObjectsBatch(sheet, list);
+    SpreadsheetApp.flush();
+    return list;
   }
 
   function appendLegacyRecordsBatch(dataList, existingById) {
@@ -1176,11 +1425,19 @@ PMS.Records = (function () {
     fresh.trackerSheet = syncResult.sheetName || fresh.trackerSheet;
     fresh.trackerRow = syncResult.row || fresh.trackerRow;
     fresh.trackerYear = syncResult.trackerYear || fresh.trackerYear;
-    if ((fresh.previousTrackerCheckbox === '' || fresh.previousTrackerCheckbox === undefined) && syncResult.previousCheckbox !== undefined) {
-      fresh.previousTrackerCheckbox = syncResult.previousCheckbox;
-    }
-    if (!fresh.previousTrackerRemarks && syncResult.previousRemarks !== undefined) {
-      fresh.previousTrackerRemarks = syncResult.previousRemarks;
+    if (fresh.recordType === 'LEGACY_SEED') {
+      if (!hasDataQualityFlag(fresh, 'TRACKER_PRIOR_STATE_CAPTURED') && syncResult.previousCheckbox !== undefined) {
+        fresh.previousTrackerCheckbox = syncResult.previousCheckbox;
+        fresh.previousTrackerRemarks = syncResult.previousRemarks;
+        addDataQualityFlag(fresh, 'TRACKER_PRIOR_STATE_CAPTURED');
+      }
+    } else {
+      if ((fresh.previousTrackerCheckbox === '' || fresh.previousTrackerCheckbox === undefined) && syncResult.previousCheckbox !== undefined) {
+        fresh.previousTrackerCheckbox = syncResult.previousCheckbox;
+      }
+      if (!fresh.previousTrackerRemarks && syncResult.previousRemarks !== undefined) {
+        fresh.previousTrackerRemarks = syncResult.previousRemarks;
+      }
     }
     fresh.trackerSyncedAt = syncResult.syncedAt || '';
     fresh.syncError = syncResult.error || '';
@@ -1203,10 +1460,18 @@ PMS.Records = (function () {
     fresh.trackerSheet = prepared.sheetName || fresh.trackerSheet;
     fresh.trackerRow = prepared.row || fresh.trackerRow;
     fresh.trackerYear = prepared.trackerYear || fresh.trackerYear;
-    if (fresh.previousTrackerCheckbox === '' || fresh.previousTrackerCheckbox === undefined) {
-      fresh.previousTrackerCheckbox = prepared.previousCheckbox;
+    if (fresh.recordType === 'LEGACY_SEED') {
+      if (!hasDataQualityFlag(fresh, 'TRACKER_PRIOR_STATE_CAPTURED')) {
+        fresh.previousTrackerCheckbox = prepared.previousCheckbox;
+        fresh.previousTrackerRemarks = prepared.previousRemarks;
+        addDataQualityFlag(fresh, 'TRACKER_PRIOR_STATE_CAPTURED');
+      }
+    } else {
+      if (fresh.previousTrackerCheckbox === '' || fresh.previousTrackerCheckbox === undefined) {
+        fresh.previousTrackerCheckbox = prepared.previousCheckbox;
+      }
+      if (!fresh.previousTrackerRemarks) fresh.previousTrackerRemarks = prepared.previousRemarks;
     }
-    if (!fresh.previousTrackerRemarks) fresh.previousTrackerRemarks = prepared.previousRemarks;
     fresh.syncError = '';
     fresh.pmsCompletion = PMS.Util.progressText(100, Number(fresh.completedItems) || 0, Number(fresh.applicableItems) || 0, 'SYNCING');
     writeRecord(sheet, fresh, fresh._rowNumber);
@@ -1227,9 +1492,13 @@ PMS.Records = (function () {
     recent: recent,
     completedList: completedList,
     completionKey: completionKey,
+    legacySeedRecordId: legacySeedRecordId,
     completionKeys: completionKeys,
     appendLegacyRecord: appendLegacyRecord,
     appendLegacyRecordsBatch: appendLegacyRecordsBatch,
+    stageLegacySeedBatch: stageLegacySeedBatch,
+    stageLegacySeedTrackerState: stageLegacySeedTrackerState,
+    finalizeLegacySeedBatch: finalizeLegacySeedBatch,
     ensureTrackerBaseline: ensureTrackerBaseline,
     appendSystemEvent: appendSystemEvent,
     pendingSync: pendingSync,

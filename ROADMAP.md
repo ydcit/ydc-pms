@@ -289,6 +289,39 @@ Apps Script does not serve standalone browser `.js` files directly; browser logi
 - Only the intended year and D:I operational tracker cells change.
 - Waiting new-year records reconcile without duplicates.
 
+## Phase 7A — Bulk legacy PMS import (implemented; production pilot pending)
+
+### Work
+
+- Add an administrator-only Prepare → Review → Results workflow for legacy completion backfill.
+- Accept one section, one shared maintenance date, pasted asset tags, or the first column of a local CSV/TXT file.
+- Validate a maximum of 1,500 unique tags and display ready, resumable, duplicate, already-completed, and invalid classifications before any workbook write.
+- Bind a short-lived confirmation token to the administrator, request digest, section, cycle, tracker year, and current-versus-historical mode.
+- Use deterministic `LEGACY_SEED` IDs and the natural key section + asset tag + cycle ID for idempotent retries.
+- Execute in 250-record chunks with continuation state stored in chunked Cache Service entries.
+- For the open tracker year, batch-stage response records, capture prior tracker state, write marker-idempotent remarks and `COMPLETED` status, verify, then finalize.
+- For older years, create completed historical records without changing current D:I tracker cells.
+- Preserve explicit audit flags for absent checklist/evidence details, importing administrator, batch ID, source note, and historical/non-production conditions.
+- Keep normal Service Desk checklist and Infrastructure evidence requirements unchanged.
+
+### Test cases
+
+- Non-admin preview and execute are rejected before import data is read or written.
+- Preview changes no workbook cell and produces no token when nothing is ready.
+- Duplicate input, missing/duplicate tracker tags, existing completed records, and conflicting drafts are classified correctly.
+- Current-year Service Desk and Infra imports write only the selected term status/remarks and finalize once verification succeeds.
+- Historical imports write response records only; future and mismatched tracker years are rejected.
+- A crash after record staging, prior-state capture, remarks, status, or finalization can be retried without duplicate rows or duplicate remark markers.
+- A rollover or tracker-year change invalidates the preview before any import write.
+- Multi-chunk totals and per-tag results remain correct through continuation and retry.
+
+### Exit criteria
+
+- Administrators can backfill a large approved tag list without completing questionnaires one by one.
+- Every accepted tag is represented once by an auditable legacy record.
+- The current tracker is changed only for the matching open year, section, and trimester.
+- Deployment alone performs no import; an administrator must preview and explicitly confirm each batch.
+
 ## Phase 8 — Quality assurance and pilot (pending)
 
 ### Work

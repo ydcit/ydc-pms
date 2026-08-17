@@ -10,7 +10,7 @@
 
 Build a Google Apps Script web app for YDC's preventive-maintenance process. A signed-in YDC technician sees a section-specific dashboard and opens the maintenance questionnaire in a modal. The app automatically identifies the technician, limits asset choices to the technician's registered IT section, and only offers assets whose current equipment status is `INPROD`.
 
-The modal renders a section-specific questionnaire. Service Desk records are stored in `PMS Records`; Infrastructure & Security records, including Drive evidence metadata, are stored in `PMS Records - Infra & Security`. Existing workbook data is read-only except for the controlled write that marks the matched asset's correct cycle checkbox and stores the completed technician assessment in its paired Remarks cell. The dashboard aggregates both response tabs and tracks whether all eligible assets receive PMS within each four-month maintenance cycle:
+The modal renders a section-specific questionnaire. Service Desk records are stored in `PMS Records`; Infrastructure & Security records, including Drive evidence metadata, are stored in `PMS Records - Infra & Security`. Existing workbook data is read-only except for the controlled write that marks the matched asset's correct cycle status as `COMPLETED` and stores the completed technician assessment in its paired Remarks cell. The dashboard aggregates both response tabs and tracks whether all eligible assets receive PMS within each four-month maintenance cycle:
 
 - T1: January 1–April 30
 - T2: May 1–August 31
@@ -42,9 +42,9 @@ Both PMS tabs currently use:
 - Column A: `TAGGING`
 - Column B: `STATUS OF EQUIPMENT`
 - Column C: `LOCATION OF ASSET`
-- Columns D/E: T1 checkbox and remarks
-- Columns F/G: T2 checkbox and remarks
-- Columns H/I: T3 checkbox and remarks
+- Columns D/E: T1 completion status and remarks
+- Columns F/G: T2 completion status and remarks
+- Columns H/I: T3 completion status and remarks
 
 No duplicate asset tags or discrepancies between each PMS tab and its source mirror were found in the read-only review.
 
@@ -63,14 +63,14 @@ As of the review snapshot, a live-eligibility interpretation would show 240 comp
 3. Enforce the `INPROD` eligibility rule in both the interface and the server.
 4. Capture a complete, searchable maintenance audit trail.
 5. Show progress toward 100% completion for every PMS cycle.
-6. Preserve the asset-master content and legacy script while allowing only the explicitly approved T1/T2/T3 checkbox-and-remarks synchronization.
+6. Preserve the asset-master content and legacy script while allowing only the explicitly approved T1/T2/T3 status-and-remarks synchronization.
 
 ## 4. Non-goals for version 1.1
 
 - Editing asset tags, equipment status, or master locations from the web app.
 - Replacing the asset-management process that populates the PMS tabs.
 - Modifying the existing `Code.js` legacy Google Form updater.
-- Writing anywhere in an existing tab except the matched asset's cycle checkbox and paired remarks cell in `IT-SD PMS` or `IT-IS PMS` after a completed PMS record.
+- Writing anywhere in an existing tab except the matched asset's cycle status and paired remarks cell in `IT-SD PMS` or `IT-IS PMS` after a completed PMS record.
 - Editing `Source IT-SD`, `Source IT-IS`, `PM Dashboard`, or `OVERALL SCHEDULE` from the web app.
 - Automatic ticket creation, email reminders, or escalation workflows.
 - Public or non-YDC access.
@@ -148,8 +148,8 @@ A malformed row must never block sign-in for anyone else, so the directory reade
 7. The technician may **Save progress** while requirements are incomplete or select **Complete PMS** after every applicable item is resolved. An Infrastructure & Security draft receives a stable record ID before evidence is uploaded.
 8. The server revalidates the user, asset, status, section, date, cycle, questionnaire schema, and any required evidence.
 9. The app creates or updates the auditable row in the response tab for that section and computes the final `PMS Completion` value in the last column.
-10. An incomplete record stops there and does not affect a tracker checkbox.
-11. A completed record writes the full assessment to the correct T1/T2/T3 Remarks cell and then checks the paired term checkbox.
+10. An incomplete record stops there and does not affect a tracker status.
+11. A completed record writes the full assessment to the correct T1/T2/T3 Remarks cell and then sets the paired term status to `COMPLETED`.
 12. The app finalizes the response row as `COMPLETED`, refreshes the dashboard, and displays the record ID.
 
 ## 8. Questionnaire requirements
@@ -233,7 +233,7 @@ Peripheral entries are optional because not every maintained asset has every lis
 
 Each category shows `completed/applicable` and a progress bar. The modal also shows overall progress. The two “if applicable” checks support **Not applicable**. An N/A item is excluded from the denominator and must store an explicit reason or applicability state; silently leaving it unchecked does not count as complete.
 
-For Service Desk, **Save progress** is available below 100% and stores the record as `INCOMPLETE`; it never changes a PMS tracker checkbox. **Complete PMS** is enabled only when 100% of applicable checklist items have been completed.
+For Service Desk, **Save progress** is available below 100% and stores the record as `INCOMPLETE`; it never changes a PMS tracker status. **Complete PMS** is enabled only when 100% of applicable checklist items have been completed.
 
 ### 8.4 Infrastructure & Security questionnaire
 
@@ -298,7 +298,7 @@ Every record also receives a derived, immutable cycle ID such as `2026-T1`, `202
 - The asset picker evaluates existing completion against the cycle derived from **Maintenance Performed On**, rather than today's cycle. Current `INPROD` status is still revalidated by the server on every save.
 - A Service Desk compliance completion requires 100% of applicable checklist items. An Infrastructure & Security compliance completion requires all four checks plus both verified Drive evidence files (`6/6`).
 - A compliance completion is a successfully synchronized record whose final-column status is `COMPLETED`.
-- Any record below 100% is `INCOMPLETE`, remains resumable by record ID, and does not alter a term checkbox or remarks cell.
+- Any record below 100% is `INCOMPLETE`, remains resumable by record ID, and does not alter a term status or remarks cell.
 - Completion metrics count unique asset tag + maintenance year + PMS cycle combinations.
 - Multiple records for the same asset and cycle never inflate completion counts.
 - If a completed record already exists for the asset/cycle, the UI warns the technician and records the next submission as a reinspection. The latest record is shown in activity, while compliance remains one completed asset.
@@ -315,7 +315,7 @@ Examples:
 - `██████████ 100% — SYNC REQUIRED`
 - `██████████ 100% — SYNC FAILED`
 
-The server calculates this value from the requirements for the record's section; a user cannot type or edit it. For Infra, each of the four checks and two evidence files contributes one of six required units. Only the exact `COMPLETED` state counts toward compliance. A 100% record is not finalized as `COMPLETED` until its tracker remarks and checkbox have both been synchronized successfully.
+The server calculates this value from the requirements for the record's section; a user cannot type or edit it. For Infra, each of the four checks and two evidence files contributes one of six required units. Only the exact `COMPLETED` state counts toward compliance. A 100% record is not finalized as `COMPLETED` until its tracker remarks and status have both been synchronized successfully.
 
 ### 9.4 PMS tracker synchronization
 
@@ -341,7 +341,7 @@ For a valid completion, the write sequence under one script lock is:
 
 1. Save or update the response row as `SYNCING`.
 2. Append the assessment block to the correct Remarks cell while preserving any existing remarks.
-3. Set the paired T1/T2/T3 checkbox to `TRUE`.
+3. Set the paired T1/T2/T3 status cell to the non-interactive text `COMPLETED`.
 4. Verify both tracker cells.
 5. Set the last response-sheet column to `██████████ 100% — COMPLETED`.
 
@@ -358,21 +358,31 @@ Recommendation: <complete technician entry>
 [End PMS Record: <record ID>]
 ```
 
-If the Remarks cell already contains text, the new block is appended below a clear separator. A retry with the same record ID must update or recognize the existing block rather than append it twice. The checkbox is written after the remarks so a checked asset cannot be left without its assessment.
+If the Remarks cell already contains text, the new block is appended below a clear separator. A retry with the same record ID must update or recognize the existing block rather than append it twice. The status is written after the remarks so a completed asset cannot be left without its assessment.
 
-Backdated maintenance remains valid. If its year is older than the operational tracker year, the app finalizes it as a historical `COMPLETED` record with `HISTORICAL_NO_TRACKER_WRITE` and does not change the current-year D:I projection. A record dated ahead of the tracker year remains `SYNC REQUIRED` until that year is opened. The app never checks a term for the wrong year.
+Backdated maintenance remains valid. If its year is older than the operational tracker year, the app finalizes it as a historical `COMPLETED` record with `HISTORICAL_NO_TRACKER_WRITE` and does not change the current-year D:I projection. A record dated ahead of the tracker year remains `SYNC REQUIRED` until that year is opened. The app never writes a term status for the wrong year.
 
 ### 9.5 Legacy completion compatibility
 
-On first authorized use for each tracker year and section, the app performs a one-time, read-only baseline scan of the operational tracker and batch-imports pre-existing checkboxes/remarks into the response tab for that section as `LEGACY` records. After that baseline is committed, the final `PMS Completion` column is authoritative: the dashboard never treats later raw/manual checkbox changes as completion evidence. This preserves launch-day progress while preventing a partially synchronized or manually changed checkbox from bypassing the response decision.
+On first authorized use for each tracker year and section, the app performs a one-time, read-only baseline scan of the operational tracker and batch-imports pre-existing legacy checkbox/status values and remarks into the response tab for that section as `LEGACY` records. After that baseline is committed, the final `PMS Completion` column is authoritative: the dashboard never treats later raw/manual tracker-status changes as completion evidence. This preserves launch-day progress while preventing a partially synchronized or manually changed status from bypassing the response decision.
 
-### 9.6 Live compliance versus audit-grade compliance
+### 9.6 Administrator bulk legacy import
+
+An administrator can backfill completed PMS work that was performed before a web-app record existed. One import batch contains one IT section, one shared maintenance date, and up to 1,500 asset tags pasted directly or loaded from the first column of a local CSV/TXT file. The file remains in the browser; only normalized tags and the optional source note are sent to the server.
+
+Preview is mandatory and causes no workbook writes. The server resolves the trimester from the date, checks tags only against the selected section, and classifies every input as ready, resumable, duplicate, already completed, or invalid. Confirmation uses a short-lived token bound to the administrator, normalized request, section, cycle, tracker year, and tracker mode. Execution revalidates the complete remaining plan under the script lock and processes at most 250 records per call.
+
+Each accepted item uses a deterministic natural key of section + normalized asset tag + cycle ID and is stored as `LEGACY_SEED`. For the currently open tracker year, the record is staged, the exact term Remarks block is written, the paired status becomes `COMPLETED`, and the response row is finalized only after verification. For an older year, the response is finalized as historical `COMPLETED` with `HISTORICAL_NO_TRACKER_WRITE`; current D:I cells are not changed. A year ahead of the tracker is rejected.
+
+Legacy imports intentionally do not invent checklist answers or Infrastructure evidence. Records carry explicit data-quality flags, the importing administrator, batch ID, timestamp, source note when supplied, and a recommendation to consult the original source. Normal technician completion rules and Infra evidence verification remain unchanged.
+
+### 9.7 Live compliance versus audit-grade compliance
 
 Using the current `INPROD` list as the denominator produces a **live compliance** view. If an asset changes status later, historical denominators can change. An audit-grade historical SLA needs a per-cycle eligibility snapshot.
 
 Recommended version-1 behavior: show live compliance and label it clearly. A future approved `PMS Cycle Scope` store can freeze the eligible roster at cycle start and record later additions/removals with reasons.
 
-### 9.7 Annual rollover and new-year scalability
+### 9.8 Annual rollover and new-year scalability
 
 `PMS Records` and `PMS Records - Infra & Security` are the permanent multi-year sources of truth for their respective sections. Both use a long-form structure: each record carries its own maintenance year and cycle ID. The design must never add another six response columns for every new year.
 
@@ -386,7 +396,7 @@ The rollover is manual and administrator-only; it must not run automatically at 
 4. Reconcile completed, pending, findings, and follow-up counts from authoritative records for both sections and all three cycles.
 5. Write a `YEAR_CLOSE` audit event into `PMS Records` containing the old year, counts, administrator, and timestamp.
 6. Change the tracker year in row 2 to the new year.
-7. Reset only the D/F/H term checkboxes and E/G/I term remarks for the new operational year; columns A:C and all other cells remain untouched.
+7. Reset only the D/F/H term statuses and E/G/I term remarks for the new operational year; columns A:C and all other cells remain untouched.
 8. Verify the reset and write a `YEAR_OPEN` audit event into `PMS Records`.
 9. Reconcile any already-saved new-year records that were waiting as `SYNC REQUIRED`, using persisted 50-row cursors and scheduled continuation until every queued row has been attempted.
 
@@ -394,7 +404,7 @@ A new-year record submitted before rollover is still accepted into its section's
 
 The dashboard obtains its year choices dynamically from stored maintenance years. Historical 2026 results continue to be available after the visible PMS tracker has moved to 2027.
 
-### 9.8 Capacity and performance outlook
+### 9.9 Capacity and performance outlook
 
 At the current eligible population of 1,233 assets, full three-cycle coverage produces approximately 3,699 completed asset-cycle records per year before drafts and reinspections. With the implemented 70-column Service Desk schema and 62-column Infra schema, that is about 256,050 cells per year.
 
@@ -458,7 +468,7 @@ Metrics must never count submissions, rows, or repeat inspections as extra compl
 
 The approved response tabs are `PMS Records` for Service Desk and `PMS Records - Infra & Security` for Infrastructure & Security. They have separate schemas because the questionnaires are materially different. A saved incomplete record is updated in its original section tab by its server-issued record ID until completion; a later reinspection receives a new record ID. Dashboard, archive, duplicate detection, and reconciliation reads aggregate both tabs without weakening section authorization.
 
-Existing asset-master columns remain read-only, and the only normal runtime writes to an existing tab are the matched cycle checkbox and paired remarks cell described in section 9.4 (plus the explicit administrator rollover of D2 and D:I).
+Existing asset-master columns remain read-only, and the only normal runtime writes to an existing tab are the matched cycle status and paired remarks cell described in section 9.4 (plus the explicit administrator rollover of D2 and D:I).
 
 The 70-column Service Desk schema contains:
 
@@ -469,7 +479,7 @@ The 70-column Service Desk schema contains:
 5. Peripherals: one column for each of the ten listed peripheral types; multiple tags serialized as a stable delimiter-separated value.
 6. Checklist: one boolean/applicability field per checklist item, category counts, total completed, total applicable, completion percentage.
 7. Assessment: result, asset findings, action taken, recommendation.
-8. Tracker synchronization: target PMS tab/row/year/cycle, prior checkbox value, prior remarks snapshot, sync timestamp, and sync error if any.
+8. Tracker synchronization: target PMS tab/row/year/cycle, prior tracker-status value (stored in the legacy-named checkbox field), prior remarks snapshot, sync timestamp, and sync error if any.
 9. System: legacy completion used, duplicate/reinspection reference, data-quality flags, created-at and updated-at time zone.
 10. **Final column:** `PMS Completion`, containing the system-generated progress indicator and decisive status.
 
@@ -561,11 +571,11 @@ The workbook remains on its existing time zone. The application logic and Apps S
 - Duplicate submit caused by retry/double-click → one record through idempotency.
 - Prior completion for the same asset/cycle → reinspection warning; no double count.
 - Backdated record in the current tracker year → accepted and synchronized to its derived cycle.
-- Backdated record older than the tracker year → accepted as historical `COMPLETED` with `HISTORICAL_NO_TRACKER_WRITE`; no wrong-year checkbox is changed.
+- Backdated record older than the tracker year → accepted as historical `COMPLETED` with `HISTORICAL_NO_TRACKER_WRITE`; no wrong-year tracker status is changed.
 - Record dated ahead of the tracker year → retained as `SYNC REQUIRED` until that tracker year is opened.
 - Future maintenance date → rejected.
 - No eligible assets → dashboard empty state, not an error.
-- Partial checklist → may be saved as `INCOMPLETE`; no tracker checkbox or remarks cell is changed.
+- Partial checklist → may be saved as `INCOMPLETE`; no tracker status or remarks cell is changed.
 - Infra asset type does not match a known tag prefix → reject; unknown future prefix → allow with a data-quality flag.
 - Missing, moved, trashed, changed, oversized, or unsafe Infra evidence → refuse completion and leave the tracker unchanged.
 
@@ -584,8 +594,8 @@ The workbook remains on its existing time zone. The application logic and Apps S
 11. A saved draft creates or updates exactly one validated response row and sets the last column to an `INCOMPLETE` progress status.
 12. Only a 100% valid record can become `COMPLETED`.
 13. Completion writes the full Findings, Action Taken, and Recommendation block to the correct cycle Remarks cell, preserving existing content.
-14. Completion then checks the paired T1/T2/T3 checkbox on the asset's exact section row.
-15. A normal completion modifies no existing workbook cell other than that matched checkbox and paired remarks cell; annual D2/D:I changes require the separate administrator rollover confirmation.
+14. Completion then sets the paired T1/T2/T3 status to `COMPLETED` on the asset's exact section row.
+15. A normal completion modifies no existing workbook cell other than that matched status and paired remarks cell; annual D2/D:I changes require the separate administrator rollover confirmation.
 16. A tracker synchronization failure cannot leave the response row marked `COMPLETED`.
 17. Dashboard counts unique eligible assets rather than rows or total inventory.
 18. Repeat maintenance does not inflate compliance or duplicate the same remarks block.

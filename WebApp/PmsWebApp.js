@@ -226,6 +226,24 @@ function PMS_apiAdminSetUserSection(userEmail, sectionKey) {
   return PMS_jsonResponse_(PMS.Auth.adminSetUserSection(userEmail, sectionKey));
 }
 
+/** Administrator-only, read-only workbook preview plus short-lived cache token. */
+function PMS_apiPreviewLegacyImport(request) {
+  try {
+    return PMS_jsonResponse_(PMS.LegacyImport.preview(request));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+/** Executes at most one bounded legacy-import chunk and returns its continuation token. */
+function PMS_apiExecuteLegacyImport(request, confirmationToken) {
+  try {
+    return PMS_jsonResponse_(PMS.LegacyImport.execute(request, confirmationToken));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
 function PMS_adminSetup() {
   PMS.Auth.requireAdmin();
   var users = PMS.Users.ensureSheet();

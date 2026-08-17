@@ -15,6 +15,9 @@ PMS.CONFIG = {
   TRACKER_COMPLETED_VALUE: 'COMPLETED',
   CACHE_SECONDS: 300,
   ROLLOVER_TOKEN_SECONDS: 300,
+  LEGACY_IMPORT_TOKEN_SECONDS: 1800,
+  LEGACY_IMPORT_MAX_TAGS: 1500,
+  LEGACY_IMPORT_CHUNK_SIZE: 250,
   // Sign-in requires the signed-in Google account email to exist in the
   // "PMS Users" sheet. Set to false to allow any allowed-domain account to
   // self-register instead.

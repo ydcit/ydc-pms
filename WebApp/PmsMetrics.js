@@ -30,7 +30,9 @@ PMS.Metrics = (function () {
       if (Number(record.maintenanceYear) !== year || record.cycle !== cycle) return;
       if (PMS.Util.completionState(record.pmsCompletion) !== 'COMPLETED') return;
       var completionKey = PMS.Records.completionKey(record.itSection, record.assetTag, record.cycleId);
-      var source = record.recordType === 'LEGACY' ? 'TRACKER' : 'RECORD';
+      var source = record.recordType === 'LEGACY' || record.recordType === 'LEGACY_SEED'
+        ? 'TRACKER'
+        : 'RECORD';
       if (!completedKeys[completionKey] || source === 'RECORD') completedKeys[completionKey] = source;
     });
 

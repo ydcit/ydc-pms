@@ -1,0 +1,290 @@
+<div class="modal-layer" id="legacy-import-modal" hidden>
+  <div class="modal-backdrop" data-close-legacy-import aria-hidden="true"></div>
+  <section class="legacy-import-dialog" role="dialog" aria-modal="true"
+           aria-labelledby="legacy-import-title" aria-describedby="legacy-import-description">
+    <header class="legacy-import-dialog__header">
+      <div class="legacy-import-dialog__title-row">
+        <div>
+          <p class="eyebrow">Administrator tool</p>
+          <h1 id="legacy-import-title">Import legacy PMS</h1>
+          <p class="legacy-import-dialog__summary" id="legacy-import-description">
+            Add completed maintenance records for work performed before it was recorded in this web app.
+          </p>
+        </div>
+        <button class="icon-button" id="legacy-import-close" type="button" aria-label="Close legacy PMS import">
+          <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+        </button>
+      </div>
+
+      <ol class="legacy-import-steps" aria-label="Legacy PMS import progress">
+        <li class="is-current" data-legacy-import-stage="PREPARE" aria-current="step">
+          <span aria-hidden="true">1</span>
+          <strong>Prepare</strong>
+        </li>
+        <li data-legacy-import-stage="REVIEW">
+          <span aria-hidden="true">2</span>
+          <strong>Review</strong>
+        </li>
+        <li data-legacy-import-stage="RESULTS">
+          <span aria-hidden="true">3</span>
+          <strong>Results</strong>
+        </li>
+      </ol>
+    </header>
+
+    <form class="legacy-import-dialog__form" id="legacy-import-form" novalidate>
+      <div class="legacy-import-dialog__body" id="legacy-import-dialog-body">
+        <div class="form-alert" id="legacy-import-alert" hidden tabindex="-1" role="alert">
+          <span class="form-alert__icon" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-alert-circle"></use></svg>
+          </span>
+          <div>
+            <strong id="legacy-import-alert-title">Review the import details</strong>
+            <p id="legacy-import-alert-message"></p>
+          </div>
+        </div>
+
+        <section class="legacy-import-stage" id="legacy-import-prepare" data-legacy-import-panel="PREPARE"
+                 aria-labelledby="legacy-import-prepare-title">
+          <div class="form-step__heading">
+            <span class="form-step__icon" aria-hidden="true">01</span>
+            <div>
+              <p class="eyebrow">Prepare the batch</p>
+              <h2 id="legacy-import-prepare-title">Choose the shared date and asset tags</h2>
+              <p>Every asset in this batch uses the same maintenance date and derived trimester.</p>
+            </div>
+          </div>
+
+          <div class="notice notice--info">
+            <span class="notice__icon" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+            </span>
+            <div>
+              <strong>Preview first, then import</strong>
+              <p>No records or tracker cells change until you review the server-validated preview and confirm it.</p>
+            </div>
+          </div>
+
+          <div class="field-grid">
+            <div class="field" id="legacy-import-section-field">
+              <label for="legacy-import-section">IT section <span class="required-mark" aria-hidden="true">*</span></label>
+              <div class="select-wrap">
+                <select id="legacy-import-section" required
+                        aria-describedby="legacy-import-section-help legacy-import-section-error">
+                  <option value="">Select an IT section</option>
+                </select>
+                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </div>
+              <p class="field-help" id="legacy-import-section-help">Tags are checked only against the selected section's tracker.</p>
+              <p class="field-error" id="legacy-import-section-error" hidden></p>
+            </div>
+
+            <div class="field" id="legacy-import-maintenance-date-field">
+              <label for="legacy-import-maintenance-date">Maintenance performed on <span class="required-mark" aria-hidden="true">*</span></label>
+              <input id="legacy-import-maintenance-date" type="date" required
+                     aria-describedby="legacy-import-maintenance-date-help legacy-import-maintenance-date-error">
+              <p class="field-help" id="legacy-import-maintenance-date-help">Past dates and today are allowed. Future dates are not.</p>
+              <p class="field-error" id="legacy-import-maintenance-date-error" hidden></p>
+            </div>
+          </div>
+
+          <div class="legacy-import-cycle" id="legacy-import-cycle" aria-live="polite">
+            <span>Derived maintenance cycle</span>
+            <strong id="legacy-import-cycle-value">Choose a date</strong>
+            <small id="legacy-import-cycle-detail">The server will confirm whether this updates the live tracker or creates a historical record only.</small>
+          </div>
+
+          <div class="field" id="legacy-import-tags-field">
+            <div class="field__label-row">
+              <label for="legacy-import-tags">Asset tags <span class="required-mark" aria-hidden="true">*</span></label>
+              <span class="legacy-import-local-count" id="legacy-import-tag-count" aria-live="polite">0 unique tags</span>
+            </div>
+            <textarea id="legacy-import-tags" rows="10" maxlength="50000" required spellcheck="false"
+                      autocapitalize="characters" autocomplete="off"
+                      placeholder="YDC-NU-01&#10;YDC-NU-02&#10;YDC-NU-03"
+                      aria-describedby="legacy-import-tags-help legacy-import-tags-error"></textarea>
+            <p class="field-help" id="legacy-import-tags-help">Paste one tag per line, or separate tags with commas, semicolons, or tabs. Repeated tags are identified locally and reported in the preview.</p>
+            <p class="field-error" id="legacy-import-tags-error" hidden></p>
+          </div>
+
+          <div class="legacy-import-file-row">
+            <div class="field" id="legacy-import-file-field">
+              <label for="legacy-import-file">Load a CSV or TXT file <span class="field-optional">Optional</span></label>
+              <input id="legacy-import-file" type="file" accept=".csv,.txt,text/csv,text/plain"
+                     aria-describedby="legacy-import-file-help legacy-import-file-error">
+              <p class="field-help" id="legacy-import-file-help">The file stays in your browser. Its first column is added to the editable tag list above.</p>
+              <p class="field-error" id="legacy-import-file-error" hidden></p>
+            </div>
+            <div class="legacy-import-file-status" id="legacy-import-file-status" aria-live="polite">
+              <svg class="icon" aria-hidden="true"><use href="#i-list"></use></svg>
+              <span>No local file selected</span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="legacy-import-source-note">Source note <span class="field-optional">Optional</span></label>
+            <textarea id="legacy-import-source-note" rows="3" maxlength="500"
+                      placeholder="Example: Imported from signed 2025 maintenance checklist"
+                      aria-describedby="legacy-import-source-note-help"></textarea>
+            <p class="field-help" id="legacy-import-source-note-help">This note applies to every imported record and helps preserve its audit context.</p>
+          </div>
+        </section>
+
+        <section class="legacy-import-stage" id="legacy-import-review" data-legacy-import-panel="REVIEW" hidden
+                 tabindex="-1" aria-labelledby="legacy-import-review-title">
+          <div class="form-step__heading">
+            <span class="form-step__icon" aria-hidden="true">02</span>
+            <div>
+              <p class="eyebrow">Server-validated preview</p>
+              <h2 id="legacy-import-review-title">Review what will be imported</h2>
+              <p id="legacy-import-review-subtitle">Check every exception before confirming the batch.</p>
+            </div>
+          </div>
+
+          <div class="notice notice--info" id="legacy-import-impact-notice">
+            <span class="notice__icon" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+            </span>
+            <div>
+              <strong id="legacy-import-impact-title">Checking tracker impact</strong>
+              <p id="legacy-import-impact-detail">The preview will identify whether the current tracker changes.</p>
+            </div>
+          </div>
+
+          <dl class="legacy-import-summary" id="legacy-import-preview-summary" aria-live="polite">
+            <div class="legacy-import-summary__item legacy-import-summary__item--success">
+              <dt>Ready</dt>
+              <dd id="legacy-import-count-ready">0</dd>
+            </div>
+            <div class="legacy-import-summary__item legacy-import-summary__item--danger">
+              <dt>Invalid</dt>
+              <dd id="legacy-import-count-invalid">0</dd>
+            </div>
+            <div class="legacy-import-summary__item legacy-import-summary__item--warning">
+              <dt>Duplicates</dt>
+              <dd id="legacy-import-count-duplicate">0</dd>
+            </div>
+            <div class="legacy-import-summary__item">
+              <dt>Already completed</dt>
+              <dd id="legacy-import-count-completed">0</dd>
+            </div>
+          </dl>
+
+          <div class="legacy-import-table-wrap" id="legacy-import-preview-table-wrap" tabindex="0"
+               role="region" aria-label="Legacy PMS import preview">
+            <table class="legacy-import-table">
+              <caption class="sr-only">Server classification for each submitted asset tag</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Asset tag</th>
+                  <th scope="col">Asset details</th>
+                  <th scope="col">Result</th>
+                  <th scope="col">Explanation</th>
+                </tr>
+              </thead>
+              <tbody id="legacy-import-preview-body"></tbody>
+            </table>
+          </div>
+          <p class="legacy-import-table-note" id="legacy-import-preview-truncated" hidden></p>
+
+          <div class="legacy-import-confirmation" id="legacy-import-confirmation">
+            <label class="check-control" for="legacy-import-review-confirm">
+              <input id="legacy-import-review-confirm" type="checkbox">
+              <span id="legacy-import-review-confirm-label">I reviewed the preview and its exceptions.</span>
+            </label>
+            <div class="field" id="legacy-import-confirmation-field">
+              <label for="legacy-import-confirmation-input">Type <strong id="legacy-import-confirmation-phrase">IMPORT</strong> to confirm</label>
+              <input id="legacy-import-confirmation-input" type="text" autocomplete="off" spellcheck="false"
+                     aria-describedby="legacy-import-confirmation-help legacy-import-confirmation-error">
+              <p class="field-help" id="legacy-import-confirmation-help">The phrase is generated by the server for this exact preview.</p>
+              <p class="field-error" id="legacy-import-confirmation-error" hidden></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="legacy-import-stage" id="legacy-import-results" data-legacy-import-panel="RESULTS" hidden
+                 tabindex="-1" aria-labelledby="legacy-import-results-title">
+          <div class="form-step__heading">
+            <span class="form-step__icon legacy-import-results-icon" aria-hidden="true">
+              <svg class="icon"><use href="#i-check"></use></svg>
+            </span>
+            <div>
+              <p class="eyebrow">Import results</p>
+              <h2 id="legacy-import-results-title">Legacy PMS import finished</h2>
+              <p id="legacy-import-results-subtitle">The dashboard is being refreshed with the imported records.</p>
+            </div>
+          </div>
+
+          <div class="notice notice--info" id="legacy-import-results-notice">
+            <span class="notice__icon" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+            </span>
+            <div>
+              <strong id="legacy-import-results-message">Import complete</strong>
+              <p id="legacy-import-results-detail"></p>
+            </div>
+          </div>
+
+          <dl class="legacy-import-summary" id="legacy-import-results-summary" aria-live="polite">
+            <div class="legacy-import-summary__item legacy-import-summary__item--success">
+              <dt>Imported</dt>
+              <dd id="legacy-import-count-imported">0</dd>
+            </div>
+            <div class="legacy-import-summary__item">
+              <dt>Skipped</dt>
+              <dd id="legacy-import-count-skipped">0</dd>
+            </div>
+            <div class="legacy-import-summary__item legacy-import-summary__item--danger">
+              <dt>Failed</dt>
+              <dd id="legacy-import-count-failed">0</dd>
+            </div>
+            <div class="legacy-import-summary__item">
+              <dt>Processed</dt>
+              <dd id="legacy-import-count-processed">0</dd>
+            </div>
+          </dl>
+
+          <div class="legacy-import-table-wrap" id="legacy-import-results-table-wrap" tabindex="0"
+               role="region" aria-label="Legacy PMS import results">
+            <table class="legacy-import-table">
+              <caption class="sr-only">Import result for each processed asset tag</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Asset tag</th>
+                  <th scope="col">Result</th>
+                  <th scope="col">Details</th>
+                </tr>
+              </thead>
+              <tbody id="legacy-import-results-body"></tbody>
+            </table>
+          </div>
+          <p class="legacy-import-table-note" id="legacy-import-results-truncated" hidden></p>
+        </section>
+      </div>
+
+      <footer class="legacy-import-dialog__footer">
+        <div class="legacy-import-dialog__footer-state">
+          <span class="spinner spinner--small" id="legacy-import-spinner" hidden aria-hidden="true"></span>
+          <span id="legacy-import-state" role="status" aria-live="polite"></span>
+        </div>
+        <div class="legacy-import-dialog__footer-actions">
+          <button class="button button--quiet" id="legacy-import-cancel" type="button">Cancel</button>
+          <button class="button button--secondary" id="legacy-import-edit" type="button" hidden>
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+            <span>Edit list</span>
+          </button>
+          <button class="button button--primary" id="legacy-import-preview-button" type="submit">
+            <span>Preview import</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
+          </button>
+          <button class="button button--primary" id="legacy-import-confirm" type="button" hidden disabled>
+            <svg class="icon" aria-hidden="true"><use href="#i-database"></use></svg>
+            <span>Confirm import</span>
+          </button>
+          <button class="button button--secondary" id="legacy-import-again" type="button" hidden>Import another batch</button>
+          <button class="button button--primary" id="legacy-import-done" type="button" hidden>Done</button>
+        </div>
+      </footer>
+    </form>
+  </section>
+</div>

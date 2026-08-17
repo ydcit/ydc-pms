@@ -32,6 +32,18 @@
         open: false, page: 1, totalPages: 1, direction: 'DESC',
         token: 0, searchTimer: null, lastFocus: null
       },
+      legacyImport: {
+        open: false,
+        stage: 'PREPARE',
+        dirty: false,
+        busy: false,
+        requestToken: 0,
+        lastFocus: null,
+        request: null,
+        preview: null,
+        confirmationToken: '',
+        execution: null
+      },
       rolloverLoading: false,
       lastFocus: null,
       dryRun: null,
@@ -152,6 +164,10 @@
     ];
 
     var DEFAULT_EVIDENCE_BYTES = 10 * 1024 * 1024;
+    var LEGACY_IMPORT_FILE_MAX_BYTES = 2 * 1024 * 1024;
+    var LEGACY_IMPORT_MAX_LOCAL_TAGS = 1500;
+    var LEGACY_IMPORT_TABLE_CAP = 250;
+    var LEGACY_IMPORT_MAX_CHUNKS = 200;
     var DEFAULT_EVIDENCE_ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp';
     var FALLBACK_EVIDENCE = {
       firmware: {
@@ -591,6 +607,7 @@
       resetFormData();
       applyQuestionnaireMode();
       renderRegistrationOptions();
+      renderLegacyImportOptions();
       renderAssetOptions();
       renderPeripheralSchema();
       renderChecklistSchema();
@@ -818,6 +835,7 @@
         button.disabled = !hasOpenAsset;
         button.title = hasOpenAsset ? 'Open the preventive maintenance questionnaire' : 'No INPROD assets are available in your IT section';
       });
+      byId('open-legacy-import').hidden = !userIsAdmin();
       byId('cycle-badge').textContent = cycle;
       byId('cycle-banner-title').textContent = year + ' ' + cycle + ' preventive maintenance';
       byId('cycle-date-range').textContent = formatDate(deriveCycle(year + (cycle === 'T1' ? '-01-01' : cycle === 'T2' ? '-05-01' : '-09-01')).start, { month: 'long', day: 'numeric' }) + ' – ' + formatDate(deadline, { month: 'long', day: 'numeric', year: 'numeric' });
@@ -1015,10 +1033,11 @@
     };
 
     function openArchiveModal() {
+      if (state.archive.open || state.modalOpen || state.legacyImport.open) return;
       state.archive.lastFocus = document.activeElement;
       state.archive.open = true;
       byId('archive-modal').hidden = false;
-      document.body.classList.add('modal-open');
+      syncBodyModalState();
       loadCompletedRecords({ page: 1 }).catch(function () {});
       window.setTimeout(function () { byId('archive-search').focus(); }, 0);
     }
@@ -1027,14 +1046,14 @@
       if (!state.archive.open) return;
       state.archive.open = false;
       byId('archive-modal').hidden = true;
-      if (!state.modalOpen) document.body.classList.remove('modal-open');
+      syncBodyModalState();
       var target = state.archive.lastFocus;
       if (target && typeof target.focus === 'function') target.focus();
     }
 
     function trapArchiveFocus(event) {
       // The questionnaire owns the keyboard whenever it is layered on top.
-      if (!state.archive.open || state.modalOpen) return;
+      if (!state.archive.open || state.modalOpen || state.legacyImport.open) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         closeArchiveModal();
@@ -1303,6 +1322,896 @@
       [assetCell, locationCell, dateCell, cycleCell, technicianCell, resultCell, actionCell]
         .forEach(function (cell) { row.appendChild(cell); });
       return row;
+    }
+
+    /* ------------------------------------------------------------------------
+       Administrator legacy PMS import
+
+       Files are parsed locally; the server receives only normalized form data.
+       Preview and execution remain server-authoritative and admin-scoped.
+       ------------------------------------------------------------------------ */
+
+    function syncBodyModalState() {
+      var importOpen = Boolean(state.legacyImport && state.legacyImport.open);
+      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen));
+    }
+
+    function modalFocusable(root) {
+      if (!root) return [];
+      return Array.prototype.slice.call(root.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (element) {
+        return !element.hidden && element.offsetParent !== null;
+      });
+    }
+
+    function renderLegacyImportOptions() {
+      var select = byId('legacy-import-section');
+      if (!select) return;
+      while (select.options.length > 1) select.remove(1);
+      state.sections.forEach(function (section) {
+        var option = document.createElement('option');
+        option.value = section.key;
+        option.textContent = section.label;
+        select.appendChild(option);
+      });
+      if (state.sections.some(function (section) { return section.key === sectionKey(); })) {
+        select.value = sectionKey();
+      }
+    }
+
+    function clearLegacyImportAlert() {
+      byId('legacy-import-alert').hidden = true;
+      byId('legacy-import-alert-title').textContent = 'Review the import details';
+      byId('legacy-import-alert-message').textContent = '';
+    }
+
+    function showLegacyImportAlert(title, message) {
+      byId('legacy-import-alert-title').textContent = normalizeText(title) || 'Legacy PMS import needs attention';
+      byId('legacy-import-alert-message').textContent = normalizeText(message);
+      byId('legacy-import-alert').hidden = false;
+      byId('legacy-import-alert').focus();
+    }
+
+    function clearLegacyImportFieldErrors() {
+      [
+        ['legacy-import-section', 'legacy-import-section-error'],
+        ['legacy-import-maintenance-date', 'legacy-import-maintenance-date-error'],
+        ['legacy-import-tags', 'legacy-import-tags-error'],
+        ['legacy-import-file', 'legacy-import-file-error'],
+        ['legacy-import-confirmation-input', 'legacy-import-confirmation-error']
+      ].forEach(function (ids) { clearFieldError(ids[0], ids[1]); });
+    }
+
+    function legacyImportHeader(value) {
+      return ['ASSET TAG', 'ASSET_TAG', 'ASSETTAG', 'TAG', 'TAGGING'].indexOf(normalizeTag(value)) >= 0;
+    }
+
+    function parseLegacyImportTags(text) {
+      var source = String(text || '').replace(/^\uFEFF/, '');
+      var values = source.split(/[\r\n,;\t]+/);
+      var unique = [];
+      var duplicates = [];
+      var duplicateCount = 0;
+      var seen = {};
+      values.forEach(function (value, index) {
+        var tag = normalizeTag(value);
+        if (!tag || legacyImportHeader(tag)) return;
+        if (seen[tag] !== undefined) {
+          duplicateCount += 1;
+          if (duplicates.length < LEGACY_IMPORT_TABLE_CAP) {
+            duplicates.push({ assetTag: tag, inputIndex: index + 1, firstIndex: seen[tag] });
+          }
+          return;
+        }
+        seen[tag] = index + 1;
+        unique.push(tag);
+      });
+      return {
+        uniqueTags: unique,
+        duplicateRows: duplicates,
+        duplicateCount: duplicateCount
+      };
+    }
+
+    function updateLegacyImportLocalCount() {
+      var parsed = parseLegacyImportTags(byId('legacy-import-tags').value);
+      var label = parsed.uniqueTags.length + ' unique tag' + (parsed.uniqueTags.length === 1 ? '' : 's');
+      if (parsed.duplicateCount) label += ' · ' + parsed.duplicateCount + ' duplicate' + (parsed.duplicateCount === 1 ? '' : 's');
+      byId('legacy-import-tag-count').textContent = label;
+      return parsed;
+    }
+
+    function updateLegacyImportCycle() {
+      var derived = deriveCycle(byId('legacy-import-maintenance-date').value);
+      byId('legacy-import-cycle-value').textContent = derived ? derived.cycleId : 'Choose a date';
+      byId('legacy-import-cycle-detail').textContent = derived
+        ? 'Every valid asset will be recorded in ' + derived.cycleId + '. The server preview will confirm tracker impact.'
+        : 'The server will confirm whether this updates the live tracker or creates a historical record only.';
+    }
+
+    function csvFirstColumn(text) {
+      return String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).map(function (line) {
+        var value = '';
+        var quoted = false;
+        for (var index = 0; index < line.length; index += 1) {
+          var character = line.charAt(index);
+          if (character === '"') {
+            if (quoted && line.charAt(index + 1) === '"') {
+              value += '"';
+              index += 1;
+            } else {
+              quoted = !quoted;
+            }
+          } else if (character === ',' && !quoted) {
+            break;
+          } else {
+            value += character;
+          }
+        }
+        return value.trim();
+      }).filter(function (value) { return value && !legacyImportHeader(value); }).join('\n');
+    }
+
+    function readLocalTextFile(file) {
+      if (file && typeof file.text === 'function') return file.text();
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () { resolve(String(reader.result || '')); };
+        reader.onerror = function () { reject(new Error('The selected file could not be read.')); };
+        reader.readAsText(file);
+      });
+    }
+
+    function invalidateLegacyImportPreview() {
+      state.legacyImport.requestToken += 1;
+      state.legacyImport.request = null;
+      state.legacyImport.preview = null;
+      state.legacyImport.confirmationToken = '';
+      state.legacyImport.execution = null;
+      byId('legacy-import-review-confirm').checked = false;
+      byId('legacy-import-confirmation-input').value = '';
+    }
+
+    function markLegacyImportDirty() {
+      if (!state.legacyImport.open || state.legacyImport.stage !== 'PREPARE') return;
+      state.legacyImport.dirty = true;
+      invalidateLegacyImportPreview();
+      clearLegacyImportAlert();
+      updateLegacyImportConfirmState();
+    }
+
+    function resetLegacyImport() {
+      var lastFocus = state.legacyImport.lastFocus;
+      var open = state.legacyImport.open;
+      state.legacyImport = {
+        open: open,
+        stage: 'PREPARE',
+        dirty: false,
+        busy: false,
+        requestToken: (state.legacyImport.requestToken || 0) + 1,
+        lastFocus: lastFocus,
+        request: null,
+        preview: null,
+        confirmationToken: '',
+        execution: null
+      };
+      byId('legacy-import-form').reset();
+      renderLegacyImportOptions();
+      byId('legacy-import-maintenance-date').max = currentManilaDate();
+      byId('legacy-import-preview-body').replaceChildren();
+      byId('legacy-import-results-body').replaceChildren();
+      byId('legacy-import-file-status').querySelector('span').textContent = 'No local file selected';
+      byId('legacy-import-preview-truncated').hidden = true;
+      byId('legacy-import-results-truncated').hidden = true;
+      byId('legacy-import-state').textContent = '';
+      clearLegacyImportAlert();
+      clearLegacyImportFieldErrors();
+      updateLegacyImportLocalCount();
+      updateLegacyImportCycle();
+      setLegacyImportStage('PREPARE', false);
+    }
+
+    function setLegacyImportStage(stage, focusStage) {
+      var next = ['PREPARE', 'REVIEW', 'RESULTS'].indexOf(stage) >= 0 ? stage : 'PREPARE';
+      state.legacyImport.stage = next;
+      document.querySelectorAll('[data-legacy-import-panel]').forEach(function (panel) {
+        panel.hidden = panel.dataset.legacyImportPanel !== next;
+      });
+      document.querySelectorAll('[data-legacy-import-stage]').forEach(function (item) {
+        var current = item.dataset.legacyImportStage === next;
+        var order = ['PREPARE', 'REVIEW', 'RESULTS'];
+        item.classList.toggle('is-current', current);
+        item.classList.toggle('is-complete', order.indexOf(item.dataset.legacyImportStage) < order.indexOf(next));
+        if (current) item.setAttribute('aria-current', 'step');
+        else item.removeAttribute('aria-current');
+      });
+      var prepare = next === 'PREPARE';
+      var review = next === 'REVIEW';
+      var results = next === 'RESULTS';
+      byId('legacy-import-cancel').hidden = results;
+      byId('legacy-import-edit').hidden = !review;
+      byId('legacy-import-preview-button').hidden = !prepare;
+      byId('legacy-import-confirm').hidden = !review;
+      byId('legacy-import-again').hidden = !results;
+      byId('legacy-import-done').hidden = !results;
+      updateLegacyImportConfirmState();
+      byId('legacy-import-dialog-body').scrollTop = 0;
+      if (focusStage !== false) {
+        window.setTimeout(function () {
+          var target = byId(next === 'PREPARE' ? 'legacy-import-section' : next === 'REVIEW' ? 'legacy-import-review' : 'legacy-import-results');
+          if (target && typeof target.focus === 'function') target.focus();
+        }, 0);
+      }
+    }
+
+    function setLegacyImportBusy(isBusy, message) {
+      state.legacyImport.busy = Boolean(isBusy);
+      byId('legacy-import-modal').setAttribute('aria-busy', state.legacyImport.busy ? 'true' : 'false');
+      byId('legacy-import-spinner').hidden = !state.legacyImport.busy;
+      byId('legacy-import-state').textContent = normalizeText(message);
+      byId('legacy-import-close').disabled = state.legacyImport.busy;
+      byId('legacy-import-form').querySelectorAll('button, input, select, textarea').forEach(function (control) {
+        control.disabled = state.legacyImport.busy;
+      });
+      if (!state.legacyImport.busy) updateLegacyImportConfirmState();
+    }
+
+    function openLegacyImport() {
+      if (!userIsAdmin() || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      state.legacyImport.lastFocus = document.activeElement;
+      state.legacyImport.open = true;
+      resetLegacyImport();
+      byId('legacy-import-modal').hidden = false;
+      syncBodyModalState();
+      window.setTimeout(function () { byId('legacy-import-section').focus(); }, 0);
+    }
+
+    function requestCloseLegacyImport(force) {
+      if (!state.legacyImport.open || state.legacyImport.busy) return;
+      if (!force && state.legacyImport.dirty &&
+          !window.confirm('Close this legacy PMS import? The prepared batch and preview will be lost.')) return;
+      var target = state.legacyImport.lastFocus;
+      state.legacyImport.open = false;
+      state.legacyImport.dirty = false;
+      state.legacyImport.requestToken += 1;
+      byId('legacy-import-modal').hidden = true;
+      syncBodyModalState();
+      if (target && typeof target.focus === 'function') target.focus();
+    }
+
+    function onLegacyImportFileChange() {
+      var input = byId('legacy-import-file');
+      var file = input.files && input.files.length ? input.files[0] : null;
+      clearFieldError('legacy-import-file', 'legacy-import-file-error');
+      if (!file) {
+        byId('legacy-import-file-status').querySelector('span').textContent = 'No local file selected';
+        return;
+      }
+      if (file.size <= 0 || file.size > LEGACY_IMPORT_FILE_MAX_BYTES) {
+        var sizeMessage = file.size <= 0 ? 'Choose a non-empty CSV or TXT file.' : 'Choose a file no larger than 2 MiB.';
+        setFieldError('legacy-import-file', 'legacy-import-file-error', sizeMessage);
+        input.value = '';
+        byId('legacy-import-file-status').querySelector('span').textContent = 'Local file was not loaded';
+        return;
+      }
+      var extension = normalizeText(file.name).toLowerCase();
+      if (!/\.(csv|txt)$/.test(extension) && ['text/csv', 'text/plain', ''].indexOf(normalizeText(file.type).toLowerCase()) < 0) {
+        setFieldError('legacy-import-file', 'legacy-import-file-error', 'Choose a CSV or TXT file.');
+        input.value = '';
+        return;
+      }
+      var fileReadToken = state.legacyImport.requestToken + 1;
+      state.legacyImport.requestToken = fileReadToken;
+      setLegacyImportBusy(true, 'Reading ' + file.name + ' locally...');
+      byId('legacy-import-file-status').querySelector('span').textContent = 'Reading ' + file.name + '…';
+      readLocalTextFile(file).then(function (content) {
+        if (!state.legacyImport.open || fileReadToken !== state.legacyImport.requestToken) return;
+        var importedText = /\.csv$/i.test(file.name) ? csvFirstColumn(content) : String(content || '').replace(/^\uFEFF/, '');
+        var parsed = parseLegacyImportTags(importedText);
+        if (!parsed.uniqueTags.length) throw new Error('No asset tags were found in the selected file.');
+        var textarea = byId('legacy-import-tags');
+        textarea.value = [textarea.value.trim(), importedText.trim()].filter(Boolean).join('\n');
+        byId('legacy-import-file-status').querySelector('span').textContent = file.name + ' · ' + parsed.uniqueTags.length + ' tag' + (parsed.uniqueTags.length === 1 ? '' : 's') + ' added';
+        markLegacyImportDirty();
+        updateLegacyImportLocalCount();
+      }).catch(function (error) {
+        if (!state.legacyImport.open || fileReadToken !== state.legacyImport.requestToken) return;
+        setFieldError('legacy-import-file', 'legacy-import-file-error', errorMessage(error));
+        input.value = '';
+        byId('legacy-import-file-status').querySelector('span').textContent = 'Local file was not loaded';
+      }).finally(function () {
+        if (state.legacyImport.open) setLegacyImportBusy(false, '');
+      });
+    }
+
+    function legacyImportNumeric(source, keys) {
+      var object = source || {};
+      for (var index = 0; index < keys.length; index += 1) {
+        var value = object[keys[index]];
+        if (value === '' || value === null || value === undefined) continue;
+        var number = Number(value);
+        if (Number.isFinite(number)) return Math.max(0, Math.round(number));
+      }
+      return null;
+    }
+
+    function legacyImportObject(source, keys) {
+      var value = pick(source, keys, null);
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    }
+
+    function canonicalLegacyPreviewStatus(value) {
+      var status = normalizeText(value).toUpperCase().replace(/[\s-]+/g, '_');
+      if (/DUPLICATE|REPEATED/.test(status)) return 'DUPLICATE';
+      if (/ALREADY|COMPLETED|EXISTING|PREVIOUSLY_DONE/.test(status)) return 'ALREADY_COMPLETED';
+      if (/READY|RESUMABLE|VALID|ELIGIBLE|IMPORTABLE|WILL_IMPORT/.test(status)) return 'READY';
+      return 'INVALID';
+    }
+
+    function canonicalLegacyResultStatus(value) {
+      var status = normalizeText(value).toUpperCase().replace(/[\s-]+/g, '_');
+      if (/SYNC_FAILED|FAIL|ERROR|REJECT/.test(status)) return 'FAILED';
+      if (/RESUMED|RESUME/.test(status)) return 'RESUMED';
+      if (/SKIP|ALREADY|DUPLICATE|UNCHANGED/.test(status)) return 'SKIPPED';
+      if (/IMPORT|SAVED|CREATED|COMPLETE|SUCCESS/.test(status)) return 'IMPORTED';
+      return status || 'SKIPPED';
+    }
+
+    function legacyImportRows(source, resultMode) {
+      var data = source || {};
+      var direct = pick(data, ['rows', 'items', 'results', 'classifications', 'records'], null);
+      var rows = Array.isArray(direct) ? direct.slice() : [];
+      if (!rows.length && !resultMode) {
+        [
+          ['readyRows', 'ready'],
+          ['validRows', 'ready'],
+          ['invalidRows', 'invalid'],
+          ['duplicateRows', 'duplicate'],
+          ['alreadyCompletedRows', 'already_completed'],
+          ['completedRows', 'already_completed']
+        ].forEach(function (entry) {
+          toArray(data[entry[0]]).forEach(function (row) {
+            if (row && typeof row === 'object') rows.push(Object.assign({ classification: entry[1] }, row));
+            else rows.push({ assetTag: row, classification: entry[1] });
+          });
+        });
+      }
+      return rows.map(function (row) {
+        if (row && typeof row === 'object') return row;
+        return { assetTag: row };
+      });
+    }
+
+    function legacyImportRowTag(row) {
+      return normalizeTag(pick(row, ['assetTag', 'tag', 'asset', 'input', 'rawTag', 'tagging'], ''));
+    }
+
+    function legacyPreviewStatus(row) {
+      return canonicalLegacyPreviewStatus(pick(row, ['classification', 'status', 'result', 'outcome', 'category'], ''));
+    }
+
+    function legacyResultStatus(row) {
+      return canonicalLegacyResultStatus(pick(row, ['result', 'status', 'outcome', 'classification'], ''));
+    }
+
+    function legacyImportReason(row) {
+      var message = normalizeText(pick(row, ['reason', 'message', 'detail', 'details', 'explanation', 'note'], ''));
+      var warnings = toArray(row && row.warnings).map(function (warning) {
+        if (warning && typeof warning === 'object') return normalizeText(pick(warning, ['message', 'detail', 'warning'], ''));
+        return normalizeText(warning);
+      }).filter(Boolean);
+      return [message, warnings.join(' | ')].filter(Boolean).join(' | ');
+    }
+
+    function legacyImportAssetDetails(row) {
+      var details = [];
+      var type = normalizeText(pick(row, ['assetType', 'type', 'category'], ''));
+      var location = normalizeText(pick(row, ['location', 'site', 'assignedLocation'], ''));
+      var assetStatus = normalizeText(pick(row, ['assetStatus', 'productionStatus', 'trackerStatus'], ''));
+      if (type) details.push(type);
+      if (location) details.push(location);
+      if (assetStatus) details.push(assetStatus);
+      return details.join(' | ') || 'No additional details';
+    }
+
+    function statusChip(status, resultMode) {
+      var chip = document.createElement('span');
+      var tone;
+      if (resultMode) {
+        tone = status === 'IMPORTED' || status === 'RESUMED' ? 'success' : status === 'FAILED' ? 'danger' : 'neutral';
+      } else {
+        tone = status === 'READY' ? 'success' : status === 'INVALID' ? 'danger' : status === 'DUPLICATE' ? 'warning' : 'neutral';
+      }
+      chip.className = 'status-chip status-chip--' + tone;
+      chip.textContent = status.replace(/_/g, ' ');
+      return chip;
+    }
+
+    function legacyPreviewCounts(data, rows, localDuplicates) {
+      var nested = legacyImportObject(data, ['counts', 'summary', 'totals']) || data || {};
+      var calculated = { ready: 0, invalid: 0, duplicate: 0, completed: 0 };
+      rows.forEach(function (row) {
+        var status = legacyPreviewStatus(row);
+        if (status === 'READY') calculated.ready += 1;
+        else if (status === 'DUPLICATE') calculated.duplicate += 1;
+        else if (status === 'ALREADY_COMPLETED') calculated.completed += 1;
+        else calculated.invalid += 1;
+      });
+      var ready = legacyImportNumeric(nested, ['ready', 'valid', 'eligible', 'toImport', 'importable']);
+      if (ready === null) {
+        var newRecords = legacyImportNumeric(nested, ['newRecords']);
+        var resumable = legacyImportNumeric(nested, ['resumable']);
+        if (newRecords !== null || resumable !== null) ready = (newRecords || 0) + (resumable || 0);
+      }
+      var invalid = legacyImportNumeric(nested, ['invalid', 'notFound', 'rejected', 'ineligible']);
+      var duplicate = legacyImportNumeric(nested, ['duplicate', 'duplicates', 'duplicateInput', 'repeated']);
+      var completed = legacyImportNumeric(nested, ['alreadyCompleted', 'completed', 'existing', 'previouslyCompleted']);
+      return {
+        ready: ready === null ? calculated.ready : ready,
+        invalid: invalid === null ? calculated.invalid : invalid,
+        duplicate: (duplicate === null ? calculated.duplicate : duplicate) + localDuplicates,
+        completed: completed === null ? calculated.completed : completed
+      };
+    }
+
+    function normalizeLegacyPreview(data, request, parsed) {
+      var response = data || {};
+      var rows = legacyImportRows(response, false);
+      var totalRows = rows.length + parsed.duplicateCount;
+      parsed.duplicateRows.forEach(function (duplicate) {
+        rows.push({
+          assetTag: duplicate.assetTag,
+          classification: 'DUPLICATE',
+          reason: 'Repeated in the pasted or loaded list; only the first occurrence was sent for validation.'
+        });
+      });
+      var confirmation = legacyImportObject(response, ['confirmation', 'authorization']) || {};
+      var rawMode = normalizeText(pick(response, ['mode', 'trackerMode', 'writeMode', 'impactMode'], pick(confirmation, ['mode'], ''))).toUpperCase();
+      var historical = response.historicalOnly === true || response.updatesTracker === false || /HISTORICAL|RECORD_ONLY|NO_TRACKER/.test(rawMode);
+      var tracker = response.updatesTracker === true || /TRACKER|CURRENT_CYCLE|CURRENT_YEAR/.test(rawMode);
+      var counts = legacyPreviewCounts(response, rows.filter(function (row) {
+        return legacyPreviewStatus(row) !== 'DUPLICATE' || !/Repeated in the pasted/.test(legacyImportReason(row));
+      }), parsed.duplicateCount);
+      return {
+        raw: response,
+        request: request,
+        rows: rows,
+        totalRows: totalRows,
+        counts: counts,
+        confirmationToken: normalizeText(pick(response, ['confirmationToken', 'previewToken', 'token'], pick(confirmation, ['token', 'confirmationToken'], ''))),
+        confirmationPhrase: normalizeText(pick(response, ['confirmationPhrase', 'phrase'], pick(confirmation, ['phrase', 'confirmationPhrase'], ''))),
+        mode: historical ? 'HISTORICAL' : tracker ? 'TRACKER' : 'UNKNOWN',
+        modeLabel: normalizeText(pick(response, ['modeLabel', 'trackerModeLabel', 'impactLabel'], '')),
+        cycleId: normalizeText(pick(response, ['cycleId', 'maintenanceCycle', 'cycle'], deriveCycle(request.maintenanceDate).cycleId)),
+        trackerYear: legacyImportNumeric(response, ['trackerYear', 'currentTrackerYear', 'activeYear'])
+      };
+    }
+
+    function appendLegacyPreviewRow(body, row) {
+      var status = legacyPreviewStatus(row);
+      var tableRow = document.createElement('tr');
+      var tagCell = document.createElement('td');
+      var detailCell = document.createElement('td');
+      var resultCell = document.createElement('td');
+      var reasonCell = document.createElement('td');
+      tagCell.textContent = legacyImportRowTag(row) || 'Unknown tag';
+      detailCell.textContent = legacyImportAssetDetails(row);
+      resultCell.appendChild(statusChip(status, false));
+      reasonCell.textContent = legacyImportReason(row) || (
+        status === 'READY' ? 'Eligible for legacy PMS import.' :
+          status === 'ALREADY_COMPLETED' ? 'A completed record already exists for this cycle.' :
+            status === 'DUPLICATE' ? 'Repeated input.' : 'This tag cannot be imported.'
+      );
+      [tagCell, detailCell, resultCell, reasonCell].forEach(function (cell) { tableRow.appendChild(cell); });
+      body.appendChild(tableRow);
+    }
+
+    function renderLegacyImportImpact(preview) {
+      var notice = byId('legacy-import-impact-notice');
+      notice.classList.remove('notice--info', 'notice--warning');
+      var derived = deriveCycle(preview.request.maintenanceDate);
+      if (preview.mode === 'HISTORICAL') {
+        notice.classList.add('notice--warning');
+        byId('legacy-import-impact-title').textContent = preview.modeLabel || 'Historical records only';
+        byId('legacy-import-impact-detail').textContent = 'These records use ' + preview.cycleId + ', but the live ' +
+          (preview.trackerYear || derived.year) + ' tracker will not be changed.';
+      } else if (preview.mode === 'TRACKER') {
+        notice.classList.add('notice--info');
+        byId('legacy-import-impact-title').textContent = preview.modeLabel || 'Records and live tracker';
+        byId('legacy-import-impact-detail').textContent = 'Imported assets will be recorded as completed and their ' +
+          derived.cycle + ' tracker status and remarks will be synchronized.';
+      } else {
+        notice.classList.add('notice--warning');
+        byId('legacy-import-impact-title').textContent = preview.modeLabel || 'Tracker impact not identified';
+        byId('legacy-import-impact-detail').textContent = 'Review the server classifications carefully. The preview did not identify a tracker or historical-only mode.';
+      }
+    }
+
+    function renderLegacyImportPreview(preview) {
+      byId('legacy-import-count-ready').textContent = formatNumber(preview.counts.ready);
+      byId('legacy-import-count-invalid').textContent = formatNumber(preview.counts.invalid);
+      byId('legacy-import-count-duplicate').textContent = formatNumber(preview.counts.duplicate);
+      byId('legacy-import-count-completed').textContent = formatNumber(preview.counts.completed);
+      byId('legacy-import-review-subtitle').textContent = sectionLabel(preview.request.section) + ' | ' +
+        formatDate(preview.request.maintenanceDate) + ' | ' + preview.cycleId;
+      renderLegacyImportImpact(preview);
+
+      var body = byId('legacy-import-preview-body');
+      body.replaceChildren();
+      var statusPriority = { INVALID: 0, DUPLICATE: 1, ALREADY_COMPLETED: 2, READY: 4 };
+      var displayRows = preview.rows.map(function (row, index) {
+        var priority = statusPriority[legacyPreviewStatus(row)];
+        if (legacyPreviewStatus(row) === 'READY' && toArray(row.warnings).length) priority = 3;
+        return { row: row, index: index, priority: priority === undefined ? 3 : priority };
+      }).sort(function (left, right) {
+        return left.priority - right.priority || left.index - right.index;
+      }).map(function (entry) { return entry.row; });
+      displayRows.slice(0, LEGACY_IMPORT_TABLE_CAP).forEach(function (row) { appendLegacyPreviewRow(body, row); });
+      if (!preview.rows.length) {
+        var emptyRow = document.createElement('tr');
+        var emptyCell = document.createElement('td');
+        emptyCell.colSpan = 4;
+        emptyCell.className = 'legacy-import-table__empty';
+        emptyCell.textContent = 'The server returned summary counts without row-level details.';
+        emptyRow.appendChild(emptyCell);
+        body.appendChild(emptyRow);
+      }
+      var truncated = byId('legacy-import-preview-truncated');
+      truncated.hidden = preview.totalRows <= LEGACY_IMPORT_TABLE_CAP;
+      truncated.textContent = truncated.hidden ? '' : 'Showing the first ' + formatNumber(LEGACY_IMPORT_TABLE_CAP) +
+        ' of ' + formatNumber(preview.totalRows) + ' classified rows, with exceptions shown first.';
+
+      byId('legacy-import-review-confirm').checked = false;
+      byId('legacy-import-review-confirm-label').textContent = 'I reviewed all exceptions and approve ' +
+        formatNumber(preview.counts.ready) + ' ready record' + (preview.counts.ready === 1 ? '' : 's') + '.';
+      byId('legacy-import-confirmation-phrase').textContent = preview.confirmationPhrase || 'the server phrase';
+      byId('legacy-import-confirmation-input').value = '';
+      clearFieldError('legacy-import-confirmation-input', 'legacy-import-confirmation-error');
+      updateLegacyImportConfirmState();
+    }
+
+    function updateLegacyImportConfirmState() {
+      var button = byId('legacy-import-confirm');
+      if (!button) return;
+      var preview = state.legacyImport.preview;
+      var phrase = preview ? normalizeText(preview.confirmationPhrase) : '';
+      var typed = normalizeText(byId('legacy-import-confirmation-input').value);
+      var approved = byId('legacy-import-review-confirm').checked;
+      var ready = preview ? preview.counts.ready : 0;
+      button.querySelector('span').textContent = ready ? 'Import ' + formatNumber(ready) + ' record' + (ready === 1 ? '' : 's') : 'Confirm import';
+      button.disabled = state.legacyImport.busy || !preview || ready < 1 || !preview.confirmationToken || !phrase || !approved || typed !== phrase;
+    }
+
+    function validateLegacyImportRequest() {
+      clearLegacyImportFieldErrors();
+      clearLegacyImportAlert();
+      var section = normalizeText(byId('legacy-import-section').value);
+      var maintenanceDate = normalizeText(byId('legacy-import-maintenance-date').value);
+      var parsed = updateLegacyImportLocalCount();
+      var sourceNote = normalizeText(byId('legacy-import-source-note').value);
+      var valid = true;
+      if (!section || !state.sections.some(function (entry) { return entry.key === section; })) {
+        setFieldError('legacy-import-section', 'legacy-import-section-error', 'Choose the tracker section for these assets.');
+        valid = false;
+      }
+      if (!parseDateParts(maintenanceDate)) {
+        setFieldError('legacy-import-maintenance-date', 'legacy-import-maintenance-date-error', 'Choose a valid maintenance date.');
+        valid = false;
+      } else if (maintenanceDate > currentManilaDate()) {
+        setFieldError('legacy-import-maintenance-date', 'legacy-import-maintenance-date-error', 'The maintenance date cannot be in the future.');
+        valid = false;
+      }
+      if (!parsed.uniqueTags.length) {
+        setFieldError('legacy-import-tags', 'legacy-import-tags-error', 'Paste or load at least one asset tag.');
+        valid = false;
+      } else if (parsed.uniqueTags.length > LEGACY_IMPORT_MAX_LOCAL_TAGS) {
+        setFieldError('legacy-import-tags', 'legacy-import-tags-error', 'Use at most ' +
+          formatNumber(LEGACY_IMPORT_MAX_LOCAL_TAGS) + ' unique tags in one batch.');
+        valid = false;
+      }
+      if (!valid) {
+        var firstInvalid = byId('legacy-import-form').querySelector('[aria-invalid="true"]');
+        if (firstInvalid) firstInvalid.focus();
+        return null;
+      }
+      return {
+        request: {
+          section: section,
+          maintenanceDate: maintenanceDate,
+          assetTags: parsed.uniqueTags.slice(),
+          sourceNote: sourceNote
+        },
+        parsed: parsed
+      };
+    }
+
+    function previewLegacyImport(event) {
+      if (event) event.preventDefault();
+      if (!state.legacyImport.open || state.legacyImport.busy || state.legacyImport.stage !== 'PREPARE') return;
+      var prepared = validateLegacyImportRequest();
+      if (!prepared) return;
+      var requestToken = state.legacyImport.requestToken + 1;
+      state.legacyImport.requestToken = requestToken;
+      state.legacyImport.request = prepared.request;
+      state.legacyImport.dirty = true;
+      setLegacyImportBusy(true, 'Validating ' + formatNumber(prepared.request.assetTags.length) + ' unique tags...');
+      serverCall('PMS_apiPreviewLegacyImport', prepared.request)
+        .then(function (data) {
+          if (!state.legacyImport.open || requestToken !== state.legacyImport.requestToken) return;
+          var preview = normalizeLegacyPreview(data, prepared.request, prepared.parsed);
+          state.legacyImport.preview = preview;
+          state.legacyImport.confirmationToken = preview.confirmationToken;
+          renderLegacyImportPreview(preview);
+          var missingConfirmation = preview.counts.ready > 0 && (!preview.confirmationToken || !preview.confirmationPhrase);
+          var noReadyRows = !preview.counts.ready;
+          setLegacyImportStage('REVIEW', !missingConfirmation && !noReadyRows);
+          if (missingConfirmation) {
+            showLegacyImportAlert('Preview cannot be confirmed', 'The server did not return the confirmation token and phrase required for this exact preview. Run the preview again or contact an administrator.');
+          } else if (noReadyRows) {
+            showLegacyImportAlert('Nothing is ready to import', 'Review the invalid, duplicate, and already-completed rows, then edit the list if needed.');
+          }
+        })
+        .catch(function (error) {
+          if (!state.legacyImport.open || requestToken !== state.legacyImport.requestToken) return;
+          showLegacyImportAlert('Preview failed', errorMessage(error));
+        })
+        .finally(function () {
+          if (state.legacyImport.open && requestToken === state.legacyImport.requestToken) {
+            setLegacyImportBusy(false, state.legacyImport.stage === 'REVIEW' ? 'Preview ready' : '');
+          }
+        });
+    }
+
+    function editLegacyImport() {
+      if (state.legacyImport.busy) return;
+      invalidateLegacyImportPreview();
+      clearLegacyImportAlert();
+      setLegacyImportStage('PREPARE', true);
+    }
+
+    function legacyExecutionCounts(source) {
+      var counts = source || {};
+      var completed = legacyImportNumeric(counts, ['completed']);
+      var imported = legacyImportNumeric(counts, ['imported', 'created', 'saved']);
+      var resumed = legacyImportNumeric(counts, ['resumed']);
+      var successful = completed;
+      if (successful === null && (imported !== null || resumed !== null)) successful = (imported || 0) + (resumed || 0);
+      return {
+        imported: successful,
+        skipped: legacyImportNumeric(counts, ['skipped', 'unchanged', 'alreadyCompleted']),
+        failed: legacyImportNumeric(counts, ['failed', 'errors', 'rejected']),
+        processed: legacyImportNumeric(counts, ['processed', 'processedCount', 'totalProcessed'])
+      };
+    }
+
+    function absorbLegacyImportBatch(batch) {
+      var execution = state.legacyImport.execution;
+      var rows = legacyImportRows(batch, true);
+      rows.forEach(function (row, index) {
+        var tag = legacyImportRowTag(row);
+        var key = tag || ('ROW-' + execution.chunks + '-' + index + '-' + legacyResultStatus(row) + '-' + legacyImportReason(row));
+        if (Object.prototype.hasOwnProperty.call(execution.rowIndex, key)) {
+          execution.rows[execution.rowIndex[key]] = row;
+          return;
+        }
+        execution.rowIndex[key] = execution.rows.length;
+        execution.rows.push(row);
+      });
+      execution.totalRows = execution.rows.length;
+
+      // The production endpoint exposes per-call counts plus token-lifetime
+      // cumulative totals. Prefer cumulative so every continuation is exact.
+      var totalsSource = legacyImportObject(batch, ['cumulative', 'totals', 'totalCounts', 'aggregateCounts', 'aggregate']);
+      var batchSource = legacyImportObject(batch, ['batchCounts', 'deltaCounts', 'delta']);
+      var genericSource = legacyImportObject(batch, ['counts', 'summary']);
+      var rowCounts = { imported: 0, skipped: 0, failed: 0, processed: execution.rows.length };
+      execution.rows.forEach(function (row) {
+        var status = legacyResultStatus(row);
+        if (status === 'IMPORTED' || status === 'RESUMED') rowCounts.imported += 1;
+        else if (status === 'FAILED') rowCounts.failed += 1;
+        else rowCounts.skipped += 1;
+      });
+
+      if (totalsSource) {
+        var totals = legacyExecutionCounts(totalsSource);
+        ['imported', 'skipped', 'failed', 'processed'].forEach(function (key) {
+          if (totals[key] !== null) execution[key] = totals[key];
+        });
+      } else if (rows.length) {
+        execution.imported = rowCounts.imported;
+        execution.skipped = rowCounts.skipped;
+        execution.failed = rowCounts.failed;
+        execution.processed = rowCounts.processed;
+      } else {
+        var reported = legacyExecutionCounts(batchSource || genericSource || batch);
+        var cumulative = batch.countsAreCumulative === true || batch.cumulative === true;
+        ['imported', 'skipped', 'failed', 'processed'].forEach(function (key) {
+          if (reported[key] === null) return;
+          execution[key] = cumulative ? Math.max(execution[key], reported[key]) : execution[key] + reported[key];
+        });
+      }
+
+      var explicitProcessed = legacyImportNumeric(batch, ['processed', 'processedCount', 'totalProcessed']);
+      if (explicitProcessed !== null) execution.processed = Math.max(execution.processed, explicitProcessed);
+      execution.lastResponse = batch;
+    }
+
+    function legacyImportHasMore(result) {
+      if (!result) return false;
+      if (result.hasMore === true || result.more === true || normalizeText(result.hasMore).toLowerCase() === 'true') return true;
+      if (result.done === false || result.complete === false) return true;
+      return asNumber(pick(result, ['remaining', 'remainingCount'], 0), 0) > 0;
+    }
+
+    function executeLegacyImportChunk() {
+      var execution = state.legacyImport.execution;
+      execution.chunks += 1;
+      if (execution.chunks > LEGACY_IMPORT_MAX_CHUNKS) {
+        throw clientError('The import did not finish within the safe continuation limit. Retry to continue with the same confirmation token.', 'LEGACY_IMPORT_CONTINUATION_LIMIT');
+      }
+      setLegacyImportBusy(true, 'Importing batch ' + execution.chunks + '... ' + formatNumber(execution.processed) + ' processed');
+      return serverCall('PMS_apiExecuteLegacyImport', state.legacyImport.request, state.legacyImport.confirmationToken)
+        .then(function (result) {
+          if (!state.legacyImport.open) throw clientError('The import window was closed.', 'LEGACY_IMPORT_CLOSED');
+          absorbLegacyImportBatch(result || {});
+          if (legacyImportHasMore(result)) return executeLegacyImportChunk();
+          state.legacyImport.execution.finished = true;
+          return result || {};
+        });
+    }
+
+    function appendLegacyResultRow(body, row) {
+      var status = legacyResultStatus(row);
+      var tableRow = document.createElement('tr');
+      var tagCell = document.createElement('td');
+      var resultCell = document.createElement('td');
+      var detailCell = document.createElement('td');
+      tagCell.textContent = legacyImportRowTag(row) || 'Unknown tag';
+      resultCell.appendChild(statusChip(status, true));
+      detailCell.textContent = legacyImportReason(row) || (status === 'IMPORTED' ? 'Legacy PMS record saved.' :
+        status === 'RESUMED' ? 'An existing incomplete import was resumed and completed.' :
+          status === 'FAILED' ? 'The record could not be imported.' : 'No change was required.');
+      [tagCell, resultCell, detailCell].forEach(function (cell) { tableRow.appendChild(cell); });
+      body.appendChild(tableRow);
+    }
+
+    function renderLegacyImportResults() {
+      var execution = state.legacyImport.execution || { imported: 0, skipped: 0, failed: 0, processed: 0, rows: [], totalRows: 0 };
+      byId('legacy-import-count-imported').textContent = formatNumber(execution.imported);
+      byId('legacy-import-count-skipped').textContent = formatNumber(execution.skipped);
+      byId('legacy-import-count-failed').textContent = formatNumber(execution.failed);
+      byId('legacy-import-count-processed').textContent = formatNumber(execution.processed);
+
+      var body = byId('legacy-import-results-body');
+      body.replaceChildren();
+      var resultPriority = { FAILED: 0, SKIPPED: 1, RESUMED: 2, IMPORTED: 3 };
+      execution.rows.map(function (row, index) {
+        var priority = resultPriority[legacyResultStatus(row)];
+        return { row: row, index: index, priority: priority === undefined ? 1 : priority };
+      }).sort(function (left, right) {
+        return left.priority - right.priority || left.index - right.index;
+      }).slice(0, LEGACY_IMPORT_TABLE_CAP).forEach(function (entry) { appendLegacyResultRow(body, entry.row); });
+      if (!execution.rows.length) {
+        var emptyRow = document.createElement('tr');
+        var emptyCell = document.createElement('td');
+        emptyCell.colSpan = 3;
+        emptyCell.className = 'legacy-import-table__empty';
+        emptyCell.textContent = 'The server returned aggregate results without row-level details.';
+        emptyRow.appendChild(emptyCell);
+        body.appendChild(emptyRow);
+      }
+      var truncated = byId('legacy-import-results-truncated');
+      truncated.hidden = execution.totalRows <= LEGACY_IMPORT_TABLE_CAP;
+      truncated.textContent = truncated.hidden ? '' : 'Showing the first ' + formatNumber(LEGACY_IMPORT_TABLE_CAP) +
+        ' of ' + formatNumber(execution.totalRows) + ' result rows, with failures and skipped rows shown first.';
+
+      var notice = byId('legacy-import-results-notice');
+      notice.classList.remove('notice--info', 'notice--warning');
+      if (execution.failed) {
+        notice.classList.add('notice--warning');
+        byId('legacy-import-results-message').textContent = 'Import completed with exceptions';
+        byId('legacy-import-results-detail').textContent = formatNumber(execution.imported) + ' imported, ' +
+          formatNumber(execution.skipped) + ' skipped, and ' + formatNumber(execution.failed) + ' failed. Review the rows below.';
+      } else {
+        notice.classList.add('notice--info');
+        byId('legacy-import-results-message').textContent = 'Legacy PMS import complete';
+        byId('legacy-import-results-detail').textContent = formatNumber(execution.imported) + ' records were imported' +
+          (execution.skipped ? '; ' + formatNumber(execution.skipped) + ' were safely skipped.' : '.');
+      }
+      byId('legacy-import-results-subtitle').textContent = 'Processed across ' + formatNumber(execution.chunks) +
+        ' server batch' + (execution.chunks === 1 ? '' : 'es') + '. The dashboard is refreshing.';
+    }
+
+    function executeLegacyImport() {
+      if (!state.legacyImport.open || state.legacyImport.busy || state.legacyImport.stage !== 'REVIEW') return;
+      var preview = state.legacyImport.preview;
+      var typed = normalizeText(byId('legacy-import-confirmation-input').value);
+      if (!preview || !state.legacyImport.confirmationToken || !preview.confirmationPhrase) {
+        showLegacyImportAlert('Preview required', 'Run a fresh server preview before confirming this import.');
+        return;
+      }
+      if (!byId('legacy-import-review-confirm').checked || typed !== preview.confirmationPhrase) {
+        setFieldError('legacy-import-confirmation-input', 'legacy-import-confirmation-error', 'Review the preview, select the approval checkbox, and type the server phrase exactly.');
+        byId('legacy-import-confirmation-input').focus();
+        return;
+      }
+      clearLegacyImportAlert();
+      clearFieldError('legacy-import-confirmation-input', 'legacy-import-confirmation-error');
+      if (!state.legacyImport.execution || state.legacyImport.execution.finished) {
+        state.legacyImport.execution = {
+          imported: 0,
+          skipped: 0,
+          failed: 0,
+          processed: 0,
+          rows: [],
+          totalRows: 0,
+          rowIndex: {},
+          chunks: 0,
+          finished: false,
+          lastResponse: null
+        };
+      }
+      setLegacyImportBusy(true, 'Starting legacy PMS import...');
+      Promise.resolve().then(executeLegacyImportChunk)
+        .then(function () {
+          if (!state.legacyImport.open) return;
+          state.legacyImport.dirty = false;
+          renderLegacyImportResults();
+          setLegacyImportBusy(false, 'Import finished');
+          setLegacyImportStage('RESULTS', true);
+          return loadBootstrap({ silent: true })
+            .then(function () {
+              byId('legacy-import-results-subtitle').textContent = 'The dashboard now reflects the completed import.';
+              byId('legacy-import-state').textContent = 'Dashboard refreshed';
+            })
+            .catch(function () {
+              byId('legacy-import-results-subtitle').textContent = 'The import finished. Refresh the dashboard to load the latest totals.';
+              byId('legacy-import-state').textContent = 'Import finished; dashboard refresh pending';
+            });
+        })
+        .catch(function (error) {
+          if (!state.legacyImport.open) return;
+          setLegacyImportBusy(false, 'Import paused');
+          state.legacyImport.dirty = true;
+          var processed = state.legacyImport.execution ? state.legacyImport.execution.processed : 0;
+          var code = errorCode(error);
+          var needsFreshPreview = [
+            'IMPORT_TOKEN_EXPIRED', 'IMPORT_TOKEN_INVALID', 'IMPORT_PREVIEW_STALE',
+            'ROLLOVER_BLOCKED', 'TRACKER_YEAR_MISMATCH'
+          ].indexOf(code) >= 0;
+          if (needsFreshPreview) {
+            state.legacyImport.confirmationToken = '';
+            if (state.legacyImport.preview) state.legacyImport.preview.confirmationToken = '';
+            updateLegacyImportConfirmState();
+            showLegacyImportAlert('Fresh preview required' + (processed ? ' after ' + formatNumber(processed) + ' processed' : ''),
+              errorMessage(error) + ' Select Edit list, then run the server preview again before importing the remaining assets.');
+            return;
+          }
+          showLegacyImportAlert(processed ? 'Import paused after ' + formatNumber(processed) + ' processed' : 'Import could not start',
+            errorMessage(error) + (processed ? ' Confirm again to retry with the same protected import token.' : ''));
+        });
+    }
+
+    function trapLegacyImportFocus(event) {
+      if (!state.legacyImport.open) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        requestCloseLegacyImport(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = modalFocusable(byId('legacy-import-modal'));
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
 
     function renderRollover(rollover) {
@@ -2406,11 +3315,12 @@
     }
 
     function openModal() {
+      if (state.modalOpen || state.archive.open || state.legacyImport.open) return;
       state.lastFocus = document.activeElement;
       state.modalOpen = true;
       state.dirty = false;
       byId('questionnaire-modal').hidden = false;
-      document.body.classList.add('modal-open');
+      syncBodyModalState();
       setStep(1, false);
       window.setTimeout(function () { byId('maintenance-date').focus(); }, 0);
     }
@@ -2421,7 +3331,7 @@
       state.modalOpen = false;
       state.dirty = false;
       byId('questionnaire-modal').hidden = true;
-      document.body.classList.remove('modal-open');
+      syncBodyModalState();
       if (state.lastFocus && typeof state.lastFocus.focus === 'function') state.lastFocus.focus();
     }
 
@@ -2895,7 +3805,7 @@
     }
 
     function trapModalFocus(event) {
-      if (!state.modalOpen) return;
+      if (!state.modalOpen || state.legacyImport.open) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         requestCloseModal(false);
@@ -2934,6 +3844,36 @@
           .catch(function () {})
           .finally(function () { setBusy(false); });
       });
+      byId('open-legacy-import').addEventListener('click', openLegacyImport);
+      byId('legacy-import-close').addEventListener('click', function () { requestCloseLegacyImport(false); });
+      document.querySelectorAll('[data-close-legacy-import]').forEach(function (element) {
+        element.addEventListener('click', function () { requestCloseLegacyImport(false); });
+      });
+      byId('legacy-import-cancel').addEventListener('click', function () { requestCloseLegacyImport(false); });
+      byId('legacy-import-form').addEventListener('submit', previewLegacyImport);
+      byId('legacy-import-section').addEventListener('change', markLegacyImportDirty);
+      byId('legacy-import-maintenance-date').addEventListener('change', function () {
+        updateLegacyImportCycle();
+        markLegacyImportDirty();
+      });
+      byId('legacy-import-tags').addEventListener('input', function () {
+        updateLegacyImportLocalCount();
+        markLegacyImportDirty();
+      });
+      byId('legacy-import-source-note').addEventListener('input', markLegacyImportDirty);
+      byId('legacy-import-file').addEventListener('change', onLegacyImportFileChange);
+      byId('legacy-import-edit').addEventListener('click', editLegacyImport);
+      byId('legacy-import-review-confirm').addEventListener('change', updateLegacyImportConfirmState);
+      byId('legacy-import-confirmation-input').addEventListener('input', function () {
+        clearFieldError('legacy-import-confirmation-input', 'legacy-import-confirmation-error');
+        updateLegacyImportConfirmState();
+      });
+      byId('legacy-import-confirm').addEventListener('click', executeLegacyImport);
+      byId('legacy-import-again').addEventListener('click', function () {
+        resetLegacyImport();
+        window.setTimeout(function () { byId('legacy-import-section').focus(); }, 0);
+      });
+      byId('legacy-import-done').addEventListener('click', function () { requestCloseLegacyImport(true); });
       byId('open-archive').addEventListener('click', openArchiveModal);
       byId('archive-close').addEventListener('click', closeArchiveModal);
       document.querySelectorAll('[data-close-archive]').forEach(function (element) {
@@ -3024,9 +3964,12 @@
       byId('rollover-confirmation').addEventListener('input', updateRolloverConfirmation);
       byId('rollover-execute').addEventListener('click', executeRollover);
       byId('retry-pending-sync').addEventListener('click', retryPendingSynchronization);
+      document.addEventListener('keydown', trapLegacyImportFocus);
       document.addEventListener('keydown', trapModalFocus);
       window.addEventListener('beforeunload', function (event) {
-        if (!state.modalOpen || !state.dirty) return;
+        var questionnaireDirty = state.modalOpen && state.dirty;
+        var importDirty = state.legacyImport.open && (state.legacyImport.dirty || state.legacyImport.busy);
+        if (!questionnaireDirty && !importDirty) return;
         event.preventDefault();
         event.returnValue = '';
       });
@@ -3035,6 +3978,8 @@
     function init() {
       bindEvents();
       byId('maintenance-date').max = currentManilaDate();
+      byId('legacy-import-maintenance-date').max = currentManilaDate();
+      syncBodyModalState();
       loadBootstrap().catch(function () {});
     }
 
