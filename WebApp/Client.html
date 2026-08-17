@@ -28,6 +28,11 @@
       modalOpen: false,
       busy: false,
       combobox: { open: false, activeIndex: -1, matches: [] },
+      tickets: {
+        open: false, view: 'list', page: 1, totalPages: 1, direction: 'DESC',
+        status: 'ACTIVE', token: 0, searchTimer: null, lastFocus: null,
+        currentId: '', sourceRecordId: '', statuses: [], priorities: []
+      },
       archive: {
         open: false, page: 1, totalPages: 1, direction: 'DESC',
         token: 0, searchTimer: null, lastFocus: null
@@ -862,6 +867,8 @@
       // The server defers rollover status because it is expensive. Fetch it once
       // the dashboard is on screen so it never delays first paint.
       if (state.bootstrap.rolloverDeferred && userIsAdmin()) loadRolloverStatus();
+      // Ticket counts are also deferred, for the same reason.
+      loadTicketSummary();
     }
 
     function loadRolloverStatus() {
@@ -1318,10 +1325,642 @@
         });
         actionCell.appendChild(open);
       }
+      // Anything other than a clean "No findings" result is a candidate for a
+      // repair ticket, so the action is offered right where findings are read.
+      if (id && recordHasFindings(record.assessmentResult)) {
+        var fileTicket = document.createElement('button');
+        fileTicket.className = 'table-action table-action--accent';
+        fileTicket.type = 'button';
+        fileTicket.textContent = 'File ticket';
+        fileTicket.title = 'Open a findings ticket for ' + normalizeText(record.assetTag);
+        fileTicket.addEventListener('click', function () { fileTicketFromRecord(record); });
+        actionCell.appendChild(fileTicket);
+      }
 
       [assetCell, locationCell, dateCell, cycleCell, technicianCell, resultCell, actionCell]
         .forEach(function (cell) { row.appendChild(cell); });
       return row;
+    }
+
+    function recordHasFindings(assessmentResult) {
+      var result = normalizeText(assessmentResult);
+      if (!result) return false;
+      return !/^no findings$/i.test(result);
+    }
+
+    /* ------------------------------------------------------------------------
+       Findings tickets
+
+       Server-paged like the archive. The list, a ticket's detail with its full
+       change history, and the create form are three views inside one dialog
+       rather than nested modals, so there is only ever one focus trap active.
+       ------------------------------------------------------------------------ */
+
+    var TICKET_STATUS_CHIP = {
+      OPEN: 'status-chip--warning',
+      IN_PROGRESS: 'status-chip--info',
+      ON_HOLD: 'status-chip--neutral',
+      RESOLVED: 'status-chip--success',
+      CANCELLED: 'status-chip--neutral'
+    };
+    var TICKET_PRIORITY_CHIP = {
+      HIGH: 'status-chip--danger',
+      MEDIUM: 'status-chip--warning',
+      LOW: 'status-chip--neutral'
+    };
+    var TICKET_TABS = [
+      { value: 'ACTIVE', label: 'Needs attention' },
+      { value: 'OPEN', label: 'Open' },
+      { value: 'IN_PROGRESS', label: 'In progress' },
+      { value: 'ON_HOLD', label: 'On hold' },
+      { value: 'RESOLVED', label: 'Resolved' },
+      { value: 'CANCELLED', label: 'Cancelled' },
+      { value: '', label: 'All' }
+    ];
+    var TICKET_DIRECTION_LABELS = {
+      updatedAt: ['Oldest first', 'Newest first'],
+      createdAt: ['Oldest first', 'Newest first'],
+      priority: ['Lowest first', 'Highest first'],
+      status: ['A to Z', 'Z to A'],
+      assetTag: ['A to Z', 'Z to A'],
+      section: ['A to Z', 'Z to A'],
+      ticketId: ['Oldest first', 'Newest first']
+    };
+
+    function ticketLabel(value) {
+      var text = normalizeText(value).replace(/_/g, ' ').toLowerCase();
+      return text ? text.charAt(0).toUpperCase() + text.slice(1) : '—';
+    }
+
+    function ticketChip(value, map, fallback) {
+      var chip = document.createElement('span');
+      chip.className = 'status-chip ' + (map[normalizeText(value).toUpperCase()] || fallback);
+      chip.textContent = ticketLabel(value);
+      return chip;
+    }
+
+    function openTicketsModal(view) {
+      state.tickets.lastFocus = document.activeElement;
+      state.tickets.open = true;
+      byId('tickets-modal').hidden = false;
+      syncBodyModalState();
+      showTicketsView(view || 'list');
+      if (!view || view === 'list') loadTickets({ page: 1 }).catch(function () {});
+      window.setTimeout(function () {
+        var target = state.tickets.view === 'list' ? byId('tickets-search') : byId('ticket-create-asset');
+        if (target) target.focus();
+      }, 0);
+    }
+
+    function closeTicketsModal() {
+      if (!state.tickets.open) return;
+      state.tickets.open = false;
+      byId('tickets-modal').hidden = true;
+      syncBodyModalState();
+      var target = state.tickets.lastFocus;
+      if (target && typeof target.focus === 'function') target.focus();
+    }
+
+    function trapTicketsFocus(event) {
+      // The questionnaire owns the keyboard whenever it is layered on top.
+      if (!state.tickets.open || state.modalOpen) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (state.tickets.view === 'list') closeTicketsModal();
+        else showTicketsView('list');
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = Array.prototype.slice.call(byId('tickets-modal').querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function showTicketsView(view) {
+      state.tickets.view = view;
+      byId('tickets-list-view').hidden = view !== 'list';
+      byId('tickets-detail-view').hidden = view !== 'detail';
+      byId('tickets-create-view').hidden = view !== 'create';
+      // The toolbar and pager only make sense for the list.
+      byId('tickets-toolbar').hidden = view !== 'list';
+      byId('ticket-tabs').hidden = view !== 'list';
+      byId('tickets-pager').hidden = view !== 'list';
+      byId('tickets-new').hidden = view !== 'list';
+      document.querySelectorAll('.archive-toolbar--secondary').forEach(function (element) {
+        if (element.closest('#tickets-modal')) element.hidden = view !== 'list';
+      });
+      byId('tickets-dialog-body').scrollTop = 0;
+    }
+
+    function ticketsRequest(overrides) {
+      var request = {
+        page: state.tickets.page,
+        pageSize: byId('tickets-page-size').value,
+        sort: byId('tickets-sort').value,
+        direction: state.tickets.direction,
+        status: state.tickets.status,
+        priority: byId('tickets-priority').value,
+        section: byId('tickets-section').value,
+        search: byId('tickets-search').value
+      };
+      return Object.assign(request, overrides || {});
+    }
+
+    function renderTicketsDirection() {
+      var labels = TICKET_DIRECTION_LABELS[byId('tickets-sort').value] || ['Ascending', 'Descending'];
+      var ascending = state.tickets.direction === 'ASC';
+      byId('tickets-direction-label').textContent = ascending ? labels[0] : labels[1];
+      byId('tickets-direction').setAttribute('aria-pressed', ascending ? 'true' : 'false');
+      var use = byId('tickets-direction').querySelector('use');
+      if (use) use.setAttribute('href', ascending ? '#i-arrow-up' : '#i-arrow-down');
+    }
+
+    function setTicketsBusy(isBusy) {
+      byId('tickets-loading').hidden = !isBusy;
+      if (isBusy) {
+        byId('tickets-table-wrap').hidden = true;
+        byId('tickets-empty').hidden = true;
+      }
+      ['tickets-prev', 'tickets-next', 'tickets-refresh', 'tickets-page-input'].forEach(function (id) {
+        byId(id).disabled = isBusy;
+      });
+    }
+
+    function loadTickets(overrides) {
+      var request = ticketsRequest(overrides);
+      state.tickets.page = asNumber(request.page, 1) || 1;
+      state.tickets.token += 1;
+      var token = state.tickets.token;
+      setTicketsBusy(true);
+      return serverCall('PMS_apiTickets', request)
+        .then(function (data) {
+          if (token !== state.tickets.token) return data;
+          renderTickets(data);
+          return data;
+        })
+        .catch(function (error) {
+          if (token !== state.tickets.token) return;
+          setTicketsBusy(false);
+          byId('tickets-empty').hidden = false;
+          byId('tickets-empty-title').textContent = 'Tickets could not be loaded';
+          byId('tickets-empty-message').textContent = errorMessage(error);
+          showToast('Tickets failed', errorMessage(error), 'danger');
+        });
+    }
+
+    function renderTicketTabs(counts) {
+      var container = byId('ticket-tabs');
+      container.replaceChildren();
+      TICKET_TABS.forEach(function (tab) {
+        var count = tab.value === '' ? counts.TOTAL : counts[tab.value];
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'ticket-tab' + (state.tickets.status === tab.value ? ' is-active' : '');
+        button.setAttribute('role', 'tab');
+        // Mirrors the filter onto the DOM so the active bucket is visible when
+        // inspecting the page, not just held in the closure.
+        button.setAttribute('data-status', tab.value || 'ALL');
+        button.setAttribute('aria-selected', state.tickets.status === tab.value ? 'true' : 'false');
+        var label = document.createElement('span');
+        label.textContent = tab.label;
+        button.appendChild(label);
+        var badge = document.createElement('span');
+        badge.className = 'ticket-tab__count';
+        badge.textContent = formatNumber(asNumber(count, 0));
+        button.appendChild(badge);
+        button.addEventListener('click', function () {
+          if (state.tickets.status === tab.value) return;
+          state.tickets.status = tab.value;
+          loadTickets({ page: 1 });
+        });
+        container.appendChild(button);
+      });
+    }
+
+    function renderTickets(data) {
+      var payload = data || {};
+      var rows = toArray(payload.rows);
+      var counts = payload.counts || {};
+      state.tickets.page = asNumber(payload.page, 1) || 1;
+      state.tickets.totalPages = asNumber(payload.totalPages, 1) || 1;
+      state.tickets.statuses = toArray(payload.filters && payload.filters.statuses);
+      state.tickets.priorities = toArray(payload.filters && payload.filters.priorities);
+
+      setTicketsBusy(false);
+      renderTicketTabs(counts);
+      updateTicketsBadge(counts);
+
+      fillSelect(byId('tickets-priority'), 'All priorities', state.tickets.priorities.map(function (value) {
+        return { value: value, label: ticketLabel(value) };
+      }));
+      var sections = toArray(payload.filters && payload.filters.sections);
+      byId('tickets-section-wrap').hidden = sections.length < 2;
+      fillSelect(byId('tickets-section'), 'All sections', sections.map(function (key) {
+        return { value: key, label: sectionLabel(key) };
+      }));
+
+      if (normalizeText(payload.sort)) byId('tickets-sort').value = payload.sort;
+      state.tickets.direction = payload.direction === 'ASC' ? 'ASC' : 'DESC';
+      renderTicketsDirection();
+
+      byId('tickets-eyebrow').textContent = payload.scope === 'OWN_SECTION'
+        ? 'Findings tickets · your section'
+        : 'Findings tickets · all sections';
+      byId('tickets-summary').textContent = payload.totalInScope
+        ? (formatNumber(asNumber(counts.ACTIVE, 0)) + ' needing attention · ' +
+           formatNumber(asNumber(counts.TOTAL, 0)) + ' total' +
+           (payload.total !== payload.totalInScope ? ' · ' + formatNumber(payload.total) + ' matching' : ''))
+        : 'No tickets have been filed yet.';
+
+      var body = byId('tickets-tbody');
+      body.replaceChildren();
+      rows.forEach(function (ticket) { body.appendChild(ticketRow(ticket)); });
+
+      var hasRows = rows.length > 0;
+      byId('tickets-table-wrap').hidden = !hasRows;
+      byId('tickets-empty').hidden = hasRows;
+      if (!hasRows) {
+        var filtered = Boolean(payload.totalInScope);
+        byId('tickets-empty-title').textContent = filtered ? 'No matches' : 'No tickets yet';
+        byId('tickets-empty-message').textContent = filtered
+          ? 'No ticket matches the current status, filters, or search.'
+          : 'File a ticket when an asset needs fixing so the repair can be tracked to completion.';
+      }
+
+      var showingAll = payload.pageSizeMode === 'ALL';
+      byId('tickets-range').textContent = payload.total
+        ? ('Showing ' + formatNumber(payload.rangeStart) + '–' + formatNumber(payload.rangeEnd) +
+           ' of ' + formatNumber(payload.total) +
+           (showingAll ? '' : ' · page ' + state.tickets.page + ' of ' + state.tickets.totalPages))
+        : 'No tickets to show';
+      byId('tickets-truncated').hidden = !payload.truncated;
+      if (payload.truncated) {
+        byId('tickets-truncated').textContent = 'Showing the first ' + formatNumber(payload.cap) +
+          ' tickets. Narrow the search or use a page size to see the rest.';
+      }
+      byId('tickets-jump').hidden = showingAll || state.tickets.totalPages <= 1;
+      byId('tickets-prev').hidden = showingAll;
+      byId('tickets-next').hidden = showingAll;
+      byId('tickets-prev').disabled = state.tickets.page <= 1;
+      byId('tickets-next').disabled = state.tickets.page >= state.tickets.totalPages;
+      byId('tickets-page-input').max = String(state.tickets.totalPages);
+      byId('tickets-page-input').value = String(state.tickets.page);
+      byId('tickets-page-total').textContent = 'of ' + formatNumber(state.tickets.totalPages);
+    }
+
+    function ticketRow(ticket) {
+      var row = document.createElement('tr');
+      var id = normalizeText(ticket.ticketId);
+
+      var idCell = document.createElement('td');
+      var idWrap = document.createElement('div');
+      idWrap.className = 'archive-asset';
+      var idStrong = document.createElement('strong');
+      idStrong.textContent = id || '—';
+      idWrap.appendChild(idStrong);
+      var summary = document.createElement('small');
+      summary.textContent = normalizeText(ticket.summary);
+      idWrap.appendChild(summary);
+      idCell.appendChild(idWrap);
+
+      var assetCell = document.createElement('td');
+      var assetWrap = document.createElement('div');
+      assetWrap.className = 'archive-asset';
+      var tag = document.createElement('strong');
+      tag.textContent = normalizeText(ticket.assetTag) || '—';
+      assetWrap.appendChild(tag);
+      var where = document.createElement('small');
+      where.textContent = normalizeText(ticket.location) || 'Location not recorded';
+      assetWrap.appendChild(where);
+      assetCell.appendChild(assetWrap);
+
+      var statusCell = document.createElement('td');
+      statusCell.appendChild(ticketChip(ticket.status, TICKET_STATUS_CHIP, 'status-chip--neutral'));
+
+      var priorityCell = document.createElement('td');
+      priorityCell.appendChild(ticketChip(ticket.priority, TICKET_PRIORITY_CHIP, 'status-chip--neutral'));
+
+      var sectionCell = document.createElement('td');
+      sectionCell.textContent = sectionLabel(normalizeText(ticket.section));
+
+      var updatedCell = document.createElement('td');
+      var updatedWrap = document.createElement('div');
+      updatedWrap.className = 'archive-asset';
+      var when = document.createElement('span');
+      when.textContent = formatDate(String(ticket.updatedAt || '').slice(0, 10));
+      updatedWrap.appendChild(when);
+      var who = document.createElement('small');
+      who.textContent = normalizeText(ticket.updatedByName) || normalizeText(ticket.updatedBy);
+      updatedWrap.appendChild(who);
+      updatedCell.appendChild(updatedWrap);
+
+      var actionCell = document.createElement('td');
+      var open = document.createElement('button');
+      open.className = 'table-action';
+      open.type = 'button';
+      open.textContent = 'Open';
+      open.addEventListener('click', function () { openTicketDetail(id); });
+      actionCell.appendChild(open);
+
+      [idCell, assetCell, statusCell, priorityCell, sectionCell, updatedCell, actionCell]
+        .forEach(function (cell) { row.appendChild(cell); });
+      return row;
+    }
+
+    function updateTicketsBadge(counts) {
+      var badge = byId('tickets-badge');
+      if (!badge) return;
+      var active = asNumber(counts && counts.ACTIVE, 0);
+      badge.textContent = formatNumber(active);
+      badge.hidden = active <= 0;
+    }
+
+    /** Fetched after the dashboard paints so it cannot delay first load. */
+    function loadTicketSummary() {
+      return serverCall('PMS_apiTicketSummary')
+        .then(function (data) { updateTicketsBadge((data && data.counts) || {}); })
+        .catch(function () { /* the badge is informational; stay quiet */ });
+    }
+
+    function jumpToTicketsPage() {
+      var input = byId('tickets-page-input');
+      var requested = Math.round(asNumber(input.value, state.tickets.page));
+      var target = Math.max(1, Math.min(state.tickets.totalPages, requested));
+      input.value = String(target);
+      if (target === state.tickets.page) return;
+      loadTickets({ page: target });
+    }
+
+    /* ------------------------------------------------------------- detail */
+
+    function openTicketDetail(ticketId) {
+      var id = normalizeText(ticketId);
+      if (!id) return;
+      state.tickets.currentId = id;
+      setBusy(true, 'Loading ticket…');
+      serverCall('PMS_apiTicketDetail', id)
+        .then(function (data) {
+          renderTicketDetail(data);
+          showTicketsView('detail');
+        })
+        .catch(function (error) {
+          showToast('Ticket unavailable', errorMessage(error), 'danger');
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function renderTicketDetail(data) {
+      var payload = data || {};
+      var ticket = payload.ticket || {};
+      state.tickets.currentId = normalizeText(ticket.ticketId);
+
+      byId('ticket-detail-id').textContent = normalizeText(ticket.ticketId) || '—';
+      byId('ticket-detail-summary').textContent = normalizeText(ticket.summary) || 'Findings ticket';
+
+      var statusHolder = byId('ticket-detail-status');
+      statusHolder.className = 'status-chip ' +
+        (TICKET_STATUS_CHIP[normalizeText(ticket.status).toUpperCase()] || 'status-chip--neutral');
+      statusHolder.textContent = ticketLabel(ticket.status);
+      var priorityHolder = byId('ticket-detail-priority');
+      priorityHolder.className = 'status-chip ' +
+        (TICKET_PRIORITY_CHIP[normalizeText(ticket.priority).toUpperCase()] || 'status-chip--neutral');
+      priorityHolder.textContent = ticketLabel(ticket.priority) + ' priority';
+
+      byId('ticket-detail-asset').textContent = normalizeText(ticket.assetTag) || '—';
+      byId('ticket-detail-section').textContent = sectionLabel(normalizeText(ticket.section));
+      byId('ticket-detail-location').textContent = normalizeText(ticket.location) || 'Not recorded';
+      byId('ticket-detail-source').textContent = normalizeText(ticket.sourceRecordId) || 'Filed manually';
+      byId('ticket-detail-cycle').textContent = normalizeText(ticket.cycleId) || '—';
+      byId('ticket-detail-created').textContent = (normalizeText(ticket.createdByName) || normalizeText(ticket.createdBy) || '—') +
+        ' · ' + formatDate(String(ticket.createdAt || '').slice(0, 10));
+
+      var findings = normalizeText(ticket.findings);
+      byId('ticket-detail-findings').textContent = findings || 'No findings text was recorded.';
+      byId('ticket-detail-findings-block').hidden = false;
+      var action = normalizeText(ticket.actionRequired);
+      byId('ticket-detail-action').textContent = action || 'No action was specified.';
+      byId('ticket-detail-action-block').hidden = !action;
+
+      fillTicketSelect(byId('ticket-update-status'), toArray(payload.statuses), ticket.status);
+      fillTicketSelect(byId('ticket-update-priority'), toArray(payload.priorities), ticket.priority);
+      byId('ticket-update-remarks').value = '';
+      clearFieldError('ticket-update-remarks', 'ticket-update-remarks-error');
+
+      renderTicketHistory(toArray(payload.history));
+    }
+
+    function fillTicketSelect(select, values, selected) {
+      select.replaceChildren();
+      values.forEach(function (value) {
+        var option = document.createElement('option');
+        option.value = value;
+        option.textContent = ticketLabel(value);
+        select.appendChild(option);
+      });
+      select.value = normalizeText(selected);
+    }
+
+    function renderTicketHistory(entries) {
+      var list = byId('ticket-history');
+      list.replaceChildren();
+      if (!entries.length) {
+        var empty = document.createElement('li');
+        empty.className = 'ticket-history__empty';
+        empty.textContent = 'No history recorded yet.';
+        list.appendChild(empty);
+        return;
+      }
+      entries.forEach(function (entry) {
+        var item = document.createElement('li');
+        item.className = 'ticket-history__item';
+
+        var marker = document.createElement('span');
+        marker.className = 'ticket-history__marker';
+        marker.setAttribute('aria-hidden', 'true');
+        marker.appendChild(iconSvg(entry.action === 'CREATED' ? 'plus'
+          : entry.action === 'COMMENT' ? 'info' : 'refresh'));
+        item.appendChild(marker);
+
+        var content = document.createElement('div');
+        var head = document.createElement('div');
+        head.className = 'ticket-history__head';
+        var actor = document.createElement('strong');
+        actor.textContent = normalizeText(entry.changedByName) || normalizeText(entry.changedBy) || 'Unknown user';
+        head.appendChild(actor);
+        var when = document.createElement('span');
+        when.textContent = normalizeText(entry.changedAt).replace('T', ' ').slice(0, 16);
+        head.appendChild(when);
+        content.appendChild(head);
+
+        if (entry.action === 'STATUS_CHANGED') {
+          var transition = document.createElement('p');
+          transition.className = 'ticket-history__transition';
+          transition.appendChild(ticketChip(entry.fromStatus, TICKET_STATUS_CHIP, 'status-chip--neutral'));
+          var arrow = document.createElement('span');
+          arrow.appendChild(iconSvg('arrow-right'));
+          transition.appendChild(arrow);
+          transition.appendChild(ticketChip(entry.toStatus, TICKET_STATUS_CHIP, 'status-chip--neutral'));
+          content.appendChild(transition);
+        } else {
+          var badge = document.createElement('p');
+          badge.className = 'ticket-history__transition';
+          var kind = document.createElement('span');
+          kind.className = 'status-chip status-chip--neutral';
+          kind.textContent = entry.action === 'CREATED' ? 'Ticket filed' : 'Progress note';
+          badge.appendChild(kind);
+          content.appendChild(badge);
+        }
+
+        var remarks = document.createElement('p');
+        remarks.className = 'ticket-history__remarks';
+        remarks.textContent = normalizeText(entry.remarks);
+        content.appendChild(remarks);
+
+        item.appendChild(content);
+        list.appendChild(item);
+      });
+    }
+
+    function submitTicketUpdate(event) {
+      event.preventDefault();
+      var remarks = normalizeText(byId('ticket-update-remarks').value);
+      clearFieldError('ticket-update-remarks', 'ticket-update-remarks-error');
+      // Checked here as well as on the server so the user is told immediately.
+      if (remarks.length < 3) {
+        setFieldError('ticket-update-remarks', 'ticket-update-remarks-error',
+          'Remarks are required. Describe what changed so the history stays auditable.');
+        byId('ticket-update-remarks').focus();
+        return;
+      }
+      setBusy(true, 'Saving ticket update…');
+      serverCall('PMS_apiUpdateTicket', {
+        ticketId: state.tickets.currentId,
+        status: byId('ticket-update-status').value,
+        priority: byId('ticket-update-priority').value,
+        remarks: remarks
+      })
+        .then(function (result) {
+          var changed = result && result.statusChanged;
+          showToast(changed ? 'Status updated' : 'Note added',
+            changed ? 'The ticket moved to ' + ticketLabel(result.ticket.status) + '.' : 'Your note was added to the history.',
+            'success');
+          return serverCall('PMS_apiTicketDetail', state.tickets.currentId)
+            .then(function (data) { renderTicketDetail(data); });
+        })
+        .then(function () { return loadTickets({}); })
+        .catch(function (error) {
+          setFieldError('ticket-update-remarks', 'ticket-update-remarks-error', errorMessage(error));
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    /* ------------------------------------------------------------- create */
+
+    function showTicketCreate(prefill) {
+      var source = prefill || {};
+      state.tickets.sourceRecordId = normalizeText(source.recordId);
+      byId('ticket-create-form').reset();
+      ['ticket-create-asset', 'ticket-create-summary'].forEach(function (id) {
+        clearFieldError(id, id + '-error');
+      });
+      byId('ticket-create-error').hidden = true;
+
+      fillTicketSelect(byId('ticket-create-priority'),
+        state.tickets.priorities.length ? state.tickets.priorities : ['LOW', 'MEDIUM', 'HIGH'], 'MEDIUM');
+      var sections = state.sections.map(function (item) { return item.key; });
+      fillTicketSelect(byId('ticket-create-section'), sections, normalizeText(source.section) || sectionKey());
+      // Section labels read better than the raw keys in this form.
+      Array.prototype.slice.call(byId('ticket-create-section').options).forEach(function (option) {
+        option.textContent = sectionLabel(option.value);
+      });
+
+      byId('ticket-create-asset').value = normalizeText(source.assetTag);
+      byId('ticket-create-location').value = normalizeText(source.location);
+      byId('ticket-create-findings').value = normalizeText(source.findings);
+      byId('ticket-create-summary').value = normalizeText(source.summary);
+      byId('ticket-create-context').textContent = state.tickets.sourceRecordId
+        ? ('Linked to record ' + state.tickets.sourceRecordId + '. The asset, section and cycle come from that record.')
+        : 'Use this when an asset needs fixing so the repair can be tracked to completion.';
+      // A linked record is authoritative on the server, so these are read-only.
+      byId('ticket-create-asset').readOnly = Boolean(state.tickets.sourceRecordId);
+      byId('ticket-create-section').disabled = Boolean(state.tickets.sourceRecordId);
+
+      showTicketsView('create');
+      window.setTimeout(function () {
+        byId(state.tickets.sourceRecordId ? 'ticket-create-summary' : 'ticket-create-asset').focus();
+      }, 0);
+    }
+
+    function fileTicketFromRecord(record) {
+      var source = record || {};
+      var summary = normalizeText(source.assessmentResult);
+      showTicketCreate({
+        recordId: normalizeText(source.recordId),
+        assetTag: normalizeText(source.assetTag),
+        section: normalizeText(source.section),
+        location: normalizeText(source.location),
+        summary: summary ? summary + ' on ' + normalizeText(source.assetTag) : ''
+      });
+      closeArchiveModal();
+      if (!state.tickets.open) openTicketsModal('create');
+    }
+
+    function submitTicketCreate(event) {
+      event.preventDefault();
+      var assetTag = normalizeTag(byId('ticket-create-asset').value);
+      var summary = normalizeText(byId('ticket-create-summary').value);
+      clearFieldError('ticket-create-asset', 'ticket-create-asset-error');
+      clearFieldError('ticket-create-summary', 'ticket-create-summary-error');
+      byId('ticket-create-error').hidden = true;
+
+      if (!state.tickets.sourceRecordId && !assetTag) {
+        setFieldError('ticket-create-asset', 'ticket-create-asset-error', 'Enter the asset tag that needs fixing.');
+        byId('ticket-create-asset').focus();
+        return;
+      }
+      if (!summary) {
+        setFieldError('ticket-create-summary', 'ticket-create-summary-error', 'Describe what needs fixing.');
+        byId('ticket-create-summary').focus();
+        return;
+      }
+
+      setBusy(true, 'Filing ticket…');
+      serverCall('PMS_apiCreateTicket', {
+        sourceRecordId: state.tickets.sourceRecordId,
+        assetTag: assetTag,
+        section: byId('ticket-create-section').value,
+        location: normalizeText(byId('ticket-create-location').value),
+        summary: summary,
+        findings: normalizeText(byId('ticket-create-findings').value),
+        actionRequired: normalizeText(byId('ticket-create-action').value),
+        priority: byId('ticket-create-priority').value,
+        remarks: normalizeText(byId('ticket-create-remarks').value)
+      })
+        .then(function (result) {
+          var ticketId = result && result.ticket ? result.ticket.ticketId : '';
+          showToast('Ticket filed', ticketId + ' is now open and being tracked.', 'success');
+          state.tickets.status = 'ACTIVE';
+          return loadTickets({ page: 1 }).then(function () {
+            if (ticketId) openTicketDetail(ticketId);
+            else showTicketsView('list');
+          });
+        })
+        .catch(function (error) {
+          var target = byId('ticket-create-error');
+          target.hidden = false;
+          target.textContent = errorMessage(error);
+        })
+        .finally(function () { setBusy(false); });
     }
 
     /* ------------------------------------------------------------------------
@@ -1333,7 +1972,8 @@
 
     function syncBodyModalState() {
       var importOpen = Boolean(state.legacyImport && state.legacyImport.open);
-      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen));
+      var ticketsOpen = Boolean(state.tickets && state.tickets.open);
+      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen));
     }
 
     function modalFocusable(root) {
@@ -3874,6 +4514,44 @@
         window.setTimeout(function () { byId('legacy-import-section').focus(); }, 0);
       });
       byId('legacy-import-done').addEventListener('click', function () { requestCloseLegacyImport(true); });
+      byId('open-tickets').addEventListener('click', function () { openTicketsModal('list'); });
+      byId('tickets-close').addEventListener('click', closeTicketsModal);
+      document.querySelectorAll('[data-close-tickets]').forEach(function (element) {
+        element.addEventListener('click', closeTicketsModal);
+      });
+      byId('tickets-refresh').addEventListener('click', function () { loadTickets({ page: 1 }); });
+      byId('tickets-new').addEventListener('click', function () { showTicketCreate(null); });
+      byId('ticket-detail-back').addEventListener('click', function () { showTicketsView('list'); });
+      byId('ticket-create-back').addEventListener('click', function () { showTicketsView('list'); });
+      byId('ticket-update-form').addEventListener('submit', submitTicketUpdate);
+      byId('ticket-create-form').addEventListener('submit', submitTicketCreate);
+      byId('tickets-prev').addEventListener('click', function () {
+        if (state.tickets.page > 1) loadTickets({ page: state.tickets.page - 1 });
+      });
+      byId('tickets-next').addEventListener('click', function () {
+        if (state.tickets.page < state.tickets.totalPages) loadTickets({ page: state.tickets.page + 1 });
+      });
+      ['tickets-priority', 'tickets-section', 'tickets-sort', 'tickets-page-size'].forEach(function (id) {
+        byId(id).addEventListener('change', function () { loadTickets({ page: 1 }); });
+      });
+      byId('tickets-direction').addEventListener('click', function () {
+        state.tickets.direction = state.tickets.direction === 'ASC' ? 'DESC' : 'ASC';
+        renderTicketsDirection();
+        loadTickets({ page: 1 });
+      });
+      byId('tickets-page-input').addEventListener('change', jumpToTicketsPage);
+      byId('tickets-page-input').addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        jumpToTicketsPage();
+      });
+      byId('tickets-search').addEventListener('input', function () {
+        window.clearTimeout(state.tickets.searchTimer);
+        state.tickets.searchTimer = window.setTimeout(function () {
+          loadTickets({ page: 1 });
+        }, 300);
+      });
+      document.addEventListener('keydown', trapTicketsFocus);
       byId('open-archive').addEventListener('click', openArchiveModal);
       byId('archive-close').addEventListener('click', closeArchiveModal);
       document.querySelectorAll('[data-close-archive]').forEach(function (element) {

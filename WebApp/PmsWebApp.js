@@ -193,6 +193,62 @@ function PMS_apiCompletedRecords(options) {
   }
 }
 
+/* ---------------------------------------------------------------- tickets */
+
+/**
+ * Findings tickets. Every entry point requires a registered profile, and any
+ * rostered user may file a ticket or move one along; the append-only log is what
+ * provides accountability.
+ */
+function PMS_apiTickets(options) {
+  try {
+    var context = PMS.Auth.requireProfile();
+    return PMS_jsonResponse_(PMS.Tickets.list(context, options));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiTicketDetail(ticketId) {
+  try {
+    var context = PMS.Auth.requireProfile();
+    return PMS_jsonResponse_(PMS.Tickets.detail(context, ticketId));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiCreateTicket(payload) {
+  try {
+    var context = PMS.Auth.requireProfile();
+    return PMS_jsonResponse_(PMS.Tickets.create(context, payload));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiUpdateTicket(payload) {
+  try {
+    var context = PMS.Auth.requireProfile();
+    return PMS_jsonResponse_(PMS.Tickets.updateStatus(context, payload));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+/**
+ * Active ticket count for the dashboard badge. Fetched after the dashboard
+ * paints rather than inside the bootstrap, so it cannot slow first load.
+ */
+function PMS_apiTicketSummary() {
+  try {
+    var context = PMS.Auth.requireProfile();
+    return PMS_jsonResponse_(PMS.Tickets.summary(context));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
 function PMS_apiSaveRecord(payload, mode) {
   return PMS_jsonResponse_(PMS.Records.save(payload, mode));
 }
@@ -250,6 +306,7 @@ function PMS_adminSetup() {
   var serviceDeskSheet = PMS.Records.responseSheet(true, 'SERVICE_DESK');
   var infraSheet = PMS.Records.responseSheet(true, 'INFRA_SECURITY');
   var baseline = PMS.Records.ensureTrackerBaseline();
+  var tickets = PMS.Tickets.ensureSheets();
   return {
     ok: true,
     userSheetName: users.getName(),
@@ -257,9 +314,10 @@ function PMS_adminSetup() {
       { name: serviceDeskSheet.getName(), columns: PMS.CONFIG.RECORD_COLUMNS.length },
       { name: infraSheet.getName(), columns: PMS.CONFIG.INFRA_RECORD_COLUMNS.length }
     ],
+    ticketSheets: tickets,
     baseline: baseline,
     evidence: PMS.Evidence.readiness(),
-    message: 'PMS Users, both section record sheets, and evidence folders are ready.'
+    message: 'PMS Users, both section record sheets, ticket sheets, and evidence folders are ready.'
   };
 }
 

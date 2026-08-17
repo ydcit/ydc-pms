@@ -1,0 +1,303 @@
+<div class="modal-layer" id="tickets-modal" hidden>
+  <div class="modal-backdrop" data-close-tickets aria-hidden="true"></div>
+  <section class="archive-dialog" role="dialog" aria-modal="true" aria-labelledby="tickets-title" aria-describedby="tickets-summary">
+    <header class="archive-dialog__header">
+      <div class="archive-dialog__title-row">
+        <div>
+          <p class="eyebrow" id="tickets-eyebrow">Findings tickets</p>
+          <h1 id="tickets-title">Assets for fixing</h1>
+          <p class="archive-dialog__summary" id="tickets-summary">Loading tickets…</p>
+        </div>
+        <div class="archive-dialog__header-actions">
+          <button class="button button--primary button--small" id="tickets-new" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+            <span>File ticket</span>
+          </button>
+          <button class="button button--quiet button--small" id="tickets-refresh" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+            <span>Refresh</span>
+          </button>
+          <button class="icon-button" id="tickets-close" type="button" aria-label="Close tickets">
+            <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+          </button>
+        </div>
+      </div>
+
+      <!--
+        Status buckets double as the primary filter and the at-a-glance monitor,
+        which is the reason this page exists. Rendered from server counts.
+      -->
+      <div class="ticket-tabs" id="ticket-tabs" role="tablist" aria-label="Filter tickets by status"></div>
+
+      <div class="archive-toolbar" id="tickets-toolbar">
+        <div class="field archive-toolbar__search">
+          <label class="sr-only" for="tickets-search">Search tickets</label>
+          <div class="search-input">
+            <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></span>
+            <input id="tickets-search" type="search" autocomplete="off" placeholder="Search ticket ID, asset tag, location, or summary">
+          </div>
+        </div>
+
+        <div class="field archive-toolbar__filter">
+          <label class="sr-only" for="tickets-priority">Priority</label>
+          <div class="select-wrap">
+            <select id="tickets-priority"><option value="">All priorities</option></select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+
+        <div class="field archive-toolbar__filter" id="tickets-section-wrap">
+          <label class="sr-only" for="tickets-section">IT section</label>
+          <div class="select-wrap">
+            <select id="tickets-section"><option value="">All sections</option></select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="archive-toolbar archive-toolbar--secondary">
+        <div class="archive-control">
+          <label for="tickets-sort">Sort by</label>
+          <div class="select-wrap">
+            <select id="tickets-sort">
+              <option value="updatedAt">Last updated</option>
+              <option value="createdAt">Date filed</option>
+              <option value="priority">Priority</option>
+              <option value="status">Status</option>
+              <option value="assetTag">Asset tag</option>
+              <option value="section">IT section</option>
+              <option value="ticketId">Ticket ID</option>
+            </select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+          <button class="button button--secondary button--small archive-direction" id="tickets-direction" type="button" aria-pressed="false">
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-down"></use></svg>
+            <span id="tickets-direction-label">Newest first</span>
+          </button>
+        </div>
+
+        <div class="archive-control archive-control--end">
+          <label for="tickets-page-size">Show</label>
+          <div class="select-wrap select-wrap--compact">
+            <select id="tickets-page-size">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
+              <option value="ALL">All</option>
+            </select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="archive-dialog__body" id="tickets-dialog-body">
+
+      <!-- ------------------------------------------------------ list view -->
+      <div id="tickets-list-view">
+        <div class="table-wrap" id="tickets-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Ticket</th>
+                <th scope="col">Asset</th>
+                <th scope="col">Status</th>
+                <th scope="col">Priority</th>
+                <th scope="col">IT section</th>
+                <th scope="col">Last update</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="tickets-tbody"></tbody>
+          </table>
+        </div>
+
+        <div class="archive-loading" id="tickets-loading" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Loading tickets…</span>
+        </div>
+
+        <div class="empty-state" id="tickets-empty" hidden>
+          <span class="empty-state__art" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-check-circle"></use></svg>
+          </span>
+          <h3 id="tickets-empty-title">No tickets yet</h3>
+          <p id="tickets-empty-message">File a ticket when an asset needs fixing so it can be tracked to completion.</p>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------------- detail view -->
+      <div id="tickets-detail-view" hidden>
+        <button class="text-button ticket-back" id="ticket-detail-back" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+          <span>Back to tickets</span>
+        </button>
+
+        <div class="ticket-detail">
+          <div class="ticket-detail__head">
+            <div>
+              <p class="eyebrow" id="ticket-detail-id">TKT-0000-0000</p>
+              <h2 id="ticket-detail-summary">—</h2>
+            </div>
+            <div class="ticket-detail__chips">
+              <span class="status-chip" id="ticket-detail-status">OPEN</span>
+              <span class="status-chip status-chip--neutral" id="ticket-detail-priority">MEDIUM</span>
+            </div>
+          </div>
+
+          <dl class="ticket-detail__grid">
+            <div><dt>Asset tag</dt><dd id="ticket-detail-asset">—</dd></div>
+            <div><dt>IT section</dt><dd id="ticket-detail-section">—</dd></div>
+            <div><dt>Location</dt><dd id="ticket-detail-location">—</dd></div>
+            <div><dt>Source record</dt><dd id="ticket-detail-source">—</dd></div>
+            <div><dt>Cycle</dt><dd id="ticket-detail-cycle">—</dd></div>
+            <div><dt>Filed by</dt><dd id="ticket-detail-created">—</dd></div>
+          </dl>
+
+          <div class="ticket-detail__block" id="ticket-detail-findings-block">
+            <h3>Findings</h3>
+            <p id="ticket-detail-findings">—</p>
+          </div>
+          <div class="ticket-detail__block" id="ticket-detail-action-block">
+            <h3>Action required</h3>
+            <p id="ticket-detail-action">—</p>
+          </div>
+        </div>
+
+        <form class="ticket-update" id="ticket-update-form" novalidate>
+          <h3>Record an update</h3>
+          <p class="ticket-update__hint">
+            Any PMS user can move a ticket along. Remarks are required and are kept permanently in the ticket history.
+          </p>
+          <div class="field-grid">
+            <div class="field">
+              <label for="ticket-update-status">Status</label>
+              <div class="select-wrap">
+                <select id="ticket-update-status"></select>
+                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </div>
+              <p class="field-help">Leave unchanged to add a progress note instead.</p>
+            </div>
+            <div class="field">
+              <label for="ticket-update-priority">Priority</label>
+              <div class="select-wrap">
+                <select id="ticket-update-priority"></select>
+                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="ticket-update-remarks">Remarks <span class="required-mark" aria-hidden="true">*</span></label>
+            <textarea id="ticket-update-remarks" rows="3" maxlength="2000"
+              placeholder="What changed, what was done, or what is still blocking this?"
+              aria-describedby="ticket-update-remarks-error"></textarea>
+            <p class="field-error" id="ticket-update-remarks-error" hidden></p>
+          </div>
+          <button class="button button--primary" id="ticket-update-submit" type="submit">
+            <svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>
+            <span>Save update</span>
+          </button>
+        </form>
+
+        <section class="ticket-history-wrap" aria-labelledby="ticket-history-title">
+          <h3 id="ticket-history-title">Change history</h3>
+          <ol class="ticket-history" id="ticket-history"></ol>
+        </section>
+      </div>
+
+      <!-- ---------------------------------------------------- create view -->
+      <div id="tickets-create-view" hidden>
+        <button class="text-button ticket-back" id="ticket-create-back" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+          <span>Back to tickets</span>
+        </button>
+
+        <form class="ticket-create" id="ticket-create-form" novalidate>
+          <h2>File a findings ticket</h2>
+          <p class="ticket-update__hint" id="ticket-create-context">
+            Use this when an asset needs fixing so the repair can be tracked to completion.
+          </p>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="ticket-create-asset">Asset tag <span class="required-mark" aria-hidden="true">*</span></label>
+              <input id="ticket-create-asset" type="text" autocomplete="off" spellcheck="false" placeholder="YDC-AP-01">
+              <p class="field-error" id="ticket-create-asset-error" hidden></p>
+            </div>
+            <div class="field">
+              <label for="ticket-create-section">IT section</label>
+              <div class="select-wrap">
+                <select id="ticket-create-section"></select>
+                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </div>
+            </div>
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="ticket-create-location">Location</label>
+              <input id="ticket-create-location" type="text" autocomplete="off" maxlength="200" placeholder="Where the asset is now">
+            </div>
+            <div class="field">
+              <label for="ticket-create-priority">Priority</label>
+              <div class="select-wrap">
+                <select id="ticket-create-priority"></select>
+                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="ticket-create-summary">Summary <span class="required-mark" aria-hidden="true">*</span></label>
+            <input id="ticket-create-summary" type="text" maxlength="300" placeholder="Short description of what needs fixing">
+            <p class="field-error" id="ticket-create-summary-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="ticket-create-findings">Findings</label>
+            <textarea id="ticket-create-findings" rows="3" maxlength="4000" placeholder="What was observed on the asset"></textarea>
+          </div>
+
+          <div class="field">
+            <label for="ticket-create-action">Action required</label>
+            <textarea id="ticket-create-action" rows="2" maxlength="4000" placeholder="What needs to happen to close this"></textarea>
+          </div>
+
+          <div class="field">
+            <label for="ticket-create-remarks">Opening remarks</label>
+            <textarea id="ticket-create-remarks" rows="2" maxlength="2000" placeholder="Context for the first history entry"></textarea>
+          </div>
+
+          <p class="field-error" id="ticket-create-error" hidden></p>
+
+          <button class="button button--primary" id="ticket-create-submit" type="submit">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+            <span>File ticket</span>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <footer class="archive-dialog__footer" id="tickets-pager">
+      <div class="archive-pager__left">
+        <span class="archive-pager__status" id="tickets-range" aria-live="polite"></span>
+        <span class="archive-pager__notice" id="tickets-truncated" hidden></span>
+      </div>
+      <div class="archive-pager__controls">
+        <button class="button button--secondary button--small" id="tickets-prev" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+          <span>Previous</span>
+        </button>
+        <div class="archive-jump" id="tickets-jump">
+          <label for="tickets-page-input">Page</label>
+          <input id="tickets-page-input" type="number" min="1" step="1" inputmode="numeric" aria-describedby="tickets-page-total">
+          <span id="tickets-page-total">of 1</span>
+        </div>
+        <button class="button button--secondary button--small" id="tickets-next" type="button">
+          <span>Next</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"></use></svg>
+        </button>
+      </div>
+    </footer>
+  </section>
+</div>

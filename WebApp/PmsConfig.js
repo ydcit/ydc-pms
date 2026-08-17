@@ -5,6 +5,14 @@ PMS.CONFIG = {
   SPREADSHEET_ID: '1T33Z8JFRdL9oFZ-6XT_lz-tNIAFKXF2ekp-e-cYm7uc',
   RESPONSE_SHEET: 'PMS Records',
   INFRA_RESPONSE_SHEET: 'PMS Records - Infra & Security',
+  TICKET_SHEET: 'PMS Tickets',
+  TICKET_LOG_SHEET: 'PMS Ticket Log',
+  // Findings tickets are visible to every rostered user regardless of section,
+  // because repairing an asset is cross-team work and any user may move a ticket
+  // along. Accountability comes from the append-only log rather than from
+  // restricting who can act. Set to 'OWN_SECTION' to limit the list to the
+  // viewer's own section instead.
+  TICKET_VISIBILITY: 'ALL_SECTIONS',
   ALLOWED_DOMAIN: 'ydc.com.ph',
   TIME_ZONE: 'Asia/Manila',
   SCHEMA_VERSION: '2.0.0',
