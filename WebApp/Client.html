@@ -2264,14 +2264,75 @@
       if (!byId('record-ticket-body')) return;
       state.recordTickets = [];
       closeRecordTicketForm('File a ticket');
-      ['record-ticket-findings', 'record-ticket-action', 'record-ticket-remarks'].forEach(function (id) {
-        byId(id).value = '';
-      });
-      ['record-ticket-findings', 'record-ticket-action'].forEach(function (id) {
-        clearFieldError(id, id + '-error');
-      });
+      byId('record-ticket-remarks').value = '';
       byId('record-ticket-error').hidden = true;
       renderRecordTicketsFiled();
+      updateRecordTicketRequirement();
+    }
+
+    function recordHasOpenFindings() {
+      var result = normalizeText(byId('assessment-result').value);
+      return Boolean(result) && result !== 'No findings';
+    }
+
+    function recordTicketCount() {
+      return (state.recordTickets || []).length;
+    }
+
+    /**
+     * A findings assessment must be backed by a ticket, so the panel changes
+     * from an option into a requirement as soon as the result says findings.
+     * The server enforces the same rule at completion.
+     */
+    function updateRecordTicketRequirement() {
+      if (!byId('record-ticket')) return;
+      var needed = recordHasOpenFindings();
+      var filed = recordTicketCount() > 0;
+      // Nothing to show for a clean assessment with no ticket already filed.
+      byId('record-ticket').hidden = !needed && !filed;
+      byId('record-ticket-eyebrow').textContent = needed && !filed ? 'Required before completing' : 'Findings ticket';
+      byId('record-ticket').classList.toggle('record-ticket--required', needed && !filed);
+      byId('record-ticket-title').textContent = filed
+        ? 'This repair is being tracked'
+        : 'Track the repair before completing';
+      byId('record-ticket-intro').textContent = filed
+        ? 'The ticket below carries this finding. Any user can move it along, and the section tracker follows its status.'
+        : needed
+          ? 'This assessment recorded findings, so PMS cannot be completed until a ticket exists to follow the repair.'
+          : 'Anything other than “No findings” needs a ticket, so the repair is followed to completion.';
+      byId('record-ticket-toggle-label').textContent = byId('record-ticket-body').hidden
+        ? (filed ? 'File another ticket' : 'File a ticket')
+        : 'Hide ticket form';
+      renderRecordTicketDerived();
+    }
+
+    /**
+     * Echoes what the server will copy out of this record. Read-only on purpose:
+     * the assessment fields above are the single place this text is edited.
+     */
+    function renderRecordTicketDerived() {
+      var target = byId('record-ticket-derived');
+      if (!target) return;
+      var findings = normalizeText(byId('asset-findings').value);
+      var action = normalizeText(byId('recommendation').value);
+      target.replaceChildren();
+      var intro = document.createElement('p');
+      intro.textContent = 'The ticket copies these from the assessment above:';
+      target.appendChild(intro);
+      var list = document.createElement('dl');
+      [['Findings', findings, 'Add the asset findings above.'],
+       ['Action required', action, 'Add a recommendation above.']].forEach(function (entry) {
+        var wrap = document.createElement('div');
+        var term = document.createElement('dt');
+        term.textContent = entry[0];
+        var value = document.createElement('dd');
+        value.textContent = entry[1] || entry[2];
+        if (!entry[1]) value.className = 'is-missing';
+        wrap.appendChild(term);
+        wrap.appendChild(value);
+        list.appendChild(wrap);
+      });
+      target.appendChild(list);
     }
 
     function closeRecordTicketForm(label) {
@@ -2295,20 +2356,8 @@
         state.tickets.priorities.length ? state.tickets.priorities : TICKET_PRIORITY_FALLBACK, 'MEDIUM');
       fillTicketSelect(byId('record-ticket-status'),
         state.tickets.statuses.length ? state.tickets.statuses : TICKET_STATUS_FALLBACK, 'OPEN');
-      prefillRecordTicket();
-      window.setTimeout(function () { byId('record-ticket-findings').focus(); }, 0);
-    }
-
-    /**
-     * Mirrors the server's own mapping in subjectFromRecord: a ticket's findings
-     * come from the asset findings, and the action it requires comes from the
-     * recommendation rather than from the action already taken.
-     */
-    function prefillRecordTicket() {
-      var findings = byId('record-ticket-findings');
-      var action = byId('record-ticket-action');
-      if (!normalizeText(findings.value)) findings.value = normalizeText(byId('asset-findings').value);
-      if (!normalizeText(action.value)) action.value = normalizeText(byId('recommendation').value);
+      renderRecordTicketDerived();
+      window.setTimeout(function () { byId('record-ticket-priority').focus(); }, 0);
     }
 
     function renderRecordTicketsFiled() {
@@ -2330,11 +2379,9 @@
     }
 
     function submitRecordTicket() {
-      var findings = normalizeText(byId('record-ticket-findings').value);
-      var action = normalizeText(byId('record-ticket-action').value);
-      clearFieldError('record-ticket-findings', 'record-ticket-findings-error');
-      clearFieldError('record-ticket-action', 'record-ticket-action-error');
       byId('record-ticket-error').hidden = true;
+      clearFieldError('asset-findings', 'asset-findings-error');
+      clearFieldError('recommendation', 'recommendation-error');
       clearFormAlert();
 
       // The ticket carries the asset, section and cycle of this record, so the
@@ -2343,14 +2390,22 @@
         setStep(1, false);
         return;
       }
+
+      // The server copies the ticket's findings and required action out of the
+      // record, so the errors belong on the assessment fields themselves rather
+      // than on duplicates inside this panel.
+      var findings = normalizeText(byId('asset-findings').value);
+      var action = normalizeText(byId('recommendation').value);
       if (!findings) {
-        setFieldError('record-ticket-findings', 'record-ticket-findings-error', 'Record what is wrong with this asset.');
-        byId('record-ticket-findings').focus();
+        setFieldError('asset-findings', 'asset-findings-error', 'Describe the findings before filing a ticket. The ticket copies this text.');
+        byId('asset-findings').focus();
+        renderRecordTicketDerived();
         return;
       }
       if (!action) {
-        setFieldError('record-ticket-action', 'record-ticket-action-error', 'State what has to happen before this can be closed.');
-        byId('record-ticket-action').focus();
+        setFieldError('recommendation', 'recommendation-error', 'State the recommendation before filing a ticket. It becomes the ticket’s required action.');
+        byId('recommendation').focus();
+        renderRecordTicketDerived();
         return;
       }
 
@@ -2370,11 +2425,11 @@
           byId('record-save-state').textContent = 'Draft ' + state.recordId + ' saved';
           // Everything the payload carries is now persisted.
           state.dirty = false;
+          // Findings and the required action are deliberately omitted: the
+          // server derives both from the record this ticket links to.
           return serverCall('PMS_apiCreateTicket', {
             sourceRecordId: state.recordId,
             summary: (result ? result + ' on ' : 'Needs fixing: ') + assetTag,
-            findings: findings,
-            actionRequired: action,
             priority: byId('record-ticket-priority').value,
             status: byId('record-ticket-status').value,
             remarks: normalizeText(byId('record-ticket-remarks').value)
@@ -2389,9 +2444,9 @@
           }]);
           renderRecordTicketsFiled();
           closeRecordTicketForm('File another ticket');
-          ['record-ticket-findings', 'record-ticket-action', 'record-ticket-remarks'].forEach(function (id) {
-            byId(id).value = '';
-          });
+          byId('record-ticket-remarks').value = '';
+          updateRecordTicketRequirement();
+          updateFooterActions();
           showToast('Ticket filed',
             normalizeText(ticket.ticketId) + ' is now tracking ' + assetTag + ' for fixing.', 'success');
           // Keeps the dashboard badge honest without a reload.
@@ -4393,6 +4448,17 @@
       byId('asset-findings').value = normalizeText(assessment.findings || source.findings || source.assetFindings);
       byId('action-taken').value = normalizeText(assessment.actionTaken || source.actionTaken);
       byId('recommendation').value = normalizeText(assessment.recommendation || source.recommendation);
+      // A resumed draft may already have its findings ticket, so the panel must
+      // not demand a second one.
+      state.recordTickets = toArray(source.tickets).map(function (ticket) {
+        return {
+          ticketId: normalizeText(pick(ticket, ['ticketId'], '')),
+          status: normalizeText(pick(ticket, ['status'], '')),
+          summary: normalizeText(pick(ticket, ['summary'], ''))
+        };
+      }).filter(function (ticket) { return Boolean(ticket.ticketId); });
+      renderRecordTicketsFiled();
+      updateRecordTicketRequirement();
       renderAllPeripheralChips();
       renderEvidenceUI();
       updateChecklistInputs();
@@ -4437,6 +4503,14 @@
         if (event.target.id === 'asset-tag') {
           openAssetList();
           selectAsset(event.target.value, false);
+        }
+        // The ticket panel mirrors the assessment, so it follows these fields.
+        if (event.target.id === 'assessment-result') {
+          updateRecordTicketRequirement();
+          updateFooterActions();
+        }
+        if (event.target.id === 'asset-findings' || event.target.id === 'recommendation') {
+          renderRecordTicketDerived();
         }
         if (event.target.id === 'infra-asset-type') {
           clearFieldError('infra-asset-type', 'infra-asset-type-error');
@@ -4652,8 +4726,15 @@
     function updateFooterActions() {
       if (!byId('complete-pms')) return;
       var progress = calculateFormProgress();
-      byId('complete-pms').disabled = state.busy || progress.percent !== 100;
-      byId('complete-pms').title = progress.percent === 100 ? 'Finalize and synchronize this PMS record' : (isInfraSection() ? 'Complete all checks and attach both evidence files first' : 'Complete all applicable checklist items first');
+      // A findings assessment cannot be completed until its repair is ticketed,
+      // so the button reflects that rather than failing on click.
+      var ticketMissing = recordHasOpenFindings() && recordTicketCount() === 0;
+      byId('complete-pms').disabled = state.busy || progress.percent !== 100 || ticketMissing;
+      byId('complete-pms').title = progress.percent !== 100
+        ? (isInfraSection() ? 'Complete all checks and attach both evidence files first' : 'Complete all applicable checklist items first')
+        : ticketMissing
+          ? 'File the findings ticket first'
+          : 'Finalize and synchronize this PMS record';
     }
 
     function setFieldError(inputId, errorId, message) {
@@ -4966,6 +5047,15 @@
         }
         if (!validateAssessment(true)) {
           setStep(4, false);
+          return;
+        }
+        // Belt and braces alongside the disabled button, and it opens the panel
+        // so the required action is in front of the technician.
+        if (recordHasOpenFindings() && recordTicketCount() === 0) {
+          setStep(4, false);
+          updateRecordTicketRequirement();
+          if (byId('record-ticket-body').hidden) toggleRecordTicket();
+          showFormAlert('This assessment recorded findings. File the findings ticket below before completing PMS.');
           return;
         }
       }

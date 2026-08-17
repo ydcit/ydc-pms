@@ -68,6 +68,28 @@ PMS.Tracker = (function () {
     ].join('\n');
   }
 
+  /**
+   * Names the repair tickets raised from this record.
+   *
+   * The status cell carries the live repair state; this line carries the
+   * identifiers, so a reader of the tracker can find the ticket and its full
+   * history. Ticket ids never change, so this line stays correct without the
+   * remarks cell being rewritten on every status change.
+   */
+  function ticketAuditLines(record) {
+    var tickets;
+    try {
+      tickets = PMS.Tickets.forRecord(record.recordId);
+    } catch (error) {
+      console.warn('Ticket ids could not be read for tracker remarks: ' + error.message);
+      return [];
+    }
+    if (!tickets.length) return [];
+    return ['Findings Tickets: ' + tickets.map(function (ticket) {
+      return ticket.ticketId + ' (' + ticket.status + ')';
+    }).join(', ')];
+  }
+
   function assessmentBlock(record) {
     if (isTrustedLegacySeed(record)) return legacySeedAssessmentBlock(record);
     return [
@@ -78,7 +100,8 @@ PMS.Tracker = (function () {
       'Assessment Result: ' + record.assessmentResult,
       'Asset Findings: ' + record.assetFindings,
       'Action Taken: ' + record.actionTaken,
-      'Recommendation: ' + record.recommendation,
+      'Recommendation: ' + record.recommendation
+    ]).concat(ticketAuditLines(record)).concat([
       '[End PMS Record: ' + record.recordId + ']'
     ]).join('\n');
   }
@@ -226,15 +249,23 @@ PMS.Tracker = (function () {
   }
 
   function normalizedTrackerStatus(value) {
-    if (PMS.Util.isTrackerComplete(value)) return PMS.CONFIG.TRACKER_COMPLETED_VALUE;
     var normalized = String(value === null || value === undefined ? '' : value).trim().toUpperCase();
+    // A repair status is preserved as-is. Collapsing it to COMPLETED here would
+    // erase outstanding repair state during the migration.
+    if (PMS.Util.isTrackerAwaitingRepair(normalized)) return normalized;
+    if (PMS.Util.isTrackerComplete(value)) return PMS.CONFIG.TRACKER_COMPLETED_VALUE;
     if (!normalized || normalized === 'FALSE') return '';
     PMS.Util.fail('Unexpected tracker status value: ' + normalized + '.', 'DATA_INTEGRITY_ERROR');
   }
 
+  /**
+   * Constrains the cycle cell to the values the application writes. The
+   * dropdown stays hidden: these cells are written by the app, not chosen by
+   * hand, and the allow-list exists to catch a stray manual edit.
+   */
   function statusValidationRule() {
     return SpreadsheetApp.newDataValidation()
-      .requireValueInList([PMS.CONFIG.TRACKER_COMPLETED_VALUE], false)
+      .requireValueInList(PMS.Util.trackerStatusValues(), false)
       .setAllowInvalid(false)
       .build();
   }
@@ -330,9 +361,10 @@ PMS.Tracker = (function () {
         var values = item.range.getDisplayValues();
         var validations = item.range.getDataValidations();
         var invalidRow = -1;
+        var expectedValues = PMS.Util.trackerStatusValues();
         for (var index = 0; index < values.length; index += 1) {
           var value = String(values[index][0] || '').trim().toUpperCase();
-          if (value !== '' && value !== PMS.CONFIG.TRACKER_COMPLETED_VALUE) {
+          if (value !== '' && expectedValues.indexOf(value) < 0) {
             invalidRow = plan.startRow + index;
             break;
           }
@@ -343,8 +375,9 @@ PMS.Tracker = (function () {
           }
           var criteriaValues = validation.getCriteriaValues();
           var allowedValues = Array.isArray(criteriaValues[0]) ? criteriaValues[0].map(String) : [];
-          if (validation.getAllowInvalid() || allowedValues.length !== 1 ||
-              allowedValues[0] !== PMS.CONFIG.TRACKER_COMPLETED_VALUE || criteriaValues[1] !== false) {
+          var allowedMatches = allowedValues.length === expectedValues.length &&
+            expectedValues.every(function (expected) { return allowedValues.indexOf(expected) >= 0; });
+          if (validation.getAllowInvalid() || !allowedMatches || criteriaValues[1] !== false) {
             invalidRow = plan.startRow + index;
             break;
           }
@@ -451,6 +484,24 @@ PMS.Tracker = (function () {
     );
   }
 
+  /**
+   * The value a record's cycle status cell should carry.
+   *
+   * Legacy seeds never raise tickets and the importer writes many rows per
+   * execution, so they skip the ticket lookup entirely.
+   */
+  function repairAwareStatus(record) {
+    if (isTrustedLegacySeed(record)) return PMS.CONFIG.TRACKER_COMPLETED_VALUE;
+    try {
+      return PMS.Tickets.trackerStatusForRecord(record.recordId);
+    } catch (error) {
+      // An unreadable ticket sheet must not block a completion. The next ticket
+      // change re-syncs the cell.
+      console.warn('Ticket status could not be resolved for the tracker: ' + error.message);
+      return PMS.CONFIG.TRACKER_COMPLETED_VALUE;
+    }
+  }
+
   function syncCompletedRecord(record, beforeTrackerWrite) {
     var section = PMS.Util.section(record.itSection);
     if (section.key === 'INFRA_SECURITY' && !isTrustedLegacySeed(record)) {
@@ -527,12 +578,16 @@ PMS.Tracker = (function () {
     if (remarksCell.getDisplayValue().indexOf('[PMS Record: ' + record.recordId + ']') < 0) {
       PMS.Util.fail('Remarks verification failed; the tracker status was not changed.', 'SYNC_FAILED');
     }
+    // The cell reports the repair state when this record raised a findings
+    // ticket, and plain COMPLETED otherwise. Derived from stored ticket state so
+    // a reconciliation retry writes the same value this attempt would have.
+    var expectedStatus = repairAwareStatus(record);
     try {
-      var statusNeedsWrite = String(statusCell.getDisplayValue() || '') !== PMS.CONFIG.TRACKER_COMPLETED_VALUE;
+      var statusNeedsWrite = String(statusCell.getDisplayValue() || '') !== expectedStatus;
       statusCell.setDataValidation(statusValidationRule());
       if (statusNeedsWrite) {
         statusCell
-          .setValue(PMS.CONFIG.TRACKER_COMPLETED_VALUE)
+          .setValue(expectedStatus)
           .setHorizontalAlignment('center')
           .setVerticalAlignment('middle');
       }
@@ -540,7 +595,7 @@ PMS.Tracker = (function () {
     } catch (error) {
       protectedWriteFailure(sheet, statusCell, 'completion status', error);
     }
-    if (String(statusCell.getDisplayValue() || '') !== PMS.CONFIG.TRACKER_COMPLETED_VALUE) {
+    if (String(statusCell.getDisplayValue() || '') !== expectedStatus) {
       PMS.Util.fail('Tracker completion status verification failed.', 'SYNC_FAILED');
     }
 
@@ -555,6 +610,7 @@ PMS.Tracker = (function () {
 
     return {
       status: 'COMPLETED',
+      trackerStatus: expectedStatus,
       sheetName: sheet.getName(),
       row: row,
       trackerYear: trackerYear,
@@ -562,6 +618,80 @@ PMS.Tracker = (function () {
       previousRemarks: previousRemarks,
       syncedAt: PMS.Util.nowIso(),
       error: ''
+    };
+  }
+
+  /**
+   * Re-points a completed record's cycle status cell at the current repair state.
+   *
+   * Called after a ticket is filed or moved. Only the status cell changes: the
+   * remarks block already names the ticket, and rewriting a remarks cell that
+   * can hold 49,000 characters on every status change would be wasteful.
+   *
+   * Returns a reason instead of throwing for the ordinary cases where there is
+   * nothing to write, so a ticket on a draft or on a closed-out year is not an
+   * error. Genuine write failures still throw, and the ticket caller treats
+   * them as non-fatal because the value is recomputed on the next change.
+   */
+  function syncRepairStatus(record) {
+    if (!record || !record.recordId) return { ok: false, changed: false, reason: 'NO_RECORD' };
+    if (PMS.Util.completionState(record.pmsCompletion) !== 'COMPLETED') {
+      // The cycle cell is only written once maintenance completes.
+      return { ok: false, changed: false, reason: 'RECORD_NOT_COMPLETED' };
+    }
+    var section = PMS.Util.section(record.itSection);
+    var sheet = PMS.Assets.sheetForSection(section.key);
+    var trackerYear = Number(sheet.getRange(PMS.CONFIG.TRACKER_YEAR_ROW, PMS.CONFIG.TRACKER_YEAR_COLUMN).getValue());
+    if (!trackerYear || trackerYear !== Number(record.maintenanceYear)) {
+      // The tracker has rolled over, so this record's cells no longer exist.
+      return { ok: false, changed: false, reason: 'TRACKER_YEAR_MISMATCH', trackerYear: trackerYear };
+    }
+    var cycleConfig = PMS.CONFIG.CYCLES[record.cycle];
+    if (!cycleConfig) return { ok: false, changed: false, reason: 'UNKNOWN_CYCLE' };
+
+    var row = findAssetRow(sheet, record.assetTag);
+    removeLegacyCycleProtectionsFromSheet(sheet);
+    var statusCell = sheet.getRange(row, cycleConfig.checkboxColumn);
+    var previousStatus = String(statusCell.getDisplayValue() || '');
+    var expectedStatus = repairAwareStatus(record);
+    if (previousStatus === expectedStatus) {
+      return { ok: true, changed: false, reason: 'ALREADY_CURRENT', status: expectedStatus, row: row };
+    }
+    // Refuse to touch a cell that does not already hold a value this feature
+    // owns, so a manual note or an unmigrated cell is never overwritten.
+    if (!PMS.Util.isTrackerComplete(previousStatus)) {
+      return { ok: false, changed: false, reason: 'UNEXPECTED_CELL_VALUE', previousStatus: previousStatus, row: row };
+    }
+
+    try {
+      statusCell.setDataValidation(statusValidationRule());
+      statusCell
+        .setValue(expectedStatus)
+        .setHorizontalAlignment('center')
+        .setVerticalAlignment('middle');
+      SpreadsheetApp.flush();
+    } catch (error) {
+      protectedWriteFailure(sheet, statusCell, 'repair status', error);
+    }
+    if (String(statusCell.getDisplayValue() || '') !== expectedStatus) {
+      PMS.Util.fail('Tracker repair status verification failed.', 'SYNC_FAILED');
+    }
+
+    // completedCycles is cached, and this cell feeds it.
+    try {
+      PMS.Assets.invalidate(section.key);
+    } catch (error) {
+      console.warn('Asset cache could not be invalidated after a repair status write: ' + error.message);
+    }
+
+    return {
+      ok: true,
+      changed: true,
+      status: expectedStatus,
+      previousStatus: previousStatus,
+      sheetName: sheet.getName(),
+      row: row,
+      syncedAt: PMS.Util.nowIso()
     };
   }
 
@@ -634,6 +764,12 @@ PMS.Tracker = (function () {
         remarksCell: remarksCell,
         previousStatus: previousStatus,
         previousRemarks: previousRemarks,
+        // A legacy seed carries no tickets, but the cell may already hold a
+        // repair status from a record the importer is not replacing. Preserve it
+        // rather than reporting the asset as having nothing outstanding.
+        expectedStatus: PMS.Util.isTrackerAwaitingRepair(previousStatus)
+          ? String(previousStatus).trim().toUpperCase()
+          : PMS.CONFIG.TRACKER_COMPLETED_VALUE,
         nextRemarks: appendAssessment(previousRemarks, record)
       };
     });
@@ -678,9 +814,9 @@ PMS.Tracker = (function () {
     try {
       plans.forEach(function (plan) {
         plan.statusCell.setDataValidation(statusValidationRule());
-        if (String(plan.previousStatus || '').trim().toUpperCase() !== PMS.CONFIG.TRACKER_COMPLETED_VALUE) {
+        if (String(plan.previousStatus || '').trim().toUpperCase() !== plan.expectedStatus) {
           plan.statusCell
-            .setValue(PMS.CONFIG.TRACKER_COMPLETED_VALUE)
+            .setValue(plan.expectedStatus)
             .setHorizontalAlignment('center')
             .setVerticalAlignment('middle');
         }
@@ -696,7 +832,7 @@ PMS.Tracker = (function () {
       var row = verified[plan.row - startRow];
       var statusText = String(row[cycleConfig.checkboxColumn - 1] || '').trim().toUpperCase();
       var remarksText = String(row[cycleConfig.remarksColumn - 1] || '');
-      if (statusText !== PMS.CONFIG.TRACKER_COMPLETED_VALUE ||
+      if (statusText !== plan.expectedStatus ||
           remarksText.indexOf('[PMS Record: ' + plan.record.recordId + ']') < 0) {
         PMS.Util.fail(
           'Legacy import tracker verification failed at ' + sheet.getName() + ' row ' + plan.row + '.',
@@ -785,6 +921,7 @@ PMS.Tracker = (function () {
     statusValidationRule: statusValidationRule,
     syncLegacySeedBatch: syncLegacySeedBatch,
     syncCompletedRecord: syncCompletedRecord,
+    syncRepairStatus: syncRepairStatus,
     trackerRows: trackerRows,
     reconcilePending: reconcilePending
   };

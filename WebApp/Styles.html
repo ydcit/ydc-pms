@@ -3253,11 +3253,62 @@
     flex: none;
   }
 
+  /* A findings assessment cannot be completed without a ticket, so the panel
+     reads as an outstanding requirement rather than an optional extra. */
+  .record-ticket--required {
+    border-color: var(--warning-line);
+    background: var(--warning-soft);
+  }
+
+  .record-ticket--required .eyebrow {
+    color: var(--warning);
+  }
+
   .record-ticket__body {
     display: grid;
     gap: 14px;
     padding-top: 16px;
     border-top: 1px solid var(--line);
+  }
+
+  /* Read-only echo of the assessment text the ticket will copy. */
+  .record-ticket__derived {
+    padding: 12px 14px;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+  }
+
+  .record-ticket__derived p {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .record-ticket__derived dl {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .record-ticket__derived dt {
+    color: var(--muted);
+    font-size: 10.5px;
+    font-weight: 620;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .record-ticket__derived dd {
+    margin: 2px 0 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+
+  .record-ticket__derived dd.is-missing {
+    color: var(--danger);
+    font-style: italic;
   }
 
   .record-ticket__body .button {

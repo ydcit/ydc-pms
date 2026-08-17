@@ -483,7 +483,11 @@ PMS.Tickets = (function () {
 
       ticket._rowNumber = targetRow;
       ticket.isActive = ACTIVE_STATUSES.indexOf(status) >= 0;
-      return { ok: true, ticket: ticket };
+      // A ticket against an already-completed record flips its tracker cell from
+      // COMPLETED to the repair state. Filing from a draft is a no-op here; the
+      // completion write picks the value up instead.
+      var tracker = syncTrackerForRecord(ticket.sourceRecordId);
+      return { ok: true, ticket: ticket, tracker: tracker };
     });
   }
 
@@ -570,7 +574,15 @@ PMS.Tickets = (function () {
 
       updated._rowNumber = rowNumber;
       updated.isActive = ACTIVE_STATUSES.indexOf(nextStatus) >= 0;
-      return { ok: true, ticket: updated, action: action, statusChanged: statusChanged };
+      // Keeps the section tracker sheet showing the live repair state.
+      var tracker = statusChanged ? syncTrackerForRecord(updated.sourceRecordId) : null;
+      return {
+        ok: true,
+        ticket: updated,
+        action: action,
+        statusChanged: statusChanged,
+        tracker: tracker
+      };
     });
   }
 
@@ -773,6 +785,86 @@ PMS.Tickets = (function () {
     return { ok: true, counts: countByStatus(scopedTickets(context)) };
   }
 
+  /* --------------------------------------------------- record interconnection */
+
+  /**
+   * Pushes the record's current repair state onto its tracker cycle cell.
+   *
+   * Best effort by design. The ticket and its log entry are already written and
+   * are the audit record; a protected or unavailable tracker cell must not undo
+   * them. The cell is recomputed from stored ticket state on every change, so a
+   * failure here self-heals on the next one.
+   *
+   * PMS.Tracker also reads back into this module for the same value. Both
+   * directions are runtime-only calls inside function bodies, which is required
+   * because Apps Script evaluates PmsTickets before PmsTracker.
+   */
+  function syncTrackerForRecord(recordId) {
+    var id = PMS.Util.cleanText(recordId, 100);
+    if (!id) return null;
+    try {
+      var record = PMS.Records.findByRecordId(id);
+      if (!record) return { ok: false, reason: 'RECORD_NOT_FOUND' };
+      return PMS.Tracker.syncRepairStatus(record);
+    } catch (error) {
+      console.warn('Tracker repair status was not updated for ' + id + ': ' + error.message);
+      return { ok: false, reason: 'WRITE_FAILED', error: error.message };
+    }
+  }
+
+  /**
+   * Tickets raised from one maintenance record.
+   *
+   * Deliberately unscoped by section: this answers "does this record have its
+   * repair tracked", which the record's own owner and the tracker sheet both
+   * need regardless of who filed the ticket.
+   */
+  function forRecord(recordId) {
+    var id = PMS.Util.cleanText(recordId, 100);
+    if (!id) return [];
+    return readTickets().filter(function (ticket) {
+      return ticket.sourceRecordId === id;
+    }).map(function (ticket) {
+      return {
+        ticketId: ticket.ticketId,
+        status: ticket.status,
+        priority: ticket.priority,
+        summary: ticket.summary,
+        isActive: ticket.isActive,
+        updatedAt: ticket.updatedAt
+      };
+    });
+  }
+
+  function hasForRecord(recordId) {
+    return forRecord(recordId).length > 0;
+  }
+
+  /*
+    Precedence when a record has several tickets: report the one needing the
+    most attention. OPEN outranks IN_PROGRESS because nobody has picked it up
+    yet, and ON_HOLD ranks last of the active states because it is waiting on
+    something external.
+  */
+  var TRACKER_STATUS_PRECEDENCE = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD']);
+
+  /**
+   * The text the tracker cycle cell should carry for a record.
+   *
+   * A pure function of what is stored, so the completion write, a later ticket
+   * change, and a reconciliation retry days later all produce the same value.
+   * No outstanding repair means the ordinary COMPLETED value.
+   */
+  function trackerStatusForRecord(recordId) {
+    var tickets = forRecord(recordId);
+    for (var index = 0; index < TRACKER_STATUS_PRECEDENCE.length; index += 1) {
+      var status = TRACKER_STATUS_PRECEDENCE[index];
+      var match = tickets.some(function (ticket) { return ticket.status === status; });
+      if (match) return PMS.CONFIG.TRACKER_REPAIR_VALUES[status];
+    }
+    return PMS.CONFIG.TRACKER_COMPLETED_VALUE;
+  }
+
   return {
     ensureSheets: ensureSheets,
     statuses: function () { return STATUSES.slice(); },
@@ -785,6 +877,9 @@ PMS.Tickets = (function () {
     updateStatus: updateStatus,
     list: list,
     detail: detail,
-    summary: summary
+    summary: summary,
+    forRecord: forRecord,
+    hasForRecord: hasForRecord,
+    trackerStatusForRecord: trackerStatusForRecord
   };
 })();

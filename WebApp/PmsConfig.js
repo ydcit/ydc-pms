@@ -21,6 +21,23 @@ PMS.CONFIG = {
   TRACKER_YEAR_ROW: 2,
   TRACKER_YEAR_COLUMN: 4,
   TRACKER_COMPLETED_VALUE: 'COMPLETED',
+  /*
+    Values the application may write into a tracker cycle status cell.
+
+    Maintenance that found nothing outstanding stays COMPLETED, which is what
+    every existing row already contains. When the maintenance raised a findings
+    ticket, the cell carries that repair's state instead, so the tracker answers
+    "is anything still outstanding on this asset" without opening the app.
+    A closed ticket returns the cell to COMPLETED.
+
+    All of these mean the asset WAS maintained this cycle. PMS.Util.isTrackerComplete
+    treats them as such, otherwise the questionnaire would offer the asset again.
+  */
+  TRACKER_REPAIR_VALUES: Object.freeze({
+    OPEN: 'FOR FIXING',
+    IN_PROGRESS: 'IN PROGRESS',
+    ON_HOLD: 'ON HOLD'
+  }),
   CACHE_SECONDS: 300,
   ROLLOVER_TOKEN_SECONDS: 300,
   LEGACY_IMPORT_TOKEN_SECONDS: 1800,

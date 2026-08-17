@@ -342,6 +342,26 @@ PMS.Records = (function () {
     return null;
   }
 
+  /**
+   * An assessment that recorded findings must have a repair ticket before PMS
+   * can be completed, so a finding is tracked to completion rather than only
+   * being written down and forgotten.
+   *
+   * Legacy imports do not route through save(), so historical rows keep their
+   * original assessment text without needing tickets invented for them.
+   */
+  function requireFindingsTicket(record) {
+    if (record.recordType === 'LEGACY_SEED') return;
+    var result = PMS.Util.cleanText(record.assessmentResult, 200);
+    if (!result || result.toLowerCase() === 'no findings') return;
+    if (PMS.Tickets.hasForRecord(record.recordId)) return;
+    PMS.Util.fail(
+      'This assessment recorded findings, so a findings ticket is required before PMS can be completed. ' +
+        'File the ticket in the Assessment and review step, then complete PMS.',
+      'TICKET_REQUIRED'
+    );
+  }
+
   function checklistKeys(sectionKey) {
     return PMS.Util.allChecklistItems(sectionKey).map(function (item) { return item.key; });
   }
@@ -497,6 +517,7 @@ PMS.Records = (function () {
           message: 'Progress saved. No PMS tracker status was changed.'
         };
       } else {
+        requireFindingsTicket(record);
         record.pmsCompletion = PMS.Util.progressText(100, record.completedItems, record.applicableItems, 'SYNCING');
         rowNumber = writeRecord(sheet, record, rowNumber);
         SpreadsheetApp.flush();
@@ -549,8 +570,10 @@ PMS.Records = (function () {
           pmsCompletion: record.pmsCompletion,
           syncStatus: PMS.Util.completionState(record.pmsCompletion),
           syncError: syncResult.status === 'SYNC_FAILED' ? String(syncResult.error || '').slice(0, 1500) : '',
+          trackerStatus: syncResult.trackerStatus || '',
           message: syncResult.status === 'COMPLETED'
-            ? 'PMS completed and the ' + record.cycle + ' tracker was updated.'
+            ? 'PMS completed and the ' + record.cycle + ' tracker now shows ' +
+              (syncResult.trackerStatus || PMS.CONFIG.TRACKER_COMPLETED_VALUE) + '.'
             : syncResult.status === 'HISTORICAL_COMPLETED'
               ? 'Historical PMS completed in PMS Records. No current-year tracker cell was changed.'
               : syncResult.status === 'SYNC_REQUIRED'
@@ -622,6 +645,9 @@ PMS.Records = (function () {
         actionTaken: record.actionTaken,
         recommendation: record.recommendation
       },
+      // Lets a resumed draft know a findings ticket already exists, so the
+      // technician is not asked to file a second one.
+      tickets: PMS.Tickets.forRecord(record.recordId),
       pmsCompletion: record.pmsCompletion
     };
   }

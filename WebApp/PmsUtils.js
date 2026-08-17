@@ -142,14 +142,41 @@ PMS.Util = (function () {
     return separator >= 0 ? value.slice(separator + 1).trim() : value.trim();
   }
 
+  /** Every value the application may write into a cycle status cell. */
+  function trackerStatusValues() {
+    var values = [PMS.CONFIG.TRACKER_COMPLETED_VALUE];
+    Object.keys(PMS.CONFIG.TRACKER_REPAIR_VALUES).forEach(function (key) {
+      values.push(PMS.CONFIG.TRACKER_REPAIR_VALUES[key]);
+    });
+    return values;
+  }
+
   /**
-   * Accepts both the current text status and legacy checkbox booleans during
-   * migration. COMPLETED is the only value newly written by the application.
+   * True when the cycle cell says the asset was maintained.
+   *
+   * Accepts legacy checkbox booleans from before the text migration, and every
+   * repair status, because those are only ever written AFTER a completed
+   * maintenance record. This is what keeps a maintained asset out of the
+   * questionnaire's picker: PmsAssets.readAll builds completedCycles from this,
+   * so treating "IN PROGRESS" as incomplete would re-offer an asset whose PMS
+   * is already done and merely awaiting a repair.
    */
   function isTrackerComplete(value) {
     if (value === true) return true;
     var normalized = String(value === null || value === undefined ? '' : value).trim().toUpperCase();
-    return normalized === 'TRUE' || normalized === 'DONE' || normalized === 'COMPLETED';
+    if (normalized === 'TRUE' || normalized === 'DONE') return true;
+    return trackerStatusValues().some(function (allowed) { return normalized === allowed; });
+  }
+
+  /**
+   * True when the cycle cell still has repair work outstanding. Deliberately
+   * separate from isTrackerComplete: the maintenance is finished either way.
+   */
+  function isTrackerAwaitingRepair(value) {
+    var normalized = String(value === null || value === undefined ? '' : value).trim().toUpperCase();
+    return Object.keys(PMS.CONFIG.TRACKER_REPAIR_VALUES).some(function (key) {
+      return normalized === PMS.CONFIG.TRACKER_REPAIR_VALUES[key];
+    });
   }
 
   function serializeTags(value) {
@@ -196,7 +223,9 @@ PMS.Util = (function () {
     allChecklistItems: allChecklistItems,
     progressText: progressText,
     completionState: completionState,
+    trackerStatusValues: trackerStatusValues,
     isTrackerComplete: isTrackerComplete,
+    isTrackerAwaitingRepair: isTrackerAwaitingRepair,
     serializeTags: serializeTags,
     publicError: publicError,
     daysBetween: daysBetween

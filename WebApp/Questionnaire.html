@@ -353,9 +353,9 @@
           <section class="record-ticket" id="record-ticket" aria-labelledby="record-ticket-title">
             <div class="record-ticket__header">
               <div>
-                <p class="eyebrow">Findings ticket</p>
-                <h3 id="record-ticket-title">Does this asset still need fixing?</h3>
-                <p id="record-ticket-intro">File a ticket so the repair is tracked to completion after this record is closed. Any user can move it along, and every change is logged.</p>
+                <p class="eyebrow" id="record-ticket-eyebrow">Findings ticket</p>
+                <h3 id="record-ticket-title">Track the repair</h3>
+                <p id="record-ticket-intro">Anything other than “No findings” needs a ticket, so the repair is followed to completion after this record is closed.</p>
               </div>
               <button class="button button--secondary" id="record-ticket-toggle" type="button" aria-expanded="false" aria-controls="record-ticket-body">
                 <svg class="icon" aria-hidden="true"><use href="#i-wrench"></use></svg>
@@ -364,6 +364,14 @@
             </div>
 
             <div class="record-ticket__body" id="record-ticket-body" hidden>
+              <!--
+                No findings or action fields here on purpose. The server copies
+                both from this record, so asking for them again would be the same
+                text typed twice. This panel only carries what the record cannot
+                already answer.
+              -->
+              <div class="record-ticket__derived" id="record-ticket-derived" aria-live="polite"></div>
+
               <div class="field-grid">
                 <div class="field">
                   <label for="record-ticket-priority">Priority</label>
@@ -383,22 +391,8 @@
               </div>
 
               <div class="field">
-                <label for="record-ticket-findings">Findings <span class="required-mark" aria-hidden="true">*</span></label>
-                <textarea id="record-ticket-findings" rows="3" maxlength="4000" placeholder="What is wrong with this asset" aria-describedby="record-ticket-findings-help record-ticket-findings-error"></textarea>
-                <p class="field-help" id="record-ticket-findings-help">Prefilled from the asset findings above. Edit it if the ticket needs different wording.</p>
-                <p class="field-error" id="record-ticket-findings-error" hidden></p>
-              </div>
-
-              <div class="field">
-                <label for="record-ticket-action">Action required <span class="required-mark" aria-hidden="true">*</span></label>
-                <textarea id="record-ticket-action" rows="2" maxlength="4000" placeholder="What has to happen before this can be closed" aria-describedby="record-ticket-action-help record-ticket-action-error"></textarea>
-                <p class="field-help" id="record-ticket-action-help">Prefilled from the recommendation above.</p>
-                <p class="field-error" id="record-ticket-action-error" hidden></p>
-              </div>
-
-              <div class="field">
                 <label for="record-ticket-remarks">Opening remarks <span class="field-optional">Optional</span></label>
-                <textarea id="record-ticket-remarks" rows="2" maxlength="2000" placeholder="Context for the first history entry"></textarea>
+                <textarea id="record-ticket-remarks" rows="2" maxlength="2000" placeholder="Anything the next person should know before starting"></textarea>
                 <p class="field-help">Remarks become mandatory once the ticket changes status.</p>
               </div>
 
