@@ -32,7 +32,19 @@ PMS.Tickets = (function () {
   // oversized response, so the row count is capped and the caller is told.
   var LIST_ALL_CAP = 1000;
 
-  var STATUSES = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD', 'RESOLVED', 'CANCELLED']);
+  // Statuses a user may choose. The workflow is deliberately short: it is open,
+  // somebody is on it, or it is done.
+  var STATUSES = Object.freeze(['OPEN', 'IN_PROGRESS', 'RESOLVED']);
+  /*
+    Retired statuses that tickets filed before this change may still carry.
+
+    They are still parsed, displayed, counted and grouped, because dropping them
+    from recognition would make reading an older ticket silently rewrite it to
+    OPEN. They are never offered as a choice, so such a ticket simply moves to one
+    of the current statuses the next time somebody updates it.
+  */
+  var RETIRED_STATUSES = Object.freeze(['ON_HOLD', 'CANCELLED']);
+  var KNOWN_STATUSES = Object.freeze(STATUSES.concat(RETIRED_STATUSES));
   // Statuses that still need someone's attention. Used for the dashboard count
   // and the default filter, so "for fixing" is answerable at a glance.
   var ACTIVE_STATUSES = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD']);
@@ -233,8 +245,22 @@ PMS.Tickets = (function () {
     return String(value).trim();
   }
 
+  function statusToken(value) {
+    return PMS.Util.cleanText(value, 30).toUpperCase().replace(/[\s-]+/g, '_');
+  }
+
+  /** Parses a stored status, including the retired ones. */
   function normalizeStatus(value, fallback) {
-    var text = PMS.Util.cleanText(value, 30).toUpperCase().replace(/[\s-]+/g, '_');
+    var text = statusToken(value);
+    return KNOWN_STATUSES.indexOf(text) >= 0 ? text : (fallback || '');
+  }
+
+  /**
+   * Parses a status a user asked for. Only the current vocabulary is accepted, so
+   * a retired value cannot be reintroduced through the API.
+   */
+  function normalizeSelectableStatus(value, fallback) {
+    var text = statusToken(value);
     return STATUSES.indexOf(text) >= 0 ? text : (fallback || '');
   }
 
@@ -451,9 +477,13 @@ PMS.Tickets = (function () {
     var actionRequired = requireTicketText(request.actionRequired, 'The required action', subject.actionRequired);
     var summary = PMS.Util.cleanText(request.summary, 300) || findings.slice(0, 140);
     var priority = normalizePriority(request.priority, 'MEDIUM');
-    // The filer chooses the starting status: work is sometimes already under way
-    // by the time anyone writes the ticket down.
-    var status = normalizeStatus(request.status, 'OPEN');
+    /*
+      A ticket is raised because somebody is going to fix the thing, so it starts
+      as work in progress. Neither create form asks: priority and status are
+      changed from the ticket's own page once it exists, which keeps filing to the
+      few facts the filer actually knows.
+    */
+    var status = normalizeSelectableStatus(request.status, 'IN_PROGRESS');
     var openingRemarks = PMS.Util.cleanText(request.remarks, REMARKS_MAX_LENGTH) ||
       ('Ticket filed from ' + (subject.sourceRecordId || 'a manual report') + '.');
 
@@ -565,7 +595,9 @@ PMS.Tickets = (function () {
         tickets.getRange(rowNumber, 1, 1, TICKET_COLUMNS.length).getValues()[0],
         rowNumber
       );
-      var nextStatus = normalizeStatus(request.status, existing.status);
+      // Falls back to the stored value, so a ticket still carrying a retired
+      // status stays put until somebody actively picks a current one.
+      var nextStatus = normalizeSelectableStatus(request.status, existing.status);
       var nextPriority = request.priority === undefined
         ? existing.priority
         : normalizePriority(request.priority, existing.priority);
@@ -685,7 +717,9 @@ PMS.Tickets = (function () {
 
   function countByStatus(tickets) {
     var counts = {};
-    STATUSES.forEach(function (status) { counts[status] = 0; });
+    // Retired statuses are included so a tab or badge reading them finds a
+    // number rather than undefined.
+    KNOWN_STATUSES.forEach(function (status) { counts[status] = 0; });
     tickets.forEach(function (ticket) {
       if (counts[ticket.status] === undefined) counts[ticket.status] = 0;
       counts[ticket.status] += 1;

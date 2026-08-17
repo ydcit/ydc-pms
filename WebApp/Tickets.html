@@ -252,27 +252,15 @@
             </div>
           </div>
 
-          <div class="field-grid">
-            <div class="field">
-              <label for="ticket-create-location">Location</label>
-              <input id="ticket-create-location" type="text" autocomplete="off" maxlength="200" placeholder="Where the asset is now">
-            </div>
-            <div class="field">
-              <label for="ticket-create-priority">Priority</label>
-              <div class="select-wrap">
-                <select id="ticket-create-priority"></select>
-                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
-              </div>
-            </div>
-          </div>
-
+          <!--
+            No status or priority picker here on purpose. A ticket is filed
+            because somebody is going to fix the thing, so it starts as In
+            progress; both are changed from the ticket's own page afterwards.
+          -->
           <div class="field">
-            <label for="ticket-create-status">Status</label>
-            <div class="select-wrap">
-              <select id="ticket-create-status"></select>
-              <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
-            </div>
-            <p class="field-help" id="ticket-create-status-help">Starts as Open. Any user can change it later, with remarks.</p>
+            <label for="ticket-create-location">Location</label>
+            <input id="ticket-create-location" type="text" autocomplete="off" maxlength="200" placeholder="Where the asset is now">
+            <p class="field-help">Filed as In progress. Status and priority are changed on the ticket itself.</p>
           </div>
 
           <div class="field">

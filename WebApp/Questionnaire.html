@@ -355,7 +355,7 @@
               <div>
                 <p class="eyebrow" id="record-ticket-eyebrow">Findings ticket</p>
                 <h3 id="record-ticket-title">Track the repair</h3>
-                <p id="record-ticket-intro">Anything other than “No findings” needs a ticket, so the repair is followed to completion after this record is closed.</p>
+                <p id="record-ticket-intro">A “Follow-up required” assessment needs a ticket, so the repair is followed to completion after this record is closed.</p>
               </div>
               <button class="button button--secondary" id="record-ticket-toggle" type="button" aria-expanded="false" aria-controls="record-ticket-body">
                 <svg class="icon" aria-hidden="true"><use href="#i-wrench"></use></svg>
@@ -365,30 +365,12 @@
 
             <div class="record-ticket__body" id="record-ticket-body" hidden>
               <!--
-                No findings or action fields here on purpose. The server copies
-                both from this record, so asking for them again would be the same
-                text typed twice. This panel only carries what the record cannot
-                already answer.
+                Nothing here duplicates the record. The server copies the findings
+                and the required action from it, and the ticket starts as In
+                progress at normal priority; both are changed from the ticket's own
+                page afterwards. All this panel needs is optional context.
               -->
               <div class="record-ticket__derived" id="record-ticket-derived" aria-live="polite"></div>
-
-              <div class="field-grid">
-                <div class="field">
-                  <label for="record-ticket-priority">Priority</label>
-                  <div class="select-wrap">
-                    <select id="record-ticket-priority"></select>
-                    <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
-                  </div>
-                </div>
-                <div class="field">
-                  <label for="record-ticket-status">Status</label>
-                  <div class="select-wrap">
-                    <select id="record-ticket-status"></select>
-                    <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
-                  </div>
-                  <p class="field-help">Use In progress if the repair has already started.</p>
-                </div>
-              </div>
 
               <div class="field">
                 <label for="record-ticket-remarks">Opening remarks <span class="field-optional">Optional</span></label>

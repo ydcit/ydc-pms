@@ -343,20 +343,23 @@ PMS.Records = (function () {
   }
 
   /**
-   * An assessment that recorded findings must have a repair ticket before PMS
-   * can be completed, so a finding is tracked to completion rather than only
-   * being written down and forgotten.
+   * Only an assessment that leaves work outstanding needs a repair ticket.
+   *
+   * "Follow-up required" means the asset still needs something done, so the
+   * repair has to be tracked. "Findings resolved" means it was dealt with during
+   * the maintenance itself, and "No findings" means there was nothing to deal
+   * with; neither leaves anything to follow, so neither is blocked.
    *
    * Legacy imports do not route through save(), so historical rows keep their
    * original assessment text without needing tickets invented for them.
    */
   function requireFindingsTicket(record) {
     if (record.recordType === 'LEGACY_SEED') return;
-    var result = PMS.Util.cleanText(record.assessmentResult, 200);
-    if (!result || result.toLowerCase() === 'no findings') return;
+    var result = PMS.Util.cleanText(record.assessmentResult, 200).toLowerCase();
+    if (result !== 'follow-up required') return;
     if (PMS.Tickets.hasForRecord(record.recordId)) return;
     PMS.Util.fail(
-      'This assessment recorded findings, so a findings ticket is required before PMS can be completed. ' +
+      'This assessment needs follow-up, so a findings ticket is required before PMS can be completed. ' +
         'File the ticket in the Assessment and review step, then complete PMS.',
       'TICKET_REQUIRED'
     );

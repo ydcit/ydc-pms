@@ -1375,13 +1375,13 @@
       MEDIUM: 'status-chip--warning',
       LOW: 'status-chip--neutral'
     };
+    // On hold and Cancelled are retired. A ticket filed before that change keeps
+    // its status and still shows under Needs attention or All, with its own chip.
     var TICKET_TABS = [
       { value: 'ACTIVE', label: 'Needs attention' },
       { value: 'OPEN', label: 'Open' },
       { value: 'IN_PROGRESS', label: 'In progress' },
-      { value: 'ON_HOLD', label: 'On hold' },
       { value: 'RESOLVED', label: 'Resolved' },
-      { value: 'CANCELLED', label: 'Cancelled' },
       { value: '', label: 'All' }
     ];
     var TICKET_DIRECTION_LABELS = {
@@ -1768,7 +1768,12 @@
 
     function fillTicketSelect(select, values, selected) {
       select.replaceChildren();
-      values.forEach(function (value) {
+      var options = toArray(values).slice();
+      // A ticket still carrying a retired status must not show a blank control,
+      // so its own value is offered alongside the current vocabulary.
+      var current = normalizeText(selected);
+      if (current && options.indexOf(current) < 0) options.unshift(current);
+      options.forEach(function (value) {
         var option = document.createElement('option');
         option.value = value;
         option.textContent = ticketLabel(value);
@@ -1902,9 +1907,6 @@
     /* ------------------------------------------------------------- create */
 
     var TICKET_ASSET_LIMIT = 50;
-    var TICKET_STATUS_FALLBACK = ['OPEN', 'IN_PROGRESS', 'ON_HOLD', 'RESOLVED', 'CANCELLED'];
-    var TICKET_CLOSED_STATUSES = ['RESOLVED', 'CANCELLED'];
-    var TICKET_PRIORITY_FALLBACK = ['LOW', 'MEDIUM', 'HIGH'];
 
     function ticketCreateFieldIds() {
       return ['ticket-create-asset', 'ticket-create-summary', 'ticket-create-findings', 'ticket-create-action'];
@@ -1917,12 +1919,6 @@
       ticketCreateFieldIds().forEach(function (id) { clearFieldError(id, id + '-error'); });
       byId('ticket-create-error').hidden = true;
 
-      fillTicketSelect(byId('ticket-create-priority'),
-        state.tickets.priorities.length ? state.tickets.priorities : TICKET_PRIORITY_FALLBACK, 'MEDIUM');
-      // The create view can be reached before any list load, which is where the
-      // status and priority vocabularies normally arrive from.
-      fillTicketSelect(byId('ticket-create-status'),
-        state.tickets.statuses.length ? state.tickets.statuses : TICKET_STATUS_FALLBACK, 'OPEN');
       var sections = state.sections.map(function (item) { return item.key; });
       fillTicketSelect(byId('ticket-create-section'), sections, normalizeText(source.section) || sectionKey());
       // Section labels read better than the raw keys in this form.
@@ -2246,11 +2242,12 @@
       }
 
       setBusy(true, 'Filing ticket…');
-      // A ticket filed straight into Resolved or Cancelled is not in the "needs
-      // attention" bucket, so the filter is switched before the call and sent
-      // with it, which lets the response carry a list that actually contains it.
-      var submittedStatus = byId('ticket-create-status').value;
-      state.tickets.status = TICKET_CLOSED_STATUSES.indexOf(submittedStatus) >= 0 ? '' : 'ACTIVE';
+      // Every new ticket is In progress, so it belongs in the "needs attention"
+      // bucket. Switching the filter before the call means the list that comes
+      // back with the response already contains it.
+      state.tickets.status = 'ACTIVE';
+      // No status or priority is sent: the server files as In progress at normal
+      // priority, and both are changed from the ticket's own page.
       serverCall('PMS_apiCreateTicket', {
         sourceRecordId: state.tickets.sourceRecordId,
         assetTag: assetTag,
@@ -2259,8 +2256,6 @@
         summary: summary,
         findings: findings,
         actionRequired: actionRequired,
-        priority: byId('ticket-create-priority').value,
-        status: submittedStatus,
         remarks: normalizeText(byId('ticket-create-remarks').value)
       }, ticketsRequest({ page: 1 }))
         .then(function (result) {
@@ -2300,9 +2295,22 @@
       updateRecordTicketRequirement();
     }
 
-    function recordHasOpenFindings() {
+    /**
+     * Only "Follow-up required" leaves work outstanding, so only it forces a
+     * ticket. "Findings resolved" was dealt with during the maintenance, and
+     * "No findings" had nothing to deal with.
+     */
+    function recordNeedsTicket() {
+      return normalizeText(byId('assessment-result').value) === 'Follow-up required';
+    }
+
+    /**
+     * Whether filing is worth offering at all. "Findings resolved" may still be
+     * worth tracking, so the panel stays available without being demanded.
+     */
+    function recordAllowsTicket() {
       var result = normalizeText(byId('assessment-result').value);
-      return Boolean(result) && result !== 'No findings';
+      return result === 'Follow-up required' || result === 'Findings resolved';
     }
 
     function recordTicketCount() {
@@ -2316,20 +2324,23 @@
      */
     function updateRecordTicketRequirement() {
       if (!byId('record-ticket')) return;
-      var needed = recordHasOpenFindings();
+      var needed = recordNeedsTicket();
+      var offered = recordAllowsTicket();
       var filed = recordTicketCount() > 0;
-      // Nothing to show for a clean assessment with no ticket already filed.
-      byId('record-ticket').hidden = !needed && !filed;
+      // Hidden for a clean assessment unless a ticket was filed anyway.
+      byId('record-ticket').hidden = !offered && !filed;
       byId('record-ticket-eyebrow').textContent = needed && !filed ? 'Required before completing' : 'Findings ticket';
       byId('record-ticket').classList.toggle('record-ticket--required', needed && !filed);
       byId('record-ticket-title').textContent = filed
         ? 'This repair is being tracked'
-        : 'Track the repair before completing';
+        : needed
+          ? 'Track the repair before completing'
+          : 'Track this repair as well?';
       byId('record-ticket-intro').textContent = filed
         ? 'The ticket below carries this finding. Any user can move it along, and the section tracker follows its status.'
         : needed
-          ? 'This assessment recorded findings, so PMS cannot be completed until a ticket exists to follow the repair.'
-          : 'Anything other than “No findings” needs a ticket, so the repair is followed to completion.';
+          ? 'This assessment needs follow-up, so PMS cannot be completed until a ticket exists to follow the repair.'
+          : 'The findings were resolved during maintenance, so a ticket is optional. File one only if something still needs watching.';
       byId('record-ticket-toggle-label').textContent = byId('record-ticket-body').hidden
         ? (filed ? 'File another ticket' : 'File a ticket')
         : 'Hide ticket form';
@@ -2380,14 +2391,8 @@
       body.hidden = false;
       byId('record-ticket-toggle').setAttribute('aria-expanded', 'true');
       byId('record-ticket-toggle-label').textContent = 'Hide ticket form';
-      // These vocabularies normally arrive with a ticket list load, which may
-      // not have happened in this session.
-      fillTicketSelect(byId('record-ticket-priority'),
-        state.tickets.priorities.length ? state.tickets.priorities : TICKET_PRIORITY_FALLBACK, 'MEDIUM');
-      fillTicketSelect(byId('record-ticket-status'),
-        state.tickets.statuses.length ? state.tickets.statuses : TICKET_STATUS_FALLBACK, 'OPEN');
       renderRecordTicketDerived();
-      window.setTimeout(function () { byId('record-ticket-priority').focus(); }, 0);
+      window.setTimeout(function () { byId('record-ticket-remarks').focus(); }, 0);
     }
 
     function renderRecordTicketsFiled() {
@@ -2455,15 +2460,13 @@
           byId('record-save-state').textContent = 'Draft ' + state.recordId + ' saved';
           // Everything the payload carries is now persisted.
           state.dirty = false;
-          // Findings and the required action are deliberately omitted: the
-          // server derives both from the record this ticket links to. A tiny
-          // page is requested because only the counts are needed here, for the
-          // dashboard badge.
+          // Only the record link and optional remarks are sent. The server copies
+          // the findings and the required action from the record, and files the
+          // ticket as In progress at normal priority. A tiny page is requested
+          // because only the counts are needed here, for the dashboard badge.
           return serverCall('PMS_apiCreateTicket', {
             sourceRecordId: state.recordId,
             summary: (result ? result + ' on ' : 'Needs fixing: ') + assetTag,
-            priority: byId('record-ticket-priority').value,
-            status: byId('record-ticket-status').value,
             remarks: normalizeText(byId('record-ticket-remarks').value)
           }, { page: 1, pageSize: 5, status: 'ACTIVE' });
         })
@@ -4761,7 +4764,7 @@
       var progress = calculateFormProgress();
       // A findings assessment cannot be completed until its repair is ticketed,
       // so the button reflects that rather than failing on click.
-      var ticketMissing = recordHasOpenFindings() && recordTicketCount() === 0;
+      var ticketMissing = recordNeedsTicket() && recordTicketCount() === 0;
       byId('complete-pms').disabled = state.busy || progress.percent !== 100 || ticketMissing;
       byId('complete-pms').title = progress.percent !== 100
         ? (isInfraSection() ? 'Complete all checks and attach both evidence files first' : 'Complete all applicable checklist items first')
@@ -5084,11 +5087,11 @@
         }
         // Belt and braces alongside the disabled button, and it opens the panel
         // so the required action is in front of the technician.
-        if (recordHasOpenFindings() && recordTicketCount() === 0) {
+        if (recordNeedsTicket() && recordTicketCount() === 0) {
           setStep(4, false);
           updateRecordTicketRequirement();
           if (byId('record-ticket-body').hidden) toggleRecordTicket();
-          showFormAlert('This assessment recorded findings. File the findings ticket below before completing PMS.');
+          showFormAlert('This assessment needs follow-up. File the findings ticket below before completing PMS.');
           return;
         }
       }
