@@ -3144,7 +3144,32 @@
     align-items: center;
     gap: 12px;
     padding: 11px 16px;
+    flex-wrap: wrap;
     transition: background 110ms var(--ease);
+  }
+
+  /* Revealed when an item is marked Not done; the reason is what makes that an
+     answer, so it takes the full width rather than being squeezed inline. */
+  .checklist-item__reason {
+    flex: 1 0 100%;
+    margin: 8px 0 2px;
+  }
+
+  .checklist-item__reason input {
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 10px;
+    border: 1px solid var(--warning-line);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--ink);
+  }
+
+  .checklist-item__reason input:focus {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
   }
 
   .checklist-item + .checklist-item {

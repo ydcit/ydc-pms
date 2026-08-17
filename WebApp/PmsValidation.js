@@ -7,25 +7,31 @@ PMS.Validation = (function () {
     var normalized = {};
     var completed = 0;
     var applicable = 0;
+    var checked = 0;
+    var exceptions = [];
     var groupProgress = {};
 
     groups.forEach(function (group) {
       var groupCompleted = 0;
       var groupApplicable = 0;
       group.items.forEach(function (item) {
-        var state = PMS.Util.cleanText(source[item.key], 10).toUpperCase();
-        if (state !== 'DONE' && state !== 'NA') state = '';
-        if (state === 'NA' && !item.allowsNa) {
-          PMS.Util.fail(item.label + ' cannot be marked not applicable.', 'VALIDATION_ERROR');
+        var entry = PMS.Util.parseChecklistValue(source[item.key]);
+        normalized[item.key] = PMS.Util.formatChecklistValue(entry.state, entry.reason);
+        /*
+          Every item now counts, and "completed" means answered rather than
+          ticked: an item left unticked with a stated reason is a legitimate
+          answer. That keeps the existing 100%-to-complete gate meaningful
+          without letting anyone skip a question silently.
+        */
+        applicable += 1;
+        groupApplicable += 1;
+        if (entry.state) {
+          completed += 1;
+          groupCompleted += 1;
         }
-        normalized[item.key] = state;
-        if (state !== 'NA') {
-          applicable += 1;
-          groupApplicable += 1;
-          if (state === 'DONE') {
-            completed += 1;
-            groupCompleted += 1;
-          }
+        if (entry.state === 'DONE') checked += 1;
+        if (entry.state === 'NOT_DONE') {
+          exceptions.push({ key: item.key, label: item.label, reason: entry.reason });
         }
       });
       groupProgress[group.key] = {
@@ -39,6 +45,8 @@ PMS.Validation = (function () {
       values: normalized,
       completed: completed,
       applicable: applicable,
+      checked: checked,
+      exceptions: exceptions,
       percent: applicable ? Math.round(completed / applicable * 100) : 0,
       groups: groupProgress
     };
@@ -214,7 +222,9 @@ PMS.Validation = (function () {
       normalized.progress = {
         completed: checklist.completed + evidenceResult.completed,
         applicable: 6,
-        percent: Math.round((checklist.completed + evidenceResult.completed) / 6 * 100)
+        percent: Math.round((checklist.completed + evidenceResult.completed) / 6 * 100),
+        checked: checklist.checked,
+        exceptions: checklist.exceptions
       };
     } else {
       normalized.assetType = '';
@@ -223,12 +233,17 @@ PMS.Validation = (function () {
       normalized.progress = {
         completed: checklist.completed,
         applicable: checklist.applicable,
-        percent: checklist.percent
+        percent: checklist.percent,
+        checked: checklist.checked,
+        exceptions: checklist.exceptions
       };
     }
 
     if (saveMode === 'COMPLETE' && normalized.progress.percent !== 100) {
-      PMS.Util.fail('Complete every applicable checklist item before completing PMS.', 'VALIDATION_ERROR');
+      PMS.Util.fail(
+        'Answer every checklist item before completing PMS. Tick it, or leave it unticked with a reason.',
+        'VALIDATION_ERROR'
+      );
     }
 
     return normalized;

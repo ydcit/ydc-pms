@@ -14,7 +14,7 @@ PMS.Tracker = (function () {
   }
 
   function checklistState(value) {
-    return String(value || '').toUpperCase() === 'DONE' ? 'Checked' : 'Not checked';
+    return PMS.Util.parseChecklistValue(value).state === 'DONE' ? 'Checked' : 'Not checked';
   }
 
   function infraAuditLines(record) {
@@ -86,8 +86,29 @@ PMS.Tracker = (function () {
     }
     if (!tickets.length) return [];
     return ['Findings Tickets: ' + tickets.map(function (ticket) {
-      return ticket.ticketId + ' (' + ticket.status + ')';
+      return ticket.ticketId + ' (' + PMS.Tickets.statusLabel(ticket.status) + ')';
     }).join(', ')];
+  }
+
+  /**
+   * Lists the checks that were left unticked, with the reason given for each.
+   *
+   * Whoever reads the tracker row should see what was skipped and why without
+   * opening the record.
+   */
+  function checklistExceptionLines(record) {
+    var items;
+    try {
+      items = PMS.Util.allChecklistItems(record.itSection);
+    } catch (error) {
+      return [];
+    }
+    var lines = [];
+    items.forEach(function (item) {
+      var entry = PMS.Util.parseChecklistValue(record[item.key]);
+      if (entry.state === 'NOT_DONE') lines.push('  - ' + item.label + ': ' + entry.reason);
+    });
+    return lines.length ? ['Checks Not Done:'].concat(lines) : [];
   }
 
   function assessmentBlock(record) {
@@ -101,7 +122,7 @@ PMS.Tracker = (function () {
       'Asset Findings: ' + record.assetFindings,
       'Action Taken: ' + record.actionTaken,
       'Recommendation: ' + record.recommendation
-    ]).concat(ticketAuditLines(record)).concat([
+    ]).concat(checklistExceptionLines(record)).concat(ticketAuditLines(record)).concat([
       '[End PMS Record: ' + record.recordId + ']'
     ]).join('\n');
   }

@@ -139,16 +139,16 @@ PMS.CONFIG = {
       key: 'physical',
       label: 'Physical Checking',
       items: Object.freeze([
-        Object.freeze({ key: 'infraPowerCables', label: 'Power Cables Checked', allowsNa: false }),
-        Object.freeze({ key: 'infraDataCables', label: 'Data Cables Checked', allowsNa: false }),
-        Object.freeze({ key: 'infraPowerSupplyUps', label: 'Power Supply / UPS Checked', allowsNa: false })
+        Object.freeze({ key: 'infraPowerCables', label: 'Power Cables Checked' }),
+        Object.freeze({ key: 'infraDataCables', label: 'Data Cables Checked' }),
+        Object.freeze({ key: 'infraPowerSupplyUps', label: 'Power Supply / UPS Checked' })
       ])
     }),
     Object.freeze({
       key: 'digital',
       label: 'Digital Checking',
       items: Object.freeze([
-        Object.freeze({ key: 'infraFirmwareLatest', label: 'Firmware Version at latest', allowsNa: false })
+        Object.freeze({ key: 'infraFirmwareLatest', label: 'Firmware Version at latest' })
       ])
     })
   ]),
@@ -157,56 +157,56 @@ PMS.CONFIG = {
       key: 'hardware',
       label: 'Hardware Inspection',
       items: Object.freeze([
-        Object.freeze({ key: 'hardwarePhysicalInspection', label: 'Physical inspection completed', allowsNa: false }),
-        Object.freeze({ key: 'hardwareDisplay', label: 'Display checked', allowsNa: false }),
-        Object.freeze({ key: 'hardwareKeyboardMouse', label: 'Keyboard and mouse checked', allowsNa: false }),
-        Object.freeze({ key: 'hardwarePorts', label: 'Ports tested', allowsNa: false }),
-        Object.freeze({ key: 'hardwareBatteryCharger', label: 'Battery and charger checked', allowsNa: true }),
-        Object.freeze({ key: 'hardwareCameraAudio', label: 'Camera and audio checked', allowsNa: false })
+        Object.freeze({ key: 'hardwarePhysicalInspection', label: 'Physical inspection completed' }),
+        Object.freeze({ key: 'hardwareDisplay', label: 'Display checked' }),
+        Object.freeze({ key: 'hardwareKeyboardMouse', label: 'Keyboard and mouse checked' }),
+        Object.freeze({ key: 'hardwarePorts', label: 'Ports tested' }),
+        Object.freeze({ key: 'hardwareBatteryCharger', label: 'Battery and charger checked' }),
+        Object.freeze({ key: 'hardwareCameraAudio', label: 'Camera and audio checked' })
       ])
     }),
     Object.freeze({
       key: 'system',
       label: 'System Health',
       items: Object.freeze([
-        Object.freeze({ key: 'systemOsUpdated', label: 'Operating system updated', allowsNa: false }),
-        Object.freeze({ key: 'systemStorage', label: 'Storage checked', allowsNa: false }),
-        Object.freeze({ key: 'systemPerformance', label: 'Performance checked', allowsNa: false }),
-        Object.freeze({ key: 'systemStartup', label: 'Startup verified', allowsNa: false })
+        Object.freeze({ key: 'systemOsUpdated', label: 'Operating system updated' }),
+        Object.freeze({ key: 'systemStorage', label: 'Storage checked' }),
+        Object.freeze({ key: 'systemPerformance', label: 'Performance checked' }),
+        Object.freeze({ key: 'systemStartup', label: 'Startup verified' })
       ])
     }),
     Object.freeze({
       key: 'security',
       label: 'Security Controls',
       items: Object.freeze([
-        Object.freeze({ key: 'securityAntivirus', label: 'Antivirus verified', allowsNa: false }),
-        Object.freeze({ key: 'securityFirewall', label: 'Firewall verified', allowsNa: false }),
-        Object.freeze({ key: 'securityDiskEncryption', label: 'Disk encryption verified', allowsNa: true }),
-        Object.freeze({ key: 'securityScreenLock', label: 'Screen lock verified', allowsNa: false })
+        Object.freeze({ key: 'securityAntivirus', label: 'Antivirus verified' }),
+        Object.freeze({ key: 'securityFirewall', label: 'Firewall verified' }),
+        Object.freeze({ key: 'securityDiskEncryption', label: 'Disk encryption verified' }),
+        Object.freeze({ key: 'securityScreenLock', label: 'Screen lock verified' })
       ])
     }),
     Object.freeze({
       key: 'network',
       label: 'Network Connectivity',
       items: Object.freeze([
-        Object.freeze({ key: 'networkEthernet', label: 'Ethernet port tested', allowsNa: false }),
-        Object.freeze({ key: 'networkWifi', label: 'Wi-Fi adapter checked', allowsNa: false })
+        Object.freeze({ key: 'networkEthernet', label: 'Ethernet port tested' }),
+        Object.freeze({ key: 'networkWifi', label: 'Wi-Fi adapter checked' })
       ])
     }),
     Object.freeze({
       key: 'applications',
       label: 'Required Applications',
       items: Object.freeze([
-        Object.freeze({ key: 'applicationsRequiredSoftware', label: 'Required software verified', allowsNa: false })
+        Object.freeze({ key: 'applicationsRequiredSoftware', label: 'Required software verified' })
       ])
     }),
     Object.freeze({
       key: 'maintenance',
       label: 'Maintenance and Cleaning',
       items: Object.freeze([
-        Object.freeze({ key: 'maintenanceTemporaryFiles', label: 'Temporary files cleaned', allowsNa: false }),
-        Object.freeze({ key: 'maintenanceDeviceCleaned', label: 'Device cleaned', allowsNa: false }),
-        Object.freeze({ key: 'maintenanceHealthCheck', label: 'Health check completed', allowsNa: false })
+        Object.freeze({ key: 'maintenanceTemporaryFiles', label: 'Temporary files cleaned' }),
+        Object.freeze({ key: 'maintenanceDeviceCleaned', label: 'Device cleaned' }),
+        Object.freeze({ key: 'maintenanceHealthCheck', label: 'Health check completed' })
       ])
     })
   ]),

@@ -31,7 +31,7 @@
       tickets: {
         open: false, view: 'list', page: 1, totalPages: 1, direction: 'DESC',
         status: 'ACTIVE', token: 0, searchTimer: null, lastFocus: null,
-        currentId: '', sourceRecordId: '', statuses: [], priorities: [],
+        currentId: '', sourceRecordId: '', statuses: [], priorities: [], statusLabels: null,
         // Asset picker for the create form. Loaded per section on demand rather
         // than at bootstrap, and cached here so reopening the form is instant.
         assetCache: {}, assets: [], assetSection: '', assetsLoading: false,
@@ -90,7 +90,7 @@
           { key: 'displayChecked', label: 'Display checked' },
           { key: 'keyboardMouseChecked', label: 'Keyboard and mouse checked' },
           { key: 'portsTested', label: 'Ports tested' },
-          { key: 'batteryChargerChecked', label: 'Battery and charger checked', allowsNa: true },
+          { key: 'batteryChargerChecked', label: 'Battery and charger checked' },
           { key: 'cameraAudioChecked', label: 'Camera and audio checked' }
         ]
       },
@@ -112,7 +112,7 @@
         items: [
           { key: 'antivirusVerified', label: 'Antivirus verified' },
           { key: 'firewallVerified', label: 'Firewall verified' },
-          { key: 'diskEncryptionVerified', label: 'Disk encryption verified', allowsNa: true },
+          { key: 'diskEncryptionVerified', label: 'Disk encryption verified' },
           { key: 'screenLockVerified', label: 'Screen lock verified' }
         ]
       },
@@ -448,12 +448,12 @@
           description: normalizeText(pick(group, ['description', 'helpText', 'subtitle'], '')),
           items: toArray(items).map(function (item, itemIndex) {
             if (typeof item === 'string') {
-              return { key: item, label: item, allowsNa: false };
+              return { key: item, label: item };
             }
             return {
               key: normalizeText(pick(item, ['key', 'id', 'value'], 'item' + itemIndex)),
               label: normalizeText(pick(item, ['label', 'name', 'title', 'text'], 'Checklist item')),
-              allowsNa: Boolean(pick(item, ['allowsNa', 'allowNa', 'naAllowed', 'notApplicableAllowed'], false))
+              groupKey: pick(item, ['groupKey'], '')
             };
           }).filter(function (item) { return item.key; })
         };
@@ -479,7 +479,7 @@
                 return {
                   key: normalizeText(pick(item, ['key', 'id'], '')),
                   label: normalizeText(pick(item, ['label', 'name', 'title', 'text'], 'Checklist item')),
-                  allowsNa: Boolean(pick(item, ['allowsNa', 'allowNa', 'naAllowed'], false))
+                  groupKey: pick(item, ['groupKey'], '')
                 };
               })
             };
@@ -1375,13 +1375,12 @@
       MEDIUM: 'status-chip--warning',
       LOW: 'status-chip--neutral'
     };
-    // On hold and Cancelled are retired. A ticket filed before that change keeps
-    // its status and still shows under Needs attention or All, with its own chip.
+    // Open, On hold and Cancelled are retired. A ticket filed before that change
+    // keeps its status and still shows under Needs attention or All.
     var TICKET_TABS = [
       { value: 'ACTIVE', label: 'Needs attention' },
-      { value: 'OPEN', label: 'Open' },
       { value: 'IN_PROGRESS', label: 'In progress' },
-      { value: 'RESOLVED', label: 'Resolved' },
+      { value: 'RESOLVED', label: 'Closed' },
       { value: '', label: 'All' }
     ];
     var TICKET_DIRECTION_LABELS = {
@@ -1394,7 +1393,18 @@
       ticketId: ['Oldest first', 'Newest first']
     };
 
+    /*
+      Statuses read the way the server labels them, so RESOLVED shows as "Closed"
+      in one place rather than being special-cased everywhere. The map arrives
+      with any ticket list or detail; the fallback covers a first paint.
+    */
+    var TICKET_STATUS_LABELS = { IN_PROGRESS: 'In Progress', RESOLVED: 'Closed' };
+
     function ticketLabel(value) {
+      var token = normalizeText(value).toUpperCase().replace(/[\s-]+/g, '_');
+      var labels = state.tickets.statusLabels || {};
+      if (labels[token]) return labels[token];
+      if (TICKET_STATUS_LABELS[token]) return TICKET_STATUS_LABELS[token];
       var text = normalizeText(value).replace(/_/g, ' ').toLowerCase();
       return text ? text.charAt(0).toUpperCase() + text.slice(1) : '—';
     }
@@ -1562,6 +1572,9 @@
       state.tickets.totalPages = asNumber(payload.totalPages, 1) || 1;
       state.tickets.statuses = toArray(payload.filters && payload.filters.statuses);
       state.tickets.priorities = toArray(payload.filters && payload.filters.priorities);
+      if (payload.filters && payload.filters.statusLabels) {
+        state.tickets.statusLabels = payload.filters.statusLabels;
+      }
 
       setTicketsBusy(false);
       renderTicketTabs(counts);
@@ -3880,8 +3893,8 @@
         ? 'Attach firmware and configuration, backup, or checkpoint evidence for this asset. Both files are required before you can continue.'
         : 'Add every tagged peripheral included in this maintenance. Every field on this step is optional — you can continue without entering any tags.';
       byId('step-3-description').textContent = infra
-        ? 'All four physical and digital checks are required before you can continue.'
-        : 'Every check is required except the two marked Optional, which you may skip when they do not apply.';
+        ? 'All four checks need an answer: tick each one, or mark it Not done and say why.'
+        : 'Tick each check, or mark it Not done and say why. Every item needs an answer.';
       byId('modal-progress-title').textContent = infra ? 'PMS completion' : 'Checklist progress';
       byId('modal-progress').setAttribute('aria-label', infra ? 'Infrastructure PMS completion progress' : 'Questionnaire checklist progress');
     }
@@ -4222,14 +4235,8 @@
           checkbox.type = 'checkbox';
           checkbox.dataset.checklistKey = item.key;
           checkbox.addEventListener('change', function () {
-            state.checklistValues[item.key] = checkbox.checked ? 'DONE' : '';
-            row.classList.remove('is-na');
-            row.classList.remove('is-missing');
-            var na = row.querySelector('.na-toggle');
-            if (na) {
-              na.classList.remove('is-active');
-              na.setAttribute('aria-pressed', 'false');
-            }
+            setChecklistEntry(item.key, checkbox.checked ? { state: 'DONE', reason: '' } : { state: '', reason: '' });
+            updateChecklistInputs();
             markDirty();
             updateChecklistProgress();
           });
@@ -4240,31 +4247,49 @@
           label.appendChild(itemLabel);
           row.appendChild(label);
 
-          // Only items the schema marks allowsNa can be skipped; every other
-          // check has to be ticked before the step will advance. The control
-          // reads "Optional" because that is what it means to the technician,
-          // while the stored value stays 'NA' for the sheet and the server.
-          if (item.allowsNa) {
-            var naButton = document.createElement('button');
-            naButton.className = 'na-toggle';
-            naButton.type = 'button';
-            naButton.textContent = 'Optional';
-            naButton.setAttribute('aria-pressed', 'false');
-            naButton.setAttribute('aria-label', 'Mark ' + item.label + ' as optional and skip it');
-            naButton.addEventListener('click', function () {
-              var active = state.checklistValues[item.key] === 'NA';
-              state.checklistValues[item.key] = active ? '' : 'NA';
-              checkbox.checked = false;
-              checkbox.disabled = !active;
-              row.classList.toggle('is-na', !active);
-              row.classList.remove('is-missing');
-              naButton.classList.toggle('is-active', !active);
-              naButton.setAttribute('aria-pressed', String(!active));
-              markDirty();
-              updateChecklistProgress();
-            });
-            row.appendChild(naButton);
-          }
+          /*
+            Every check can be left unticked, but not silently: choosing "Not
+            done" reveals a reason box, and the reason is what makes it an answer.
+            Nothing is optional any more, so there is no per-item exemption.
+          */
+          var skipButton = document.createElement('button');
+          skipButton.className = 'na-toggle';
+          skipButton.type = 'button';
+          skipButton.textContent = 'Not done';
+          skipButton.setAttribute('aria-pressed', 'false');
+          skipButton.setAttribute('aria-label', 'Record a reason why ' + item.label + ' was not done');
+          skipButton.addEventListener('click', function () {
+            var current = checklistEntry(item.key);
+            if (current.state === 'NOT_DONE') {
+              setChecklistEntry(item.key, { state: '', reason: '' });
+            } else {
+              setChecklistEntry(item.key, { state: 'NOT_DONE', reason: current.reason });
+            }
+            updateChecklistInputs();
+            markDirty();
+            updateChecklistProgress();
+            var revealed = row.querySelector('.checklist-item__reason input');
+            if (revealed && !revealed.closest('.checklist-item__reason').hidden) revealed.focus();
+          });
+          row.appendChild(skipButton);
+
+          var reasonWrap = document.createElement('div');
+          reasonWrap.className = 'checklist-item__reason';
+          reasonWrap.hidden = true;
+          var reasonInput = document.createElement('input');
+          reasonInput.type = 'text';
+          reasonInput.maxLength = 500;
+          reasonInput.placeholder = 'Why was this not done?';
+          reasonInput.setAttribute('aria-label', 'Reason ' + item.label + ' was not done');
+          reasonInput.dataset.checklistReason = item.key;
+          reasonInput.addEventListener('input', function () {
+            setChecklistEntry(item.key, { state: 'NOT_DONE', reason: reasonInput.value });
+            row.classList.remove('is-missing');
+            markDirty();
+            updateChecklistProgress();
+          });
+          reasonWrap.appendChild(reasonInput);
+          row.appendChild(reasonWrap);
           items.appendChild(row);
         });
 
@@ -4276,30 +4301,87 @@
       updateChecklistProgress();
     }
 
+    /*
+       A checklist answer is a state plus, when it was not done, the reason. The
+       reason travels to the server inside the value itself, in the same grammar
+       the sheet stores, so no new column or payload shape was needed.
+       ---------------------------------------------------------------------- */
+
+    function checklistEntry(key) {
+      var entry = state.checklistValues[key];
+      if (entry && typeof entry === 'object') {
+        return { state: normalizeText(entry.state), reason: normalizeText(entry.reason) };
+      }
+      return parseChecklistValue(entry);
+    }
+
+    function setChecklistEntry(key, entry) {
+      state.checklistValues[key] = {
+        state: normalizeText(entry && entry.state),
+        reason: normalizeText(entry && entry.reason)
+      };
+    }
+
+    /** Mirrors PMS.Util.parseChecklistValue so a stored value round-trips. */
+    function parseChecklistValue(value) {
+      var text = normalizeText(value);
+      if (!text) return { state: '', reason: '' };
+      var upper = text.toUpperCase();
+      if (upper === 'DONE' || upper === 'TRUE' || upper === 'CHECKED') return { state: 'DONE', reason: '' };
+      if (upper === 'NA' || upper === 'N/A') return { state: 'NOT_DONE', reason: 'Not applicable' };
+      var match = /^NOT\s*DONE\s*[:\-\u2013]?\s*([\s\S]*)$/i.exec(text);
+      if (match) {
+        var stated = normalizeText(match[1]);
+        return { state: stated ? 'NOT_DONE' : '', reason: stated };
+      }
+      return { state: 'NOT_DONE', reason: text.slice(0, 500) };
+    }
+
+    /** Mirrors PMS.Util.formatChecklistValue. */
+    function formatChecklistValue(entry) {
+      if (entry.state === 'DONE') return 'DONE';
+      var reason = normalizeText(entry.reason);
+      return reason ? 'NOT DONE: ' + reason : '';
+    }
+
+    /** True when the item has an answer: ticked, or not done with a reason. */
+    function checklistAnswered(key) {
+      var entry = checklistEntry(key);
+      return entry.state === 'DONE' || (entry.state === 'NOT_DONE' && Boolean(entry.reason));
+    }
+
     function allChecklistItems() {
       return state.checklistGroups.reduce(function (items, group) { return items.concat(group.items); }, []);
     }
 
+    /*
+      Every item counts, and "completed" means answered rather than ticked: an
+      item left unticked with a reason is a legitimate answer. That keeps the
+      existing 100%-to-complete gate meaningful while allowing exceptions, and it
+      matches how the server counts.
+    */
     function calculateChecklistProgress(items) {
       var source = items || allChecklistItems();
-      var applicable = 0;
       var completed = 0;
-      var na = 0;
+      var checked = 0;
+      var notDone = 0;
       source.forEach(function (item) {
-        var value = state.checklistValues[item.key] || '';
-        if (value === 'NA' && item.allowsNa) {
-          na += 1;
-          return;
+        var entry = checklistEntry(item.key);
+        if (entry.state === 'DONE') {
+          checked += 1;
+          completed += 1;
+        } else if (entry.state === 'NOT_DONE' && entry.reason) {
+          notDone += 1;
+          completed += 1;
         }
-        applicable += 1;
-        if (value === 'DONE') completed += 1;
       });
       return {
         total: source.length,
-        applicable: applicable,
+        applicable: source.length,
         completed: completed,
-        na: na,
-        percent: applicable === 0 ? 100 : Math.round(completed / applicable * 100)
+        checked: checked,
+        notDone: notDone,
+        percent: source.length === 0 ? 100 : Math.round(completed / source.length * 100)
       };
     }
 
@@ -4313,7 +4395,8 @@
         total: checklist.total + 2,
         applicable: applicable,
         completed: completed,
-        na: checklist.na,
+        checked: checklist.checked,
+        notDone: checklist.notDone,
         evidenceCompleted: evidenceCompleted,
         percent: applicable ? Math.round(completed / applicable * 100) : 0
       };
@@ -4323,16 +4406,21 @@
       allChecklistItems().forEach(function (item) {
         var row = document.querySelector('[data-checklist-item="' + CSS.escape(item.key) + '"]');
         if (!row) return;
+        var entry = checklistEntry(item.key);
+        var notDone = entry.state === 'NOT_DONE';
         var checkbox = row.querySelector('input[type="checkbox"]');
-        var value = state.checklistValues[item.key] || '';
-        checkbox.checked = value === 'DONE';
-        checkbox.disabled = value === 'NA';
-        row.classList.toggle('is-na', value === 'NA');
-        var na = row.querySelector('.na-toggle');
-        if (na) {
-          na.classList.toggle('is-active', value === 'NA');
-          na.setAttribute('aria-pressed', String(value === 'NA'));
+        checkbox.checked = entry.state === 'DONE';
+        checkbox.disabled = notDone;
+        row.classList.toggle('is-na', notDone);
+        var skip = row.querySelector('.na-toggle');
+        if (skip) {
+          skip.classList.toggle('is-active', notDone);
+          skip.setAttribute('aria-pressed', String(notDone));
         }
+        var reasonWrap = row.querySelector('.checklist-item__reason');
+        var reasonInput = reasonWrap ? reasonWrap.querySelector('input') : null;
+        if (reasonWrap) reasonWrap.hidden = !notDone;
+        if (reasonInput && reasonInput.value !== entry.reason) reasonInput.value = entry.reason;
       });
     }
 
@@ -4346,8 +4434,8 @@
       });
 
       var overall = calculateFormProgress();
-      var label = overall.completed + ' of ' + overall.applicable + ' complete';
-      if (overall.na) label += ' · ' + overall.na + ' optional';
+      var label = overall.completed + ' of ' + overall.applicable + ' answered';
+      if (overall.notDone) label += ' · ' + overall.notDone + ' not done';
       byId('modal-progress-label').textContent = label;
       setProgress(byId('modal-progress'), byId('modal-progress-fill'), overall.percent);
       byId('review-checklist').textContent = label;
@@ -4356,7 +4444,7 @@
       byId('review-status-chip').className = 'status-chip ' + (overall.percent === 100 ? 'status-chip--success' : 'status-chip--warning');
       byId('review-hint').textContent = overall.percent === 100
         ? (isInfraSection() ? 'All required maintenance checks and evidence are ready. Finish the assessment and select Complete PMS.' : 'The checklist is complete. Finish the required assessment and select Complete PMS.')
-        : (isInfraSection() ? 'Complete all four checks and attach both evidence files before finalizing PMS.' : 'Tick every required check before finalizing PMS. Only the two optional checks may be skipped.');
+        : (isInfraSection() ? 'Answer all four checks and attach both evidence files before finalizing PMS.' : 'Every checklist item needs an answer: tick it, or mark it Not done with a reason.');
       setProgress(byId('review-progress'), byId('review-progress-fill'), overall.percent);
       updateFooterActions();
     }
@@ -4365,7 +4453,7 @@
       state.peripheralValues = {};
       state.checklistValues = {};
       state.peripherals.forEach(function (item) { state.peripheralValues[item.key] = []; });
-      allChecklistItems().forEach(function (item) { state.checklistValues[item.key] = ''; });
+      allChecklistItems().forEach(function (item) { setChecklistEntry(item.key, { state: '', reason: '' }); });
       state.currentStep = 1;
       state.recordId = '';
       state.idempotencyKey = createIdempotencyKey();
@@ -4473,8 +4561,8 @@
 
       var savedChecklist = source.checklist || {};
       allChecklistItems().forEach(function (item) {
-        var value = normalizeText(savedChecklist[item.key]).toUpperCase();
-        state.checklistValues[item.key] = value === 'DONE' || value === 'NA' ? value : '';
+        // Stored values carry their reason, so a resumed draft keeps it.
+        setChecklistEntry(item.key, parseChecklistValue(savedChecklist[item.key]));
       });
 
       var assessment = source.assessment || {};
@@ -4689,15 +4777,12 @@
 
     /**
      * Every checklist item must be ticked, except the ones the schema marks as
-     * optional, which may be skipped with the Optional control.
+     * not done, and an item marked not done needs its reason filled in.
      */
     function validateChecklistComplete(focusFirst) {
       var outstanding = [];
       allChecklistItems().forEach(function (item) {
-        var value = state.checklistValues[item.key] || '';
-        if (value === 'DONE') return;
-        if (value === 'NA' && item.allowsNa) return;
-        outstanding.push(item);
+        if (!checklistAnswered(item.key)) outstanding.push(item);
       });
 
       document.querySelectorAll('.checklist-item.is-missing').forEach(function (row) {
@@ -4909,7 +4994,8 @@
       });
       var checklist = {};
       allChecklistItems().forEach(function (item) {
-        checklist[item.key] = state.checklistValues[item.key] || '';
+        // The reason rides inside the value, in the grammar the sheet stores.
+        checklist[item.key] = formatChecklistValue(checklistEntry(item.key));
       });
       return {
         recordId: state.recordId || undefined,

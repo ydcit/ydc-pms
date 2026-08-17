@@ -120,7 +120,6 @@ PMS.Util = (function () {
         result.push({
           key: item.key,
           label: item.label,
-          allowsNa: item.allowsNa,
           groupKey: group.key,
           groupLabel: group.label
         });
@@ -140,6 +139,40 @@ PMS.Util = (function () {
     var value = String(text || '');
     var separator = value.lastIndexOf('—');
     return separator >= 0 ? value.slice(separator + 1).trim() : value.trim();
+  }
+
+  var CHECKLIST_NOT_DONE = 'NOT DONE';
+  var CHECKLIST_REASON_MAX = 500;
+
+  /**
+   * Reads a checklist cell.
+   *
+   * The grammar lives in the cell itself, so recording a reason needed no new
+   * column: "DONE", or "NOT DONE: why", or blank for a question nobody answered
+   * yet. "NA" is still accepted because records written before reasons were
+   * required used it, and a bare note is treated as a reason, which is what a
+   * hand-typed remark in the cell means.
+   */
+  function parseChecklistValue(value) {
+    var text = cleanText(value, CHECKLIST_REASON_MAX + 40);
+    if (!text) return { state: '', reason: '' };
+    var upper = text.toUpperCase();
+    if (upper === 'DONE' || upper === 'TRUE' || upper === 'CHECKED') return { state: 'DONE', reason: '' };
+    if (upper === 'NA' || upper === 'N/A') return { state: 'NOT_DONE', reason: 'Not applicable' };
+    var match = /^NOT\s*DONE\s*[:\-\u2013]?\s*([\s\S]*)$/i.exec(text);
+    if (match) {
+      var stated = cleanText(match[1], CHECKLIST_REASON_MAX);
+      // Not done without a reason is not an answer, so it stays unanswered.
+      return { state: stated ? 'NOT_DONE' : '', reason: stated };
+    }
+    return { state: 'NOT_DONE', reason: cleanText(text, CHECKLIST_REASON_MAX) };
+  }
+
+  /** Writes a checklist cell in the grammar parseChecklistValue reads. */
+  function formatChecklistValue(state, reason) {
+    if (cleanText(state, 20).toUpperCase() === 'DONE') return 'DONE';
+    var text = cleanText(reason, CHECKLIST_REASON_MAX);
+    return text ? CHECKLIST_NOT_DONE + ': ' + text : '';
   }
 
   /** Every value the application may write into a cycle status cell. */
@@ -223,6 +256,8 @@ PMS.Util = (function () {
     allChecklistItems: allChecklistItems,
     progressText: progressText,
     completionState: completionState,
+    parseChecklistValue: parseChecklistValue,
+    formatChecklistValue: formatChecklistValue,
     trackerStatusValues: trackerStatusValues,
     isTrackerComplete: isTrackerComplete,
     isTrackerAwaitingRepair: isTrackerAwaitingRepair,

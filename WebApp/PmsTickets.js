@@ -32,19 +32,35 @@ PMS.Tickets = (function () {
   // oversized response, so the row count is capped and the caller is told.
   var LIST_ALL_CAP = 1000;
 
-  // Statuses a user may choose. The workflow is deliberately short: it is open,
-  // somebody is on it, or it is done.
-  var STATUSES = Object.freeze(['OPEN', 'IN_PROGRESS', 'RESOLVED']);
   /*
-    Retired statuses that tickets filed before this change may still carry.
-
-    They are still parsed, displayed, counted and grouped, because dropping them
-    from recognition would make reading an older ticket silently rewrite it to
-    OPEN. They are never offered as a choice, so such a ticket simply moves to one
-    of the current statuses the next time somebody updates it.
+    Statuses a user may choose. A ticket exists because somebody is fixing
+    something, so there are only two states worth recording: it is being worked,
+    or it is closed. It starts as IN_PROGRESS the moment it is filed and can be
+    closed immediately.
   */
-  var RETIRED_STATUSES = Object.freeze(['ON_HOLD', 'CANCELLED']);
+  var STATUSES = Object.freeze(['IN_PROGRESS', 'RESOLVED']);
+  /*
+    Retired statuses that tickets filed earlier may still carry.
+
+    They are still parsed, displayed, counted, grouped and mapped onto the
+    tracker, because dropping them from recognition would make simply reading an
+    older ticket rewrite it. They are never offered as a choice, so such a ticket
+    moves onto the current vocabulary the next time somebody updates it.
+  */
+  var RETIRED_STATUSES = Object.freeze(['OPEN', 'ON_HOLD', 'CANCELLED']);
   var KNOWN_STATUSES = Object.freeze(STATUSES.concat(RETIRED_STATUSES));
+  /*
+    How each status reads to a person. RESOLVED is stored rather than CLOSED
+    because that is what existing rows and the tracker mapping already use;
+    only the wording changed.
+  */
+  var STATUS_LABELS = Object.freeze({
+    IN_PROGRESS: 'In Progress',
+    RESOLVED: 'Closed',
+    OPEN: 'Open',
+    ON_HOLD: 'On Hold',
+    CANCELLED: 'Cancelled'
+  });
   // Statuses that still need someone's attention. Used for the dashboard count
   // and the default filter, so "for fixing" is answerable at a glance.
   var ACTIVE_STATUSES = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD']);
@@ -247,6 +263,15 @@ PMS.Tickets = (function () {
 
   function statusToken(value) {
     return PMS.Util.cleanText(value, 30).toUpperCase().replace(/[\s-]+/g, '_');
+  }
+
+  /** How a status reads to a person, for the interface and for email. */
+  function statusLabel(value) {
+    var token = statusToken(value);
+    if (STATUS_LABELS[token]) return STATUS_LABELS[token];
+    if (!token) return '';
+    var text = token.replace(/_/g, ' ').toLowerCase();
+    return text.charAt(0).toUpperCase() + text.slice(1);
   }
 
   /** Parses a stored status, including the retired ones. */
@@ -829,6 +854,7 @@ PMS.Tickets = (function () {
       counts: counts,
       filters: {
         statuses: STATUSES.slice(),
+        statusLabels: Object.assign({}, STATUS_LABELS),
         priorities: PRIORITIES.slice(),
         sections: Object.keys(sectionSet).sort()
       }
@@ -862,7 +888,14 @@ PMS.Tickets = (function () {
       };
     });
 
-    return { ok: true, ticket: match, history: history, statuses: STATUSES.slice(), priorities: PRIORITIES.slice() };
+    return {
+      ok: true,
+      ticket: match,
+      history: history,
+      statuses: STATUSES.slice(),
+      statusLabels: Object.assign({}, STATUS_LABELS),
+      priorities: PRIORITIES.slice()
+    };
   }
 
   /** Cheap counts for the dashboard badge. */
@@ -1010,6 +1043,8 @@ PMS.Tickets = (function () {
   return {
     ensureSheets: ensureSheets,
     statuses: function () { return STATUSES.slice(); },
+    statusLabels: function () { return Object.assign({}, STATUS_LABELS); },
+    statusLabel: statusLabel,
     activeStatuses: function () { return ACTIVE_STATUSES.slice(); },
     priorities: function () { return PRIORITIES.slice(); },
     actions: function () { return ACTIONS.slice(); },

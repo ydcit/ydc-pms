@@ -312,21 +312,49 @@ PMS.Notify = (function () {
     return text.charAt(0).toUpperCase() + text.slice(1);
   }
 
-  /** Rows are [label, value] pairs; long values wrap in their own block. */
+  var TABLE_OPEN = '<table role="presentation" cellpadding="0" cellspacing="0" ' +
+    'style="border-collapse:collapse;width:100%;max-width:680px;margin:0 0 18px;' +
+    'font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#202124;border:1px solid #dadce0;">';
+  var CELL = 'padding:8px 12px;border:1px solid #dadce0;vertical-align:top;';
+  var LABEL_CELL = CELL + 'width:190px;background:#f8f9fa;color:#3c4043;font-weight:bold;';
+
+  /**
+   * A bordered two-column table of [label, value] pairs. Gmail strips most CSS,
+   * so the borders are inline on every cell rather than set once on the table.
+   */
   function detailTable(rows) {
-    var html = ['<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:640px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#202124;">'];
+    var html = [TABLE_OPEN];
     rows.forEach(function (row) {
       if (!row) return;
       html.push(
         '<tr>' +
-          '<td style="padding:7px 12px 7px 0;vertical-align:top;white-space:nowrap;color:#5f6368;border-bottom:1px solid #e8eaed;font-weight:bold;">' +
-            escapeHtml(row[0]) +
-          '</td>' +
-          '<td style="padding:7px 0;vertical-align:top;border-bottom:1px solid #e8eaed;white-space:pre-wrap;">' +
-            escapeHtml(row[1]) +
-          '</td>' +
+          '<td style="' + LABEL_CELL + '">' + escapeHtml(row[0]) + '</td>' +
+          '<td style="' + CELL + 'white-space:pre-wrap;">' + escapeHtml(row[1]) + '</td>' +
         '</tr>'
       );
+    });
+    html.push('</table>');
+    return html.join('');
+  }
+
+  /**
+   * A bordered table with its own headings, for the checklist. Rows are arrays
+   * of cell values, and a row may carry a highlight flag.
+   */
+  function gridTable(headings, rows) {
+    var html = [TABLE_OPEN, '<tr>'];
+    headings.forEach(function (heading) {
+      html.push('<td style="' + LABEL_CELL + 'width:auto;">' + escapeHtml(heading) + '</td>');
+    });
+    html.push('</tr>');
+    rows.forEach(function (row) {
+      var cells = row.cells || row;
+      var tint = row.highlight ? 'background:#fef7e0;' : '';
+      html.push('<tr>');
+      cells.forEach(function (cell) {
+        html.push('<td style="' + CELL + tint + 'white-space:pre-wrap;">' + escapeHtml(cell) + '</td>');
+      });
+      html.push('</tr>');
     });
     html.push('</table>');
     return html.join('');
@@ -337,6 +365,18 @@ PMS.Notify = (function () {
       return row[0] + ': ' + row[1];
     }).join('\n');
   }
+
+  function plainGrid(headings, rows) {
+    return [headings.join(' | ')].concat(rows.map(function (row) {
+      return (row.cells || row).join(' | ');
+    })).join('\n');
+  }
+
+  /*
+    Subjects and headings are written in Title Case at the point of use rather
+    than run through a converter. A converter has to guess at small words and
+    gets "In Progress" wrong, and every string here is authored anyway.
+  */
 
   function wrapBody(title, subtitle, tableHtml, footerNote) {
     var url = webAppUrl();
@@ -392,12 +432,50 @@ PMS.Notify = (function () {
       var tickets = PMS.Tickets.forRecord(recordId);
       if (!tickets.length) return '';
       return tickets.map(function (ticket) {
-        return ticket.ticketId + ' — ' + ticket.status + ' (' + ticket.priority + ')';
+        return ticket.ticketId + ' — ' + PMS.Tickets.statusLabel(ticket.status);
       }).join('\n');
     } catch (error) {
       console.warn('Linked tickets could not be read for the notification: ' + error.message);
       return '';
     }
+  }
+
+  /**
+   * The checklist itself, item by item, because "20 of 20" says nothing about
+   * what was actually done. Anything left unticked carries its reason and is
+   * tinted, so the exceptions are what the eye lands on.
+   */
+  function checklistSection(record) {
+    var items;
+    try {
+      items = PMS.Util.allChecklistItems(record.itSection);
+    } catch (error) {
+      console.warn('The checklist could not be read for the notification: ' + error.message);
+      return null;
+    }
+    if (!items.length) return null;
+    var rows = [];
+    var checked = 0;
+    var notDone = 0;
+    items.forEach(function (item) {
+      var entry = PMS.Util.parseChecklistValue(record[item.key]);
+      if (entry.state === 'DONE') checked += 1;
+      if (entry.state === 'NOT_DONE') notDone += 1;
+      rows.push({
+        cells: [
+          item.groupLabel || '',
+          item.label,
+          entry.state === 'DONE' ? 'Checked' : entry.state === 'NOT_DONE' ? 'Not Done' : 'No Answer',
+          entry.reason || ''
+        ],
+        highlight: entry.state !== 'DONE'
+      });
+    });
+    return {
+      headings: ['Group', 'Check', 'Result', 'Reason'],
+      rows: rows,
+      summary: checked + ' checked, ' + notDone + ' not done, ' + items.length + ' total'
+    };
   }
 
   /**
@@ -418,33 +496,37 @@ PMS.Notify = (function () {
       var assetTag = fieldText(source.assetTag);
       var linkedTickets = ticketSummaryLines(source.recordId);
       var trackerStatus = PMS.Util.cleanText(options.trackerStatus, 60) || PMS.CONFIG.TRACKER_COMPLETED_VALUE;
-      var progress = PMS.Util.cleanText(source.completedItems, 20) !== ''
-        ? source.completedItems + ' of ' + source.applicableItems + ' checks complete'
-        : '';
+      var checklist = checklistSection(source);
 
       var rows = [
         ['Asset', assetTag],
         ['IT Section', fieldText(sectionLabel)],
         ['Cycle', fieldText(source.cycleId)],
-        ['Maintenance date', fieldText(maintenanceDateText(source.maintenanceDate))],
-        ['Technician', fieldText(source.technicianName) + ' <' + fieldText(source.technicianEmail, '') + '>'],
-        progress ? ['Checklist', progress] : null,
-        ['Assessment result', fieldText(source.assessmentResult)],
-        ['Asset findings', fieldText(source.assetFindings)],
-        ['Action taken', fieldText(source.actionTaken)],
+        ['Maintenance Date', fieldText(maintenanceDateText(source.maintenanceDate))],
+        ['IT In-Charge', fieldText(source.technicianName) + ' <' + fieldText(source.technicianEmail, '') + '>'],
+        checklist ? ['Checklist', checklist.summary] : null,
+        ['Assessment Result', fieldText(source.assessmentResult)],
+        ['Asset Findings', fieldText(source.assetFindings)],
+        ['Action Taken', fieldText(source.actionTaken)],
         ['Recommendation', fieldText(source.recommendation)],
-        ['Tracker status', trackerStatus],
-        linkedTickets ? ['Findings tickets', linkedTickets] : null,
+        ['Tracker Status', trackerStatus],
+        linkedTickets ? ['Findings Tickets', linkedTickets] : null,
         ['Record ID', fieldText(source.recordId)]
       ];
 
-      var subject = 'PMS completed · ' + assetTag + ' · ' + fieldText(source.cycleId, '');
-      var subtitle = sectionLabel + ' · completed by ' + fieldText(source.technicianName);
+      var title = 'Preventive Maintenance Completed';
+      var subject = 'PMS Completed · ' + assetTag + ' · ' + fieldText(source.cycleId, '');
+      var subtitle = sectionLabel + ' · Completed by ' + fieldText(source.technicianName);
+      var html = detailTable(rows) +
+        (checklist ? '<h3 style="margin:22px 0 8px;font-size:14px;font-family:Arial,Helvetica,sans-serif;">Maintenance Checklist</h3>' +
+          gridTable(checklist.headings, checklist.rows) : '');
+      var plain = title + '\n\n' + plainTable(rows) +
+        (checklist ? '\n\nMaintenance Checklist\n' + plainGrid(checklist.headings, checklist.rows) : '');
       return send(
         subject,
-        wrapBody('Preventive maintenance completed', subtitle, detailTable(rows),
+        wrapBody(title, subtitle, html,
           'Sent automatically by YDC PMS. Manage recipients in the ' + sheetName() + ' sheet.'),
-        'Preventive maintenance completed\n\n' + plainTable(rows),
+        plain,
         recipients
       );
     } catch (error) {
@@ -462,11 +544,25 @@ PMS.Notify = (function () {
 
   /* --------------------------------------------------------- ticket events */
 
-  var TICKET_ACTION_TITLES = Object.freeze({
-    CREATED: 'Findings ticket filed',
-    STATUS_CHANGED: 'Findings ticket status changed',
-    COMMENT: 'Findings ticket updated'
-  });
+  /**
+   * Subjects lead with the ticket and its state, because that is what a reader
+   * scanning an inbox needs: "TKT-2026-0003 Was Closed" rather than a generic
+   * "status changed".
+   */
+  function ticketHeadline(action, ticket) {
+    var label = statusText(ticket.status);
+    if (action === 'CREATED') return 'Was Filed · ' + label;
+    if (action === 'STATUS_CHANGED') return 'Was ' + label;
+    return 'Was Updated · Still ' + label;
+  }
+
+  function statusText(value) {
+    try {
+      return PMS.Tickets.statusLabel(value);
+    } catch (error) {
+      return humanize(value);
+    }
+  }
 
   /**
    * Sent for every ticket movement: filing, a status change, or a progress note.
@@ -487,27 +583,29 @@ PMS.Notify = (function () {
       var ticketId = fieldText(ticket.ticketId);
       var actor = fieldText(details.actorName || ticket.updatedByName || ticket.updatedBy);
       var transition = action === 'CREATED'
-        ? humanize(ticket.status)
-        : humanize(details.fromStatus, 'Unknown') + ' → ' + humanize(ticket.status);
+        ? statusText(ticket.status)
+        : statusText(details.fromStatus) + ' → ' + statusText(ticket.status);
 
       var rows = [
         ['Ticket', ticketId],
+        ['Status', transition],
         ['Asset', fieldText(ticket.assetTag)],
         ['IT Section', fieldText(sectionLabel)],
-        ['Status', transition],
-        ['Priority', humanize(ticket.priority)],
-        ['Changed by', actor],
+        ['Changed By', actor],
         ['Remarks', fieldText(details.remarks || ticket.lastRemarks)],
         ['Findings', fieldText(ticket.findings)],
-        ['Action required', fieldText(ticket.actionRequired)],
+        ['Action Required', fieldText(ticket.actionRequired)],
         ['Location', fieldText(ticket.location)],
-        ticket.sourceRecordId ? ['From PMS record', fieldText(ticket.sourceRecordId)] : null,
-        details.trackerStatus ? ['Tracker now shows', PMS.Util.cleanText(details.trackerStatus, 60)] : null,
-        ['Changes so far', fieldText(ticket.changeCount, '1')]
+        ticket.sourceRecordId ? ['From PMS Record', fieldText(ticket.sourceRecordId)] : null,
+        details.trackerStatus ? ['Tracker Now Shows', PMS.Util.cleanText(details.trackerStatus, 60)] : null,
+        ['Changes So Far', fieldText(ticket.changeCount, '1')]
       ];
 
-      var title = TICKET_ACTION_TITLES[action] || TICKET_ACTION_TITLES.COMMENT;
-      var subject = title.replace('Findings ticket', ticketId) + ' · ' + fieldText(ticket.assetTag);
+      var headline = ticketHeadline(action, ticket);
+      var subject = ticketId + ' ' + headline + ' · ' + fieldText(ticket.assetTag);
+      var title = 'Findings Ticket ' + (action === 'CREATED'
+        ? 'Filed'
+        : action === 'STATUS_CHANGED' ? 'Now ' + statusText(ticket.status) : 'Updated');
       return send(
         subject,
         wrapBody(title, sectionLabel + ' · ' + fieldText(ticket.summary), detailTable(rows),
@@ -569,16 +667,16 @@ PMS.Notify = (function () {
       return { ok: false, sent: false, reason: 'NO_RECIPIENTS', message: 'Add at least one active recipient first.' };
     }
     var rows = [
-      ['Test requested by', actor],
-      ['Sent at', PMS.Util.nowIso()],
+      ['Test Requested By', actor],
+      ['Sent At', PMS.Util.nowIso()],
       ['Recipients', String(recipients.length)],
-      ['Quota remaining', String(quotaRemaining())]
+      ['Quota Remaining', String(quotaRemaining())]
     ];
     var result = send(
-      'Notification test',
-      wrapBody('YDC PMS notification test', 'If you received this, notifications are configured correctly.',
+      'Notification Test',
+      wrapBody('YDC PMS Notification Test', 'If you received this, notifications are configured correctly.',
         detailTable(rows), 'Sent automatically by YDC PMS.'),
-      'YDC PMS notification test\n\n' + plainTable(rows),
+      'YDC PMS Notification Test\n\n' + plainTable(rows),
       recipients
     );
     result.addresses = recipients.map(function (recipient) { return recipient.email; });
