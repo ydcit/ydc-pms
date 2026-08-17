@@ -168,6 +168,14 @@
               </div>
             </dl>
 
+            <!--
+              Repairs still outstanding on this asset, including ones raised in an
+              earlier cycle. Read-only on purpose: this is context for the visit
+              being recorded, and sending the technician off to another dialog
+              mid-form would risk the work in progress.
+            -->
+            <div class="asset-tickets" id="selected-asset-tickets" hidden aria-live="polite"></div>
+
             <label class="check-control check-control--boxed" id="location-incorrect-control" for="location-incorrect">
               <input id="location-incorrect" type="checkbox">
               <span>The asset is currently at a different location</span>
@@ -366,9 +374,9 @@
             <div class="record-ticket__body" id="record-ticket-body" hidden>
               <!--
                 Nothing here duplicates the record. The server copies the findings
-                and the required action from it, and the ticket starts as In
-                progress at normal priority; both are changed from the ticket's own
-                page afterwards. All this panel needs is optional context.
+                and the required action from it, and the ticket starts In Progress
+                and is closed from its own page afterwards. All this panel needs is
+                optional context.
               -->
               <div class="record-ticket__derived" id="record-ticket-derived" aria-live="polite"></div>
 

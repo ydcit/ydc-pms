@@ -38,14 +38,6 @@
           </div>
         </div>
 
-        <div class="field archive-toolbar__filter">
-          <label class="sr-only" for="tickets-priority">Priority</label>
-          <div class="select-wrap">
-            <select id="tickets-priority"><option value="">All priorities</option></select>
-            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
-          </div>
-        </div>
-
         <div class="field archive-toolbar__filter" id="tickets-section-wrap">
           <label class="sr-only" for="tickets-section">IT section</label>
           <div class="select-wrap">
@@ -62,7 +54,6 @@
             <select id="tickets-sort">
               <option value="updatedAt">Last updated</option>
               <option value="createdAt">Date filed</option>
-              <option value="priority">Priority</option>
               <option value="status">Status</option>
               <option value="assetTag">Asset tag</option>
               <option value="section">IT section</option>
@@ -102,7 +93,6 @@
                 <th scope="col">Ticket</th>
                 <th scope="col">Asset</th>
                 <th scope="col">Status</th>
-                <th scope="col">Priority</th>
                 <th scope="col">IT section</th>
                 <th scope="col">Last update</th>
                 <th scope="col"><span class="sr-only">Actions</span></th>
@@ -140,8 +130,7 @@
               <h2 id="ticket-detail-summary">—</h2>
             </div>
             <div class="ticket-detail__chips">
-              <span class="status-chip" id="ticket-detail-status">OPEN</span>
-              <span class="status-chip status-chip--neutral" id="ticket-detail-priority">MEDIUM</span>
+              <span class="status-chip" id="ticket-detail-status">In Progress</span>
             </div>
           </div>
 
@@ -169,22 +158,13 @@
           <p class="ticket-update__hint">
             Any PMS user can move a ticket along. Remarks are required and are kept permanently in the ticket history.
           </p>
-          <div class="field-grid">
-            <div class="field">
-              <label for="ticket-update-status">Status</label>
-              <div class="select-wrap">
-                <select id="ticket-update-status"></select>
-                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
-              </div>
-              <p class="field-help">Leave unchanged to add a progress note instead.</p>
+          <div class="field">
+            <label for="ticket-update-status">Status</label>
+            <div class="select-wrap">
+              <select id="ticket-update-status"></select>
+              <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
             </div>
-            <div class="field">
-              <label for="ticket-update-priority">Priority</label>
-              <div class="select-wrap">
-                <select id="ticket-update-priority"></select>
-                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
-              </div>
-            </div>
+            <p class="field-help">Leave unchanged to add a progress note instead.</p>
           </div>
           <div class="field">
             <label for="ticket-update-remarks">Remarks <span class="required-mark" aria-hidden="true">*</span></label>
@@ -253,14 +233,14 @@
           </div>
 
           <!--
-            No status or priority picker here on purpose. A ticket is filed
-            because somebody is going to fix the thing, so it starts as In
-            progress; both are changed from the ticket's own page afterwards.
+            No status picker here on purpose. A ticket is filed because somebody
+            is going to fix the thing, so it starts In Progress and is closed
+            from the ticket's own page.
           -->
           <div class="field">
             <label for="ticket-create-location">Location</label>
             <input id="ticket-create-location" type="text" autocomplete="off" maxlength="200" placeholder="Where the asset is now">
-            <p class="field-help">Filed as In progress. Status and priority are changed on the ticket itself.</p>
+            <p class="field-help">Filed as In Progress. The status is changed on the ticket itself.</p>
           </div>
 
           <div class="field">

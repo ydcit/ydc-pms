@@ -65,6 +65,13 @@ PMS.Tickets = (function () {
   // and the default filter, so "for fixing" is answerable at a glance.
   var ACTIVE_STATUSES = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD']);
   var CLOSED_STATUSES = Object.freeze(['RESOLVED', 'CANCELLED']);
+  /*
+    Priority is no longer part of the product: nobody triaged by it, so it was
+    one more field to fill in for no decision. The vocabulary and the column
+    survive because the column is in the sheet header that verifyHeaders checks,
+    and every existing ticket has a value in it. New tickets get MEDIUM and it
+    is never read back, shown or sorted on.
+  */
   var PRIORITIES = Object.freeze(['LOW', 'MEDIUM', 'HIGH']);
   var ACTIONS = Object.freeze(['CREATED', 'STATUS_CHANGED', 'COMMENT']);
 
@@ -707,7 +714,6 @@ PMS.Tickets = (function () {
     createdAt: ['createdAt', 'ticketId'],
     ticketId: ['ticketId', 'createdAt'],
     status: ['status', 'updatedAt'],
-    priority: ['priorityRank', 'updatedAt'],
     assetTag: ['assetTag', 'updatedAt'],
     section: ['section', 'updatedAt']
   });
@@ -767,7 +773,6 @@ PMS.Tickets = (function () {
     });
 
     var status = PMS.Util.cleanText(request.status, 30).toUpperCase().replace(/[\s-]+/g, '_');
-    var priority = PMS.Util.cleanText(request.priority, 20).toUpperCase();
     var section = PMS.Util.cleanText(request.section, 40).toUpperCase();
     var search = PMS.Util.cleanText(request.search, 120).toUpperCase();
 
@@ -778,18 +783,12 @@ PMS.Tickets = (function () {
       } else if (status && STATUSES.indexOf(status) >= 0) {
         if (ticket.status !== status) return false;
       }
-      if (priority && ticket.priority !== priority) return false;
       if (section && ticket.section !== section) return false;
       if (!search) return true;
       return [
         ticket.ticketId, ticket.assetTag, ticket.location, ticket.summary,
         ticket.findings, ticket.createdByName, ticket.updatedByName, ticket.sourceRecordId
       ].join(' ').toUpperCase().indexOf(search) >= 0;
-    });
-
-    // Priority sorts by severity, not alphabetically: HIGH must lead.
-    filtered.forEach(function (ticket) {
-      ticket.priorityRank = PRIORITIES.indexOf(ticket.priority);
     });
 
     var sortKey = SORTS[PMS.Util.cleanText(request.sort, 40)] ? PMS.Util.cleanText(request.sort, 40) : 'updatedAt';
@@ -822,7 +821,6 @@ PMS.Tickets = (function () {
         return {
           ticketId: ticket.ticketId,
           status: ticket.status,
-          priority: ticket.priority,
           section: ticket.section,
           assetTag: ticket.assetTag,
           location: ticket.location,
@@ -855,7 +853,6 @@ PMS.Tickets = (function () {
       filters: {
         statuses: STATUSES.slice(),
         statusLabels: Object.assign({}, STATUS_LABELS),
-        priorities: PRIORITIES.slice(),
         sections: Object.keys(sectionSet).sort()
       }
     };
@@ -893,8 +890,7 @@ PMS.Tickets = (function () {
       ticket: match,
       history: history,
       statuses: STATUSES.slice(),
-      statusLabels: Object.assign({}, STATUS_LABELS),
-      priorities: PRIORITIES.slice()
+      statusLabels: Object.assign({}, STATUS_LABELS)
     };
   }
 
@@ -920,7 +916,6 @@ PMS.Tickets = (function () {
         payload.ticket = full.ticket;
         payload.history = full.history;
         payload.statuses = full.statuses;
-        payload.priorities = full.priorities;
       }
       payload.list = list(context, listOptions || {});
     } catch (error) {
@@ -998,7 +993,7 @@ PMS.Tickets = (function () {
       return {
         ticketId: ticket.ticketId,
         status: ticket.status,
-        priority: ticket.priority,
+        statusLabel: statusLabel(ticket.status),
         summary: ticket.summary,
         isActive: ticket.isActive,
         updatedAt: ticket.updatedAt
@@ -1008,6 +1003,68 @@ PMS.Tickets = (function () {
 
   function hasForRecord(recordId) {
     return forRecord(recordId).length > 0;
+  }
+
+  /**
+   * Unresolved tickets for a set of asset tags, keyed by tag.
+   *
+   * Takes a list rather than a single tag because the callers need this for a
+   * whole page of rows at once, and one memoised sheet read has to serve all of
+   * them. Called per row it would be the slowest thing in the archive.
+   *
+   * Keyed by asset rather than by source record on purpose. "Is this machine
+   * still broken" is a question about the machine: a repair raised from last
+   * cycle's visit is exactly what the technician standing in front of it needs
+   * to know about, and that ticket has a different sourceRecordId.
+   *
+   * Unscoped by section for the same reason forRecord is: the answer does not
+   * change with who is asking, and the caller has already scoped its own rows.
+   */
+  function openByAsset(assetTags) {
+    var wanted = {};
+    var tags = Array.isArray(assetTags) ? assetTags : [assetTags];
+    tags.forEach(function (value) {
+      var tag = PMS.Util.normalizeAssetTag(value);
+      if (tag) wanted[tag] = true;
+    });
+    var index = {};
+    if (!Object.keys(wanted).length) return index;
+
+    readTickets().forEach(function (ticket) {
+      if (!ticket.isActive) return;
+      var tag = PMS.Util.normalizeAssetTag(ticket.assetTag);
+      if (!wanted[tag]) return;
+      if (!index[tag]) index[tag] = [];
+      index[tag].push({
+        ticketId: ticket.ticketId,
+        status: ticket.status,
+        statusLabel: statusLabel(ticket.status),
+        section: ticket.section,
+        summary: ticket.summary,
+        actionRequired: ticket.actionRequired,
+        sourceRecordId: ticket.sourceRecordId,
+        cycleId: ticket.cycleId,
+        updatedAt: ticket.updatedAt
+      });
+    });
+
+    // Most in need of attention first, then most recently touched, so a row
+    // showing only its first ticket is showing the one that matters.
+    Object.keys(index).forEach(function (tag) {
+      index[tag].sort(function (a, b) {
+        var rank = ACTIVE_STATUSES.indexOf(a.status) - ACTIVE_STATUSES.indexOf(b.status);
+        if (rank !== 0) return rank;
+        return String(b.updatedAt).localeCompare(String(a.updatedAt));
+      });
+    });
+    return index;
+  }
+
+  /** The open tickets on one asset, newest-attention first. */
+  function openForAsset(assetTag) {
+    var tag = PMS.Util.normalizeAssetTag(assetTag);
+    if (!tag) return [];
+    return openByAsset([tag])[tag] || [];
   }
 
   /*
@@ -1046,7 +1103,6 @@ PMS.Tickets = (function () {
     statusLabels: function () { return Object.assign({}, STATUS_LABELS); },
     statusLabel: statusLabel,
     activeStatuses: function () { return ACTIVE_STATUSES.slice(); },
-    priorities: function () { return PRIORITIES.slice(); },
     actions: function () { return ACTIONS.slice(); },
     ticketColumns: function () { return TICKET_COLUMNS.slice(); },
     logColumns: function () { return LOG_COLUMNS.slice(); },
@@ -1058,6 +1114,8 @@ PMS.Tickets = (function () {
     withRefresh: withRefresh,
     forRecord: forRecord,
     hasForRecord: hasForRecord,
+    openByAsset: openByAsset,
+    openForAsset: openForAsset,
     trackerStatusForRecord: trackerStatusForRecord
   };
 })();

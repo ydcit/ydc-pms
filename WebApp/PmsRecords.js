@@ -667,6 +667,10 @@ PMS.Records = (function () {
       // Lets a resumed draft know a findings ticket already exists, so the
       // technician is not asked to file a second one.
       tickets: PMS.Tickets.forRecord(record.recordId),
+      // Every unresolved ticket on this asset, including ones raised from an
+      // earlier cycle's record. Shown on the asset itself, because a repair
+      // still outstanding changes what this visit should be looking at.
+      assetTickets: PMS.Tickets.openForAsset(record.assetTag),
       pmsCompletion: record.pmsCompletion
     };
   }
@@ -908,10 +912,24 @@ PMS.Records = (function () {
     }
     var totalPages = showAll ? 1 : Math.max(1, Math.ceil(filtered.length / pageSize));
 
+    /*
+      Outstanding repairs, attached to the page rather than to everything in
+      scope: one ticket-sheet read decorates the twenty rows about to be drawn,
+      and reading a thousand tickets to annotate rows nobody will look at is
+      what made this list slow the first time it was tried.
+    */
+    var pageRows = filtered.slice(start, start + pageSize);
+    var openTickets = PMS.Tickets.openByAsset(pageRows.map(function (record) {
+      return record.assetTag;
+    }));
+    pageRows.forEach(function (record) {
+      record.openTickets = openTickets[record.assetTag] || [];
+    });
+
     return {
       ok: true,
       scope: isAdmin ? 'ALL_SECTIONS' : 'OWN_RECORDS',
-      rows: filtered.slice(start, start + pageSize),
+      rows: pageRows,
       page: page,
       pageSize: pageSize,
       pageSizeMode: showAll ? 'ALL' : String(pageSize),

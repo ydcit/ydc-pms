@@ -24,6 +24,10 @@
       idempotencyKey: '',
       selectedAsset: null,
       loadedAssetTag: '',
+      // Open repairs on a loaded record's asset, read fresh from the server with
+      // the record. Takes precedence over the bootstrap asset list for that one
+      // tag, which was accurate when the page loaded and may not be now.
+      recordAssetTickets: { tag: '', tickets: [] },
       dirty: false,
       modalOpen: false,
       busy: false,
@@ -31,7 +35,7 @@
       tickets: {
         open: false, view: 'list', page: 1, totalPages: 1, direction: 'DESC',
         status: 'ACTIVE', token: 0, searchTimer: null, lastFocus: null,
-        currentId: '', sourceRecordId: '', statuses: [], priorities: [], statusLabels: null,
+        currentId: '', sourceRecordId: '', statuses: [], statusLabels: null,
         // Asset picker for the create form. Loaded per section on demand rather
         // than at bootstrap, and cached here so reopening the form is instant.
         assetCache: {}, assets: [], assetSection: '', assetsLoading: false,
@@ -568,6 +572,9 @@
           sourceTab: normalizeText(pick(asset, ['sourceTab', 'sheetName', 'source'], '')),
           row: pick(asset, ['row', 'sourceRow'], null),
           trackerYear: asNumber(pick(asset, ['trackerYear', 'year'], 0), 0),
+          // Absent on the healthy majority, which is why it is defaulted here
+          // rather than being sent as an empty array for every asset.
+          openTickets: toArray(pick(asset, ['openTickets'], [])),
           completedCycles: normalizedCompletedCycles(asset)
         };
       }).filter(function (asset) {
@@ -1314,11 +1321,22 @@
       }
 
       var resultCell = document.createElement('td');
-      resultCell.textContent = normalizeText(record.assessmentResult) || 'Not assessed';
+      var resultWrap = document.createElement('div');
+      resultWrap.className = 'archive-asset';
+      var resultText = document.createElement('span');
+      resultText.textContent = normalizeText(record.assessmentResult) || 'Not assessed';
+      resultWrap.appendChild(resultText);
+      // An unresolved repair belongs next to the assessment that found it: the
+      // row reads "Follow-up required" and then says what is tracking it.
+      var openTickets = toArray(record.openTickets);
+      if (openTickets.length) resultWrap.appendChild(ticketLinkList(openTickets));
+      resultCell.appendChild(resultWrap);
 
+      var actionCell = document.createElement('td');
+      var actions = document.createElement('div');
+      actions.className = 'table-actions';
       // The server refuses to open another technician's record, including for
       // administrators, so only offer the action where it will succeed.
-      var actionCell = document.createElement('td');
       var ownRecord = normalizeText(record.technicianEmail).toLowerCase() === userEmail().toLowerCase();
       if (id && ownRecord) {
         var open = document.createElement('button');
@@ -1330,23 +1348,73 @@
           closeArchiveModal();
           openExistingRecord(id);
         });
-        actionCell.appendChild(open);
+        actions.appendChild(open);
       }
       // Anything other than a clean "No findings" result is a candidate for a
       // repair ticket, so the action is offered right where findings are read.
+      // Where one is already open the wording changes rather than disappearing:
+      // a second, unrelated fault on the same asset is still worth filing.
       if (id && recordHasFindings(record.assessmentResult)) {
         var fileTicket = document.createElement('button');
         fileTicket.className = 'table-action table-action--accent';
         fileTicket.type = 'button';
-        fileTicket.textContent = 'File ticket';
-        fileTicket.title = 'Open a findings ticket for ' + normalizeText(record.assetTag);
+        fileTicket.textContent = openTickets.length ? 'File another' : 'File ticket';
+        fileTicket.title = openTickets.length
+          ? normalizeText(record.assetTag) + ' already has an open ticket. File a second one only for a different fault.'
+          : 'Open a findings ticket for ' + normalizeText(record.assetTag);
         fileTicket.addEventListener('click', function () { fileTicketFromRecord(record); });
-        actionCell.appendChild(fileTicket);
+        actions.appendChild(fileTicket);
       }
+      actionCell.appendChild(actions);
 
       [assetCell, locationCell, dateCell, cycleCell, technicianCell, resultCell, actionCell]
         .forEach(function (cell) { row.appendChild(cell); });
       return row;
+    }
+
+    /**
+     * Clickable chips for a set of open tickets.
+     *
+     * Shared by the archive rows and the asset snapshot so an outstanding repair
+     * looks and behaves the same wherever it surfaces.
+     */
+    function ticketLinkList(tickets) {
+      var list = document.createElement('div');
+      list.className = 'ticket-links';
+      toArray(tickets).forEach(function (ticket) {
+        var id = normalizeText(ticket.ticketId);
+        if (!id) return;
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'ticket-link';
+        chip.title = normalizeText(ticket.summary) || ('Open ' + id);
+        var label = document.createElement('span');
+        label.className = 'ticket-link__id';
+        label.textContent = id;
+        chip.appendChild(label);
+        var status = document.createElement('span');
+        status.className = 'ticket-link__status';
+        status.textContent = normalizeText(ticket.statusLabel) || ticketLabel(ticket.status);
+        chip.appendChild(status);
+        chip.addEventListener('click', function () { openTicketFromArchive(id); });
+        list.appendChild(chip);
+      });
+      return list;
+    }
+
+    /**
+     * Jumps from a completed record to the ticket tracking its repair.
+     *
+     * The archive is closed first so the two dialogs never stack, and the tickets
+     * dialog opens straight into the detail view rather than fetching a list
+     * nobody asked for.
+     */
+    function openTicketFromArchive(ticketId) {
+      var id = normalizeText(ticketId);
+      if (!id) return;
+      closeArchiveModal();
+      if (!state.tickets.open) openTicketsModal('detail');
+      openTicketDetail(id);
     }
 
     function recordHasFindings(assessmentResult) {
@@ -1370,11 +1438,6 @@
       RESOLVED: 'status-chip--success',
       CANCELLED: 'status-chip--neutral'
     };
-    var TICKET_PRIORITY_CHIP = {
-      HIGH: 'status-chip--danger',
-      MEDIUM: 'status-chip--warning',
-      LOW: 'status-chip--neutral'
-    };
     // Open, On hold and Cancelled are retired. A ticket filed before that change
     // keeps its status and still shows under Needs attention or All.
     var TICKET_TABS = [
@@ -1386,7 +1449,6 @@
     var TICKET_DIRECTION_LABELS = {
       updatedAt: ['Oldest first', 'Newest first'],
       createdAt: ['Oldest first', 'Newest first'],
-      priority: ['Lowest first', 'Highest first'],
       status: ['A to Z', 'Z to A'],
       assetTag: ['A to Z', 'Z to A'],
       section: ['A to Z', 'Z to A'],
@@ -1398,7 +1460,20 @@
       in one place rather than being special-cased everywhere. The map arrives
       with any ticket list or detail; the fallback covers a first paint.
     */
-    var TICKET_STATUS_LABELS = { IN_PROGRESS: 'In Progress', RESOLVED: 'Closed' };
+    /*
+      Mirrors the server's STATUS_LABELS, retired statuses included. The server
+      map normally arrives with a ticket list, but opening a ticket straight from
+      a completed record skips the list, and without the retired entries here that
+      path fell through to sentence case and read "On hold" where the same status
+      reads "On Hold" everywhere else.
+    */
+    var TICKET_STATUS_LABELS = {
+      IN_PROGRESS: 'In Progress',
+      RESOLVED: 'Closed',
+      OPEN: 'Open',
+      ON_HOLD: 'On Hold',
+      CANCELLED: 'Cancelled'
+    };
 
     function ticketLabel(value) {
       var token = normalizeText(value).toUpperCase().replace(/[\s-]+/g, '_');
@@ -1486,7 +1561,6 @@
         sort: byId('tickets-sort').value,
         direction: state.tickets.direction,
         status: state.tickets.status,
-        priority: byId('tickets-priority').value,
         section: byId('tickets-section').value,
         search: byId('tickets-search').value
       };
@@ -1571,7 +1645,6 @@
       state.tickets.page = asNumber(payload.page, 1) || 1;
       state.tickets.totalPages = asNumber(payload.totalPages, 1) || 1;
       state.tickets.statuses = toArray(payload.filters && payload.filters.statuses);
-      state.tickets.priorities = toArray(payload.filters && payload.filters.priorities);
       if (payload.filters && payload.filters.statusLabels) {
         state.tickets.statusLabels = payload.filters.statusLabels;
       }
@@ -1580,9 +1653,6 @@
       renderTicketTabs(counts);
       updateTicketsBadge(counts);
 
-      fillSelect(byId('tickets-priority'), 'All priorities', state.tickets.priorities.map(function (value) {
-        return { value: value, label: ticketLabel(value) };
-      }));
       var sections = toArray(payload.filters && payload.filters.sections);
       byId('tickets-section-wrap').hidden = sections.length < 2;
       fillSelect(byId('tickets-section'), 'All sections', sections.map(function (key) {
@@ -1667,9 +1737,6 @@
       var statusCell = document.createElement('td');
       statusCell.appendChild(ticketChip(ticket.status, TICKET_STATUS_CHIP, 'status-chip--neutral'));
 
-      var priorityCell = document.createElement('td');
-      priorityCell.appendChild(ticketChip(ticket.priority, TICKET_PRIORITY_CHIP, 'status-chip--neutral'));
-
       var sectionCell = document.createElement('td');
       sectionCell.textContent = sectionLabel(normalizeText(ticket.section));
 
@@ -1685,14 +1752,17 @@
       updatedCell.appendChild(updatedWrap);
 
       var actionCell = document.createElement('td');
+      var actions = document.createElement('div');
+      actions.className = 'table-actions';
       var open = document.createElement('button');
       open.className = 'table-action';
       open.type = 'button';
       open.textContent = 'Open';
       open.addEventListener('click', function () { openTicketDetail(id); });
-      actionCell.appendChild(open);
+      actions.appendChild(open);
+      actionCell.appendChild(actions);
 
-      [idCell, assetCell, statusCell, priorityCell, sectionCell, updatedCell, actionCell]
+      [idCell, assetCell, statusCell, sectionCell, updatedCell, actionCell]
         .forEach(function (cell) { row.appendChild(cell); });
       return row;
     }
@@ -1751,10 +1821,6 @@
       statusHolder.className = 'status-chip ' +
         (TICKET_STATUS_CHIP[normalizeText(ticket.status).toUpperCase()] || 'status-chip--neutral');
       statusHolder.textContent = ticketLabel(ticket.status);
-      var priorityHolder = byId('ticket-detail-priority');
-      priorityHolder.className = 'status-chip ' +
-        (TICKET_PRIORITY_CHIP[normalizeText(ticket.priority).toUpperCase()] || 'status-chip--neutral');
-      priorityHolder.textContent = ticketLabel(ticket.priority) + ' priority';
 
       byId('ticket-detail-asset').textContent = normalizeText(ticket.assetTag) || '—';
       byId('ticket-detail-section').textContent = sectionLabel(normalizeText(ticket.section));
@@ -1772,7 +1838,6 @@
       byId('ticket-detail-action-block').hidden = !action;
 
       fillTicketSelect(byId('ticket-update-status'), toArray(payload.statuses), ticket.status);
-      fillTicketSelect(byId('ticket-update-priority'), toArray(payload.priorities), ticket.priority);
       byId('ticket-update-remarks').value = '';
       clearFieldError('ticket-update-remarks', 'ticket-update-remarks-error');
 
@@ -1873,7 +1938,6 @@
       serverCall('PMS_apiUpdateTicket', {
         ticketId: state.tickets.currentId,
         status: byId('ticket-update-status').value,
-        priority: byId('ticket-update-priority').value,
         remarks: remarks
       }, ticketsRequest({}))
         .then(function (result) {
@@ -1901,8 +1965,7 @@
         renderTicketDetail({
           ticket: payload.ticket,
           history: payload.history,
-          statuses: payload.statuses,
-          priorities: payload.priorities
+          statuses: payload.statuses
         });
       }
       if (payload.list) {
@@ -2259,8 +2322,8 @@
       // bucket. Switching the filter before the call means the list that comes
       // back with the response already contains it.
       state.tickets.status = 'ACTIVE';
-      // No status or priority is sent: the server files as In progress at normal
-      // priority, and both are changed from the ticket's own page.
+      // No status is sent: the server files as In Progress, and closing happens
+      // from the ticket's own page.
       serverCall('PMS_apiCreateTicket', {
         sourceRecordId: state.tickets.sourceRecordId,
         assetTag: assetTag,
@@ -2475,8 +2538,8 @@
           state.dirty = false;
           // Only the record link and optional remarks are sent. The server copies
           // the findings and the required action from the record, and files the
-          // ticket as In progress at normal priority. A tiny page is requested
-          // because only the counts are needed here, for the dashboard badge.
+          // ticket as In Progress. A tiny page is requested because only the
+          // counts are needed here, for the dashboard badge.
           return serverCall('PMS_apiCreateTicket', {
             sourceRecordId: state.recordId,
             summary: (result ? result + ' on ' : 'Needs fixing: ') + assetTag,
@@ -4459,6 +4522,7 @@
       state.idempotencyKey = createIdempotencyKey();
       state.selectedAsset = null;
       state.loadedAssetTag = '';
+      state.recordAssetTickets = { tag: '', tickets: [] };
       state.infraEvidence = { firmware: null, backup: null };
       state.dirty = false;
       state.submittedCompletion = '';
@@ -4539,6 +4603,10 @@
       state.idempotencyKey = normalizeText(source.idempotencyKey) || createIdempotencyKey();
       state.submittedCompletion = normalizeText(source.pmsCompletion);
       state.loadedAssetTag = normalizeTag(source.assetTag);
+      state.recordAssetTickets = {
+        tag: normalizeTag(source.assetTag),
+        tickets: toArray(source.assetTickets)
+      };
       byId('questionnaire-form').reset();
       byId('maintenance-date').max = currentManilaDate();
       byId('maintenance-date').value = normalizeText(source.maintenanceDate);
@@ -4688,6 +4756,7 @@
       byId('selected-asset-location').textContent = asset.location || 'Not recorded';
       byId('selected-asset-source').textContent = asset.sourceTab || sectionLabel(sectionKey()) + ' asset master';
       byId('asset-snapshot').hidden = false;
+      renderAssetTickets(asset.tag);
       byId('review-asset').textContent = asset.tag;
       if (!asset.location) {
         byId('location-incorrect').checked = true;
@@ -4699,6 +4768,79 @@
       }
       updateObservedLocationVisibility();
       updateReview();
+    }
+
+    /**
+     * Open repairs known for one asset tag.
+     *
+     * Two sources, deliberately. A loaded record brings its asset's tickets down
+     * with it and is the fresher of the two, so it wins for that tag; everything
+     * else falls back to what the bootstrap asset list carried.
+     */
+    function assetTicketsFor(tag) {
+      var key = normalizeTag(tag);
+      if (!key) return [];
+      if (state.recordAssetTickets.tag === key) return toArray(state.recordAssetTickets.tickets);
+      var asset = state.assetMap.get(key);
+      return asset ? toArray(asset.openTickets) : [];
+    }
+
+    /**
+     * Draws the outstanding-repair notice inside the asset snapshot.
+     *
+     * Text rather than links: the technician is part-way through a form, and
+     * navigating to the tickets dialog from here would put it underneath the
+     * questionnaire and risk the work in progress. The action required is
+     * included because that is the part that changes what this visit should do.
+     */
+    function renderAssetTickets(tag) {
+      var holder = byId('selected-asset-tickets');
+      if (!holder) return;
+      var tickets = assetTicketsFor(tag);
+      holder.replaceChildren();
+      holder.hidden = !tickets.length;
+      if (!tickets.length) return;
+
+      var heading = document.createElement('p');
+      heading.className = 'asset-tickets__title';
+      heading.appendChild(iconSvg('alert-triangle'));
+      var headingText = document.createElement('span');
+      headingText.textContent = tickets.length === 1
+        ? 'This asset has an open repair ticket'
+        : 'This asset has ' + formatNumber(tickets.length) + ' open repair tickets';
+      heading.appendChild(headingText);
+      holder.appendChild(heading);
+
+      var list = document.createElement('ul');
+      list.className = 'asset-tickets__list';
+      tickets.forEach(function (ticket) {
+        var item = document.createElement('li');
+        var head = document.createElement('div');
+        head.className = 'asset-tickets__head';
+        var id = document.createElement('strong');
+        id.textContent = normalizeText(ticket.ticketId) || '—';
+        head.appendChild(id);
+        var status = document.createElement('span');
+        status.className = 'status-chip status-chip--info';
+        status.textContent = normalizeText(ticket.statusLabel) || ticketLabel(ticket.status);
+        head.appendChild(status);
+        item.appendChild(head);
+
+        var summary = normalizeText(ticket.summary);
+        if (summary) {
+          var summaryText = document.createElement('span');
+          summaryText.textContent = summary;
+          item.appendChild(summaryText);
+        }
+        var action = normalizeText(ticket.actionRequired);
+        if (action) {
+          var actionText = document.createElement('small');
+          actionText.textContent = 'Action required: ' + action;
+          item.appendChild(actionText);
+        }
+        list.appendChild(item);
+      });
+      holder.appendChild(list);
     }
 
     function updateObservedLocationVisibility() {
@@ -5317,7 +5459,7 @@
       byId('tickets-next').addEventListener('click', function () {
         if (state.tickets.page < state.tickets.totalPages) loadTickets({ page: state.tickets.page + 1 });
       });
-      ['tickets-priority', 'tickets-section', 'tickets-sort', 'tickets-page-size'].forEach(function (id) {
+      ['tickets-section', 'tickets-sort', 'tickets-page-size'].forEach(function (id) {
         byId(id).addEventListener('change', function () { loadTickets({ page: 1 }); });
       });
       byId('tickets-direction').addEventListener('click', function () {

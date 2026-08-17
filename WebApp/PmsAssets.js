@@ -272,7 +272,7 @@ PMS.Assets = (function () {
    * boundary.
    */
   function listSelectable(sectionKey, forceRefresh) {
-    return listEligible(sectionKey, forceRefresh)
+    var selectable = listEligible(sectionKey, forceRefresh)
       .map(function (asset) {
         return {
           tag: asset.tag,
@@ -287,6 +287,24 @@ PMS.Assets = (function () {
           completedCycles: asset.completedCycles
         };
       });
+
+    /*
+      Outstanding repairs ride along so that picking an asset can warn about them
+      without a round trip; one memoised ticket read covers the whole list, where
+      asking per selection would put a server call behind a keystroke.
+
+      The key is only set where there is something to say. This list is the
+      largest thing in the bootstrap and is measured in bytes, so paying
+      "openTickets":[] on a thousand healthy assets to carry nothing is not worth
+      the wire.
+    */
+    var openTickets = PMS.Tickets.openByAsset(selectable.map(function (asset) {
+      return asset.tag;
+    }));
+    selectable.forEach(function (asset) {
+      if (openTickets[asset.tag]) asset.openTickets = openTickets[asset.tag];
+    });
+    return selectable;
   }
 
   /**
