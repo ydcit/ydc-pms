@@ -31,7 +31,11 @@
       tickets: {
         open: false, view: 'list', page: 1, totalPages: 1, direction: 'DESC',
         status: 'ACTIVE', token: 0, searchTimer: null, lastFocus: null,
-        currentId: '', sourceRecordId: '', statuses: [], priorities: []
+        currentId: '', sourceRecordId: '', statuses: [], priorities: [],
+        // Asset picker for the create form. Loaded per section on demand rather
+        // than at bootstrap, and cached here so reopening the form is instant.
+        assetCache: {}, assets: [], assetSection: '', assetsLoading: false,
+        assetCombobox: { open: false, activeIndex: -1, matches: [] }
       },
       archive: {
         open: false, page: 1, totalPages: 1, direction: 'DESC',
@@ -52,7 +56,10 @@
       rolloverLoading: false,
       lastFocus: null,
       dryRun: null,
-      submittedCompletion: ''
+      submittedCompletion: '',
+      // Tickets filed from the questionnaire's assessment step, listed back to
+      // the technician so the same finding is not raised twice.
+      recordTickets: []
     };
 
     var FALLBACK_SECTIONS = [
@@ -1866,17 +1873,27 @@
 
     /* ------------------------------------------------------------- create */
 
+    var TICKET_ASSET_LIMIT = 50;
+    var TICKET_STATUS_FALLBACK = ['OPEN', 'IN_PROGRESS', 'ON_HOLD', 'RESOLVED', 'CANCELLED'];
+    var TICKET_PRIORITY_FALLBACK = ['LOW', 'MEDIUM', 'HIGH'];
+
+    function ticketCreateFieldIds() {
+      return ['ticket-create-asset', 'ticket-create-summary', 'ticket-create-findings', 'ticket-create-action'];
+    }
+
     function showTicketCreate(prefill) {
       var source = prefill || {};
       state.tickets.sourceRecordId = normalizeText(source.recordId);
       byId('ticket-create-form').reset();
-      ['ticket-create-asset', 'ticket-create-summary'].forEach(function (id) {
-        clearFieldError(id, id + '-error');
-      });
+      ticketCreateFieldIds().forEach(function (id) { clearFieldError(id, id + '-error'); });
       byId('ticket-create-error').hidden = true;
 
       fillTicketSelect(byId('ticket-create-priority'),
-        state.tickets.priorities.length ? state.tickets.priorities : ['LOW', 'MEDIUM', 'HIGH'], 'MEDIUM');
+        state.tickets.priorities.length ? state.tickets.priorities : TICKET_PRIORITY_FALLBACK, 'MEDIUM');
+      // The create view can be reached before any list load, which is where the
+      // status and priority vocabularies normally arrive from.
+      fillTicketSelect(byId('ticket-create-status'),
+        state.tickets.statuses.length ? state.tickets.statuses : TICKET_STATUS_FALLBACK, 'OPEN');
       var sections = state.sections.map(function (item) { return item.key; });
       fillTicketSelect(byId('ticket-create-section'), sections, normalizeText(source.section) || sectionKey());
       // Section labels read better than the raw keys in this form.
@@ -1887,6 +1904,7 @@
       byId('ticket-create-asset').value = normalizeText(source.assetTag);
       byId('ticket-create-location').value = normalizeText(source.location);
       byId('ticket-create-findings').value = normalizeText(source.findings);
+      byId('ticket-create-action').value = normalizeText(source.actionRequired);
       byId('ticket-create-summary').value = normalizeText(source.summary);
       byId('ticket-create-context').textContent = state.tickets.sourceRecordId
         ? ('Linked to record ' + state.tickets.sourceRecordId + '. The asset, section and cycle come from that record.')
@@ -1894,11 +1912,249 @@
       // A linked record is authoritative on the server, so these are read-only.
       byId('ticket-create-asset').readOnly = Boolean(state.tickets.sourceRecordId);
       byId('ticket-create-section').disabled = Boolean(state.tickets.sourceRecordId);
+      byId('ticket-asset-combobox-toggle').disabled = Boolean(state.tickets.sourceRecordId);
+      byId('ticket-create-section-help').hidden = Boolean(state.tickets.sourceRecordId);
 
       showTicketsView('create');
+      // A linked record already names the asset, so there is nothing to load.
+      if (!state.tickets.sourceRecordId) loadTicketAssets(byId('ticket-create-section').value);
+      else byId('ticket-create-asset-help').textContent = 'Taken from record ' + state.tickets.sourceRecordId + '.';
       window.setTimeout(function () {
         byId(state.tickets.sourceRecordId ? 'ticket-create-summary' : 'ticket-create-asset').focus();
       }, 0);
+    }
+
+    /* ------------------------------------------------------------------------
+       Ticket asset picker
+
+       Same ARIA listbox behaviour and styles as the questionnaire's picker, but
+       a separate implementation on purpose: this one filters by the ticket's
+       section rather than by maintenance cycle, and the questionnaire's picker
+       sits on the critical path of every record, so it is left untouched.
+       ------------------------------------------------------------------------ */
+
+    function ticketAssetCombobox() {
+      return {
+        wrap: byId('ticket-asset-combobox'),
+        input: byId('ticket-create-asset'),
+        panel: byId('ticket-asset-listbox')
+      };
+    }
+
+    function loadTicketAssets(sectionKey) {
+      var key = normalizeText(sectionKey) || 'ALL';
+      state.tickets.assetSection = key;
+      if (state.tickets.assetCache[key]) {
+        state.tickets.assets = state.tickets.assetCache[key];
+        renderTicketAssetHelp();
+        return Promise.resolve(state.tickets.assets);
+      }
+      state.tickets.assetsLoading = true;
+      byId('ticket-create-asset-help').textContent = 'Loading assets…';
+      return serverCall('PMS_apiAssetOptions', key)
+        .then(function (payload) {
+          var assets = toArray(payload && payload.assets).map(function (asset) {
+            return {
+              tag: normalizeTag(pick(asset, ['tag', 'assetTag'], '')),
+              location: normalizeText(pick(asset, ['location'], '')),
+              section: normalizeText(pick(asset, ['section'], ''))
+            };
+          }).filter(function (asset) { return Boolean(asset.tag); });
+          state.tickets.assetCache[key] = assets;
+          // Discard a response that a later section change has superseded.
+          if (state.tickets.assetSection === key) state.tickets.assets = assets;
+          renderTicketAssetHelp();
+          return assets;
+        })
+        .catch(function (error) {
+          byId('ticket-create-asset-help').textContent = 'Assets could not be loaded: ' + errorMessage(error);
+          return [];
+        })
+        .finally(function () { state.tickets.assetsLoading = false; });
+    }
+
+    function renderTicketAssetHelp() {
+      if (state.tickets.sourceRecordId) return;
+      var count = state.tickets.assets.length;
+      byId('ticket-create-asset-help').textContent = count
+        ? ('Choose from ' + formatNumber(count) + ' assets in ' + sectionLabel(state.tickets.assetSection) + '.')
+        : 'No assets are available for this section.';
+    }
+
+    function matchingTicketAssets(query) {
+      var term = normalizeTag(query);
+      var assets = state.tickets.assets;
+      if (!term) return assets;
+      var starts = [];
+      var contains = [];
+      assets.forEach(function (asset) {
+        var position = asset.tag.indexOf(term);
+        if (position === 0) starts.push(asset);
+        else if (position > 0) contains.push(asset);
+        else if (String(asset.location || '').toUpperCase().indexOf(term) >= 0) contains.push(asset);
+      });
+      return starts.concat(contains);
+    }
+
+    function renderTicketAssetList(query) {
+      var parts = ticketAssetCombobox();
+      var matches = matchingTicketAssets(query === undefined ? parts.input.value : query);
+      state.tickets.assetCombobox.matches = matches;
+      parts.panel.replaceChildren();
+
+      if (!matches.length) {
+        var empty = document.createElement('p');
+        empty.className = 'combobox__empty';
+        empty.textContent = state.tickets.assetsLoading
+          ? 'Loading assets…'
+          : (state.tickets.assets.length ? 'No asset matches that search.' : 'No assets are available for this section.');
+        parts.panel.appendChild(empty);
+        return;
+      }
+
+      var shown = matches.slice(0, TICKET_ASSET_LIMIT);
+      if (matches.length > shown.length) {
+        var count = document.createElement('p');
+        count.className = 'combobox__count';
+        count.textContent = 'Showing ' + shown.length + ' of ' + formatNumber(matches.length);
+        parts.panel.appendChild(count);
+      }
+
+      shown.forEach(function (asset, index) {
+        var option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'combobox__option';
+        option.id = 'ticket-asset-option-' + index;
+        option.tabIndex = -1;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', asset.tag === normalizeTag(parts.input.value) ? 'true' : 'false');
+        option.dataset.index = String(index);
+
+        var tag = document.createElement('span');
+        tag.className = 'combobox__option-tag';
+        tag.textContent = asset.tag;
+        var meta = document.createElement('span');
+        meta.className = 'combobox__option-meta';
+        meta.textContent = asset.location || 'Location not recorded';
+        option.appendChild(tag);
+        option.appendChild(meta);
+
+        // mousedown, not click: keeps focus in the input so the blur handler
+        // cannot close the panel before the selection is committed.
+        option.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+          commitTicketAsset(asset);
+        });
+        parts.panel.appendChild(option);
+      });
+    }
+
+    function positionTicketAssetPanel() {
+      if (!state.tickets.assetCombobox.open) return;
+      var parts = ticketAssetCombobox();
+      var rect = parts.wrap.getBoundingClientRect();
+      var panel = parts.panel;
+      var gap = 6;
+      var margin = 12;
+      var spaceBelow = window.innerHeight - rect.bottom - margin;
+      var spaceAbove = rect.top - margin;
+      var flipUp = spaceBelow < 170 && spaceAbove > spaceBelow;
+      var available = Math.max(120, Math.min(288, flipUp ? spaceAbove : spaceBelow));
+      panel.style.left = Math.round(rect.left) + 'px';
+      panel.style.width = Math.round(rect.width) + 'px';
+      panel.style.maxHeight = Math.round(available) + 'px';
+      if (flipUp) {
+        panel.style.top = 'auto';
+        panel.style.bottom = Math.round(window.innerHeight - rect.top + gap) + 'px';
+      } else {
+        panel.style.bottom = 'auto';
+        panel.style.top = Math.round(rect.bottom + gap) + 'px';
+      }
+    }
+
+    function openTicketAssetList(refilter) {
+      if (byId('ticket-create-asset').readOnly) return;
+      var parts = ticketAssetCombobox();
+      if (refilter !== false) renderTicketAssetList();
+      parts.panel.hidden = false;
+      parts.wrap.classList.add('is-open');
+      parts.input.setAttribute('aria-expanded', 'true');
+      state.tickets.assetCombobox.open = true;
+      positionTicketAssetPanel();
+      window.addEventListener('scroll', positionTicketAssetPanel, true);
+      window.addEventListener('resize', positionTicketAssetPanel);
+    }
+
+    function closeTicketAssetList() {
+      var parts = ticketAssetCombobox();
+      parts.panel.hidden = true;
+      parts.wrap.classList.remove('is-open');
+      parts.input.setAttribute('aria-expanded', 'false');
+      parts.input.removeAttribute('aria-activedescendant');
+      state.tickets.assetCombobox.open = false;
+      state.tickets.assetCombobox.activeIndex = -1;
+      window.removeEventListener('scroll', positionTicketAssetPanel, true);
+      window.removeEventListener('resize', positionTicketAssetPanel);
+    }
+
+    function highlightTicketAssetOption(index) {
+      var parts = ticketAssetCombobox();
+      var options = parts.panel.querySelectorAll('.combobox__option');
+      if (!options.length) return;
+      var bounded = Math.max(0, Math.min(options.length - 1, index));
+      options.forEach(function (option) { option.classList.remove('is-active'); });
+      var active = options[bounded];
+      active.classList.add('is-active');
+      active.scrollIntoView({ block: 'nearest' });
+      parts.input.setAttribute('aria-activedescendant', active.id);
+      state.tickets.assetCombobox.activeIndex = bounded;
+    }
+
+    function commitTicketAsset(asset) {
+      byId('ticket-create-asset').value = asset.tag;
+      // The asset master knows where it is; the field stays editable because a
+      // broken asset is often not where the master says it is.
+      if (asset.location && !normalizeText(byId('ticket-create-location').value)) {
+        byId('ticket-create-location').value = asset.location;
+      }
+      clearFieldError('ticket-create-asset', 'ticket-create-asset-error');
+      closeTicketAssetList();
+    }
+
+    function onTicketAssetKeydown(event) {
+      var key = event.key;
+      var combobox = state.tickets.assetCombobox;
+      if (key === 'ArrowDown' || key === 'ArrowUp') {
+        event.preventDefault();
+        if (!combobox.open) {
+          openTicketAssetList();
+          highlightTicketAssetOption(key === 'ArrowDown' ? 0 : combobox.matches.length - 1);
+          return;
+        }
+        highlightTicketAssetOption(combobox.activeIndex + (key === 'ArrowDown' ? 1 : -1));
+        return;
+      }
+      if (key === 'Enter' && combobox.open && combobox.activeIndex >= 0) {
+        event.preventDefault();
+        var chosen = combobox.matches[combobox.activeIndex];
+        if (chosen) commitTicketAsset(chosen);
+        return;
+      }
+      if (key === 'Escape' && combobox.open) {
+        event.preventDefault();
+        // Otherwise Escape would also close the tickets dialog.
+        event.stopPropagation();
+        closeTicketAssetList();
+      }
+    }
+
+    function findTicketAsset(tag) {
+      var wanted = normalizeTag(tag);
+      if (!wanted) return null;
+      for (var index = 0; index < state.tickets.assets.length; index += 1) {
+        if (state.tickets.assets[index].tag === wanted) return state.tickets.assets[index];
+      }
+      return null;
     }
 
     function fileTicketFromRecord(record) {
@@ -1919,19 +2175,45 @@
       event.preventDefault();
       var assetTag = normalizeTag(byId('ticket-create-asset').value);
       var summary = normalizeText(byId('ticket-create-summary').value);
-      clearFieldError('ticket-create-asset', 'ticket-create-asset-error');
-      clearFieldError('ticket-create-summary', 'ticket-create-summary-error');
+      var findings = normalizeText(byId('ticket-create-findings').value);
+      var actionRequired = normalizeText(byId('ticket-create-action').value);
+      ticketCreateFieldIds().forEach(function (id) { clearFieldError(id, id + '-error'); });
       byId('ticket-create-error').hidden = true;
 
-      if (!state.tickets.sourceRecordId && !assetTag) {
-        setFieldError('ticket-create-asset', 'ticket-create-asset-error', 'Enter the asset tag that needs fixing.');
-        byId('ticket-create-asset').focus();
-        return;
+      // Mirrors the server's requirements so the user is told immediately.
+      if (!state.tickets.sourceRecordId) {
+        if (!assetTag) {
+          setFieldError('ticket-create-asset', 'ticket-create-asset-error', 'Choose the asset that needs fixing.');
+          byId('ticket-create-asset').focus();
+          return;
+        }
+        // The field is a picker, so a tag that is not on the list is a typo.
+        if (state.tickets.assets.length && !findTicketAsset(assetTag)) {
+          setFieldError('ticket-create-asset', 'ticket-create-asset-error',
+            'Select an asset from the list. ' + assetTag + ' is not in ' + sectionLabel(byId('ticket-create-section').value) + '.');
+          byId('ticket-create-asset').focus();
+          return;
+        }
       }
       if (!summary) {
         setFieldError('ticket-create-summary', 'ticket-create-summary-error', 'Describe what needs fixing.');
         byId('ticket-create-summary').focus();
         return;
+      }
+      // With a linked record the server fills these from the record itself when
+      // they are left blank, so only an unlinked ticket can be checked here.
+      // The server enforces the requirement either way.
+      if (!state.tickets.sourceRecordId) {
+        if (!findings) {
+          setFieldError('ticket-create-findings', 'ticket-create-findings-error', 'Record what was found on the asset.');
+          byId('ticket-create-findings').focus();
+          return;
+        }
+        if (!actionRequired) {
+          setFieldError('ticket-create-action', 'ticket-create-action-error', 'State what has to happen before this can be closed.');
+          byId('ticket-create-action').focus();
+          return;
+        }
       }
 
       setBusy(true, 'Filing ticket…');
@@ -1941,15 +2223,20 @@
         section: byId('ticket-create-section').value,
         location: normalizeText(byId('ticket-create-location').value),
         summary: summary,
-        findings: normalizeText(byId('ticket-create-findings').value),
-        actionRequired: normalizeText(byId('ticket-create-action').value),
+        findings: findings,
+        actionRequired: actionRequired,
         priority: byId('ticket-create-priority').value,
+        status: byId('ticket-create-status').value,
         remarks: normalizeText(byId('ticket-create-remarks').value)
       })
         .then(function (result) {
-          var ticketId = result && result.ticket ? result.ticket.ticketId : '';
-          showToast('Ticket filed', ticketId + ' is now open and being tracked.', 'success');
-          state.tickets.status = 'ACTIVE';
+          var ticket = (result && result.ticket) || {};
+          var ticketId = normalizeText(ticket.ticketId);
+          showToast('Ticket filed', ticketId + ' is now tracked as ' + ticketLabel(ticket.status) + '.', 'success');
+          // A ticket filed straight into Resolved or Cancelled is not in the
+          // "needs attention" bucket, so show a filter that actually contains it.
+          state.tickets.status = ticket.isActive === false ? '' : 'ACTIVE';
+          loadTicketSummary();
           return loadTickets({ page: 1 }).then(function () {
             if (ticketId) openTicketDetail(ticketId);
             else showTicketsView('list');
@@ -1959,6 +2246,162 @@
           var target = byId('ticket-create-error');
           target.hidden = false;
           target.textContent = errorMessage(error);
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    /* ------------------------------------------------------------------------
+       Filing a ticket from the questionnaire
+
+       Step 4 is where findings get written, so it is also where a repair ticket
+       is raised. The ticket is posted from inside the questionnaire rather than
+       by opening the tickets dialog: layering that dialog on top would put a
+       second focus trap on the page and cost the technician their place in the
+       form mid-assessment.
+       ------------------------------------------------------------------------ */
+
+    function resetRecordTicket() {
+      if (!byId('record-ticket-body')) return;
+      state.recordTickets = [];
+      closeRecordTicketForm('File a ticket');
+      ['record-ticket-findings', 'record-ticket-action', 'record-ticket-remarks'].forEach(function (id) {
+        byId(id).value = '';
+      });
+      ['record-ticket-findings', 'record-ticket-action'].forEach(function (id) {
+        clearFieldError(id, id + '-error');
+      });
+      byId('record-ticket-error').hidden = true;
+      renderRecordTicketsFiled();
+    }
+
+    function closeRecordTicketForm(label) {
+      byId('record-ticket-body').hidden = true;
+      byId('record-ticket-toggle').setAttribute('aria-expanded', 'false');
+      byId('record-ticket-toggle-label').textContent = label;
+    }
+
+    function toggleRecordTicket() {
+      var body = byId('record-ticket-body');
+      if (!body.hidden) {
+        closeRecordTicketForm(state.recordTickets.length ? 'File another ticket' : 'File a ticket');
+        return;
+      }
+      body.hidden = false;
+      byId('record-ticket-toggle').setAttribute('aria-expanded', 'true');
+      byId('record-ticket-toggle-label').textContent = 'Hide ticket form';
+      // These vocabularies normally arrive with a ticket list load, which may
+      // not have happened in this session.
+      fillTicketSelect(byId('record-ticket-priority'),
+        state.tickets.priorities.length ? state.tickets.priorities : TICKET_PRIORITY_FALLBACK, 'MEDIUM');
+      fillTicketSelect(byId('record-ticket-status'),
+        state.tickets.statuses.length ? state.tickets.statuses : TICKET_STATUS_FALLBACK, 'OPEN');
+      prefillRecordTicket();
+      window.setTimeout(function () { byId('record-ticket-findings').focus(); }, 0);
+    }
+
+    /**
+     * Mirrors the server's own mapping in subjectFromRecord: a ticket's findings
+     * come from the asset findings, and the action it requires comes from the
+     * recommendation rather than from the action already taken.
+     */
+    function prefillRecordTicket() {
+      var findings = byId('record-ticket-findings');
+      var action = byId('record-ticket-action');
+      if (!normalizeText(findings.value)) findings.value = normalizeText(byId('asset-findings').value);
+      if (!normalizeText(action.value)) action.value = normalizeText(byId('recommendation').value);
+    }
+
+    function renderRecordTicketsFiled() {
+      var list = byId('record-ticket-filed');
+      var filed = state.recordTickets || [];
+      list.replaceChildren();
+      list.hidden = !filed.length;
+      filed.forEach(function (ticket) {
+        var item = document.createElement('li');
+        var id = document.createElement('strong');
+        id.textContent = ticket.ticketId;
+        item.appendChild(id);
+        item.appendChild(ticketChip(ticket.status, TICKET_STATUS_CHIP, 'status-chip--neutral'));
+        var summary = document.createElement('span');
+        summary.textContent = ticket.summary;
+        item.appendChild(summary);
+        list.appendChild(item);
+      });
+    }
+
+    function submitRecordTicket() {
+      var findings = normalizeText(byId('record-ticket-findings').value);
+      var action = normalizeText(byId('record-ticket-action').value);
+      clearFieldError('record-ticket-findings', 'record-ticket-findings-error');
+      clearFieldError('record-ticket-action', 'record-ticket-action-error');
+      byId('record-ticket-error').hidden = true;
+      clearFormAlert();
+
+      // The ticket carries the asset, section and cycle of this record, so the
+      // record has to be complete enough to persist as a draft first.
+      if (!validateCoreFields(true)) {
+        setStep(1, false);
+        return;
+      }
+      if (!findings) {
+        setFieldError('record-ticket-findings', 'record-ticket-findings-error', 'Record what is wrong with this asset.');
+        byId('record-ticket-findings').focus();
+        return;
+      }
+      if (!action) {
+        setFieldError('record-ticket-action', 'record-ticket-action-error', 'State what has to happen before this can be closed.');
+        byId('record-ticket-action').focus();
+        return;
+      }
+
+      var assetTag = state.selectedAsset ? state.selectedAsset.tag : normalizeTag(byId('asset-tag').value);
+      var result = normalizeText(byId('assessment-result').value);
+      setBusy(true, 'Saving draft and filing ticket…');
+      // A linked ticket needs a persisted record, so a draft is saved first.
+      // This is the same first step the infra evidence upload already takes.
+      serverCall('PMS_apiSaveRecord', buildPayload(), 'SAVE')
+        .then(function (draft) {
+          state.recordId = normalizeText(draft.recordId) || state.recordId;
+          state.loadedAssetTag = assetTag || state.loadedAssetTag;
+          state.submittedCompletion = normalizeText(draft.pmsCompletion);
+          if (!state.recordId) {
+            throw clientError('The draft was saved without a record ID. Save progress and try again.', 'DRAFT_ID_MISSING');
+          }
+          byId('record-save-state').textContent = 'Draft ' + state.recordId + ' saved';
+          // Everything the payload carries is now persisted.
+          state.dirty = false;
+          return serverCall('PMS_apiCreateTicket', {
+            sourceRecordId: state.recordId,
+            summary: (result ? result + ' on ' : 'Needs fixing: ') + assetTag,
+            findings: findings,
+            actionRequired: action,
+            priority: byId('record-ticket-priority').value,
+            status: byId('record-ticket-status').value,
+            remarks: normalizeText(byId('record-ticket-remarks').value)
+          });
+        })
+        .then(function (payload) {
+          var ticket = (payload && payload.ticket) || {};
+          state.recordTickets = (state.recordTickets || []).concat([{
+            ticketId: normalizeText(ticket.ticketId),
+            status: normalizeText(ticket.status),
+            summary: normalizeText(ticket.summary)
+          }]);
+          renderRecordTicketsFiled();
+          closeRecordTicketForm('File another ticket');
+          ['record-ticket-findings', 'record-ticket-action', 'record-ticket-remarks'].forEach(function (id) {
+            byId(id).value = '';
+          });
+          showToast('Ticket filed',
+            normalizeText(ticket.ticketId) + ' is now tracking ' + assetTag + ' for fixing.', 'success');
+          // Keeps the dashboard badge honest without a reload.
+          loadTicketSummary();
+        })
+        .catch(function (error) {
+          var target = byId('record-ticket-error');
+          target.hidden = false;
+          target.textContent = errorMessage(error);
+          state.dirty = true;
         })
         .finally(function () { setBusy(false); });
     }
@@ -3343,11 +3786,11 @@
       byId('stepper-step-2-label').textContent = infra ? 'Evidence' : 'Peripherals';
       byId('step-2-title').textContent = infra ? 'Maintenance evidence' : 'Included peripheral asset tags';
       byId('step-2-description').textContent = infra
-        ? 'Attach firmware and configuration, backup, or checkpoint evidence for this asset.'
-        : 'Add every tagged peripheral included in this maintenance. These fields are optional.';
+        ? 'Attach firmware and configuration, backup, or checkpoint evidence for this asset. Both files are required before you can continue.'
+        : 'Add every tagged peripheral included in this maintenance. Every field on this step is optional — you can continue without entering any tags.';
       byId('step-3-description').textContent = infra
-        ? 'Complete all physical and digital checks for the infrastructure asset.'
-        : 'Complete every applicable check. Use N/A only where the checklist explicitly allows it.';
+        ? 'All four physical and digital checks are required before you can continue.'
+        : 'Every check is required except the two marked Optional, which you may skip when they do not apply.';
       byId('modal-progress-title').textContent = infra ? 'PMS completion' : 'Checklist progress';
       byId('modal-progress').setAttribute('aria-label', infra ? 'Infrastructure PMS completion progress' : 'Questionnaire checklist progress');
     }
@@ -3690,6 +4133,7 @@
           checkbox.addEventListener('change', function () {
             state.checklistValues[item.key] = checkbox.checked ? 'DONE' : '';
             row.classList.remove('is-na');
+            row.classList.remove('is-missing');
             var na = row.querySelector('.na-toggle');
             if (na) {
               na.classList.remove('is-active');
@@ -3705,19 +4149,24 @@
           label.appendChild(itemLabel);
           row.appendChild(label);
 
+          // Only items the schema marks allowsNa can be skipped; every other
+          // check has to be ticked before the step will advance. The control
+          // reads "Optional" because that is what it means to the technician,
+          // while the stored value stays 'NA' for the sheet and the server.
           if (item.allowsNa) {
             var naButton = document.createElement('button');
             naButton.className = 'na-toggle';
             naButton.type = 'button';
-            naButton.textContent = 'N/A';
+            naButton.textContent = 'Optional';
             naButton.setAttribute('aria-pressed', 'false');
-            naButton.setAttribute('aria-label', 'Mark ' + item.label + ' not applicable');
+            naButton.setAttribute('aria-label', 'Mark ' + item.label + ' as optional and skip it');
             naButton.addEventListener('click', function () {
               var active = state.checklistValues[item.key] === 'NA';
               state.checklistValues[item.key] = active ? '' : 'NA';
               checkbox.checked = false;
               checkbox.disabled = !active;
               row.classList.toggle('is-na', !active);
+              row.classList.remove('is-missing');
               naButton.classList.toggle('is-active', !active);
               naButton.setAttribute('aria-pressed', String(!active));
               markDirty();
@@ -3807,7 +4256,7 @@
 
       var overall = calculateFormProgress();
       var label = overall.completed + ' of ' + overall.applicable + ' complete';
-      if (overall.na) label += ' · ' + overall.na + ' N/A';
+      if (overall.na) label += ' · ' + overall.na + ' optional';
       byId('modal-progress-label').textContent = label;
       setProgress(byId('modal-progress'), byId('modal-progress-fill'), overall.percent);
       byId('review-checklist').textContent = label;
@@ -3816,7 +4265,7 @@
       byId('review-status-chip').className = 'status-chip ' + (overall.percent === 100 ? 'status-chip--success' : 'status-chip--warning');
       byId('review-hint').textContent = overall.percent === 100
         ? (isInfraSection() ? 'All required maintenance checks and evidence are ready. Finish the assessment and select Complete PMS.' : 'The checklist is complete. Finish the required assessment and select Complete PMS.')
-        : (isInfraSection() ? 'Complete all four checks and attach both evidence files before finalizing PMS.' : 'Complete all applicable checklist items before finalizing PMS.');
+        : (isInfraSection() ? 'Complete all four checks and attach both evidence files before finalizing PMS.' : 'Tick every required check before finalizing PMS. Only the two optional checks may be skipped.');
       setProgress(byId('review-progress'), byId('review-progress-fill'), overall.percent);
       updateFooterActions();
     }
@@ -3834,6 +4283,7 @@
       state.infraEvidence = { firmware: null, backup: null };
       state.dirty = false;
       state.submittedCompletion = '';
+      resetRecordTicket();
     }
 
     function createIdempotencyKey() {
@@ -4079,9 +4529,105 @@
       byId('review-evidence').textContent = evidenceReadyCount() + ' of 2 ready';
     }
 
+    /**
+     * Gate for leaving a step on the way forward.
+     *
+     * Only forward navigation is gated. Going back and Save progress stay open
+     * so a part-finished record is never trapped behind a requirement — the
+     * technician can always park a draft and come back to it.
+     *
+     * These helpers deliberately do not navigate; setStep decides where to land
+     * so that a stepper jump reports the first step that actually blocked.
+     */
+    function validateStep(step, focusFirst) {
+      if (step === 1) return validateCoreFields(focusFirst);
+      if (step === 2) {
+        // Peripherals are optional, so Service Desk has nothing to satisfy here.
+        return isInfraSection() ? validateEvidenceStep(focusFirst) : true;
+      }
+      if (step === 3) return validateChecklistComplete(focusFirst);
+      return true;
+    }
+
+    function validateEvidenceStep(focusFirst) {
+      var unsupported = '';
+      var missing = [];
+      ['firmware', 'backup'].forEach(function (kind) {
+        if (!validateEvidenceFile(kind, true)) {
+          unsupported = unsupported || kind;
+          return;
+        }
+        if (evidenceReady(kind)) {
+          clearEvidenceError(kind);
+          return;
+        }
+        missing.push(kind);
+        setEvidenceError(kind, 'Attach this evidence before continuing.');
+      });
+      if (unsupported) {
+        showFormAlert('Choose supported evidence files that are within the size limit.');
+        if (focusFirst) evidenceInput(unsupported).focus();
+        return false;
+      }
+      if (missing.length) {
+        showFormAlert('Attach both firmware and backup evidence before continuing to the checklist.');
+        if (focusFirst) evidenceInput(missing[0]).focus();
+        return false;
+      }
+      return true;
+    }
+
+    /**
+     * Every checklist item must be ticked, except the ones the schema marks as
+     * optional, which may be skipped with the Optional control.
+     */
+    function validateChecklistComplete(focusFirst) {
+      var outstanding = [];
+      allChecklistItems().forEach(function (item) {
+        var value = state.checklistValues[item.key] || '';
+        if (value === 'DONE') return;
+        if (value === 'NA' && item.allowsNa) return;
+        outstanding.push(item);
+      });
+
+      document.querySelectorAll('.checklist-item.is-missing').forEach(function (row) {
+        row.classList.remove('is-missing');
+      });
+      if (!outstanding.length) return true;
+
+      var firstRow = null;
+      outstanding.forEach(function (item) {
+        var row = document.querySelector('[data-checklist-item="' + CSS.escape(item.key) + '"]');
+        if (!row) return;
+        row.classList.add('is-missing');
+        firstRow = firstRow || row;
+      });
+      showFormAlert(outstanding.length === 1
+        ? 'One check still needs an answer: ' + outstanding[0].label + '.'
+        : outstanding.length + ' checks still need an answer, starting with ' + outstanding[0].label + '.');
+      if (focusFirst && firstRow) {
+        var checkbox = firstRow.querySelector('input[type="checkbox"]');
+        if (checkbox) checkbox.focus();
+        firstRow.scrollIntoView({ block: 'center' });
+      }
+      return false;
+    }
+
     function setStep(nextStep, validate) {
       var target = Math.max(1, Math.min(4, Number(nextStep)));
-      if (validate !== false && target > state.currentStep && state.currentStep === 1 && !validateCoreFields(true)) return false;
+      // Moving forward has to satisfy every step being left behind, so a jump
+      // from the stepper cannot slip past a gate that Continue would enforce.
+      if (validate !== false && target > state.currentStep) {
+        for (var step = state.currentStep; step < target; step += 1) {
+          if (validateStep(step, true)) continue;
+          // Land on the step that blocked, which may not be the current one.
+          if (step !== state.currentStep) setStep(step, false);
+          return false;
+        }
+        // Navigation succeeded, so any gate message from a previous attempt is
+        // stale and would otherwise sit on the next step.
+        clearFormAlert();
+      }
       state.currentStep = target;
       document.querySelectorAll('.form-step').forEach(function (step) {
         step.hidden = Number(step.dataset.step) !== target;
@@ -4525,6 +5071,34 @@
       byId('ticket-create-back').addEventListener('click', function () { showTicketsView('list'); });
       byId('ticket-update-form').addEventListener('submit', submitTicketUpdate);
       byId('ticket-create-form').addEventListener('submit', submitTicketCreate);
+      // The ticket form is a separate form from the questionnaire, so its asset
+      // picker needs its own input handler rather than the delegated one.
+      byId('ticket-create-asset').addEventListener('focus', function () { openTicketAssetList(); });
+      byId('ticket-create-asset').addEventListener('input', function () {
+        clearFieldError('ticket-create-asset', 'ticket-create-asset-error');
+        renderTicketAssetList();
+        if (!state.tickets.assetCombobox.open) openTicketAssetList(false);
+      });
+      byId('ticket-create-asset').addEventListener('keydown', onTicketAssetKeydown);
+      byId('ticket-create-asset').addEventListener('blur', function () { closeTicketAssetList(); });
+      byId('ticket-asset-combobox-toggle').addEventListener('click', function () {
+        if (state.tickets.assetCombobox.open) {
+          closeTicketAssetList();
+          return;
+        }
+        byId('ticket-create-asset').focus();
+        openTicketAssetList();
+      });
+      document.addEventListener('mousedown', function (event) {
+        if (state.tickets.assetCombobox.open && !event.target.closest('#ticket-asset-combobox')) closeTicketAssetList();
+      });
+      byId('ticket-create-section').addEventListener('change', function () {
+        // Assets are section-scoped, so a section change invalidates the choice.
+        byId('ticket-create-asset').value = '';
+        clearFieldError('ticket-create-asset', 'ticket-create-asset-error');
+        closeTicketAssetList();
+        loadTicketAssets(byId('ticket-create-section').value);
+      });
       byId('tickets-prev').addEventListener('click', function () {
         if (state.tickets.page > 1) loadTickets({ page: state.tickets.page - 1 });
       });
@@ -4636,6 +5210,8 @@
         byId('recommendation').value = 'None';
         markDirty();
       });
+      byId('record-ticket-toggle').addEventListener('click', toggleRecordTicket);
+      byId('record-ticket-submit').addEventListener('click', submitRecordTicket);
       byId('rollover-dry-run').addEventListener('click', runRolloverDryRun);
       byId('rollover-year').addEventListener('input', resetRolloverReview);
       byId('rollover-reviewed').addEventListener('change', updateRolloverConfirmation);

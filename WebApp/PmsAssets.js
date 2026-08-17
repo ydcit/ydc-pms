@@ -289,6 +289,37 @@ PMS.Assets = (function () {
       });
   }
 
+  /**
+   * Asset tags offered to a picker that is not tied to a maintenance cycle,
+   * currently the findings-ticket form.
+   *
+   * Deliberately leaner than listSelectable: a ticket only needs the tag and
+   * where the asset is, not tracker flags or row numbers. 'ALL' is accepted and
+   * fanned out across the configured sections, because a ticket may be filed
+   * against either section while PMS.Util.section rejects 'ALL' outright.
+   *
+   * Reads through the existing per-section cache rather than forcing a refresh,
+   * so opening the ticket form does not re-read the asset sheets.
+   */
+  function listOptions(sectionKey) {
+    var requested = PMS.Util.cleanText(sectionKey, 30).toUpperCase();
+    var keys = requested === 'ALL' || !requested
+      ? Object.keys(PMS.CONFIG.SECTIONS)
+      : [PMS.Util.section(requested).key];
+    var options = [];
+    keys.forEach(function (key) {
+      listEligible(key).forEach(function (asset) {
+        options.push({
+          tag: asset.tag,
+          location: asset.location,
+          section: asset.section,
+          sectionLabel: asset.sectionLabel
+        });
+      });
+    });
+    return options;
+  }
+
   function requireEligible(sectionKey, assetTag) {
     var tag = PMS.Util.normalizeAssetTag(assetTag);
     if (!tag) PMS.Util.fail('Select an asset tag.', 'VALIDATION_ERROR');
@@ -318,6 +349,7 @@ PMS.Assets = (function () {
     readAll: readAll,
     listEligible: listEligible,
     listSelectable: listSelectable,
+    listOptions: listOptions,
     requireEligible: requireEligible,
     invalidate: invalidate
   };

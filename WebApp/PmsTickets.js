@@ -244,6 +244,23 @@ PMS.Tickets = (function () {
   }
 
   /**
+   * Findings and the required action are mandatory when filing. A ticket exists
+   * to get something fixed, so a row that states neither what is wrong nor what
+   * has to happen cannot be worked or closed by anyone else.
+   *
+   * Opening remarks are deliberately NOT covered by this: the first history
+   * entry can stand on the findings alone. Remarks only become mandatory once a
+   * ticket starts moving, which is what requireRemarks below enforces.
+   */
+  function requireTicketText(value, label, fallback) {
+    var text = PMS.Util.cleanText(value, TEXT_MAX_LENGTH) || PMS.Util.cleanText(fallback, TEXT_MAX_LENGTH);
+    if (!text) {
+      PMS.Util.fail(label + ' is required to file a ticket.', 'VALIDATION_ERROR');
+    }
+    return text;
+  }
+
+  /**
    * Remarks are mandatory on every change. This is the whole point of the audit
    * trail: a status that moved with no stated reason is not auditable.
    */
@@ -403,14 +420,15 @@ PMS.Tickets = (function () {
     // cannot introduce an unknown section through the back door.
     subject.section = PMS.Util.section(subject.section).key;
 
-    var summary = PMS.Util.cleanText(request.summary, 300);
-    var findings = PMS.Util.cleanText(request.findings, TEXT_MAX_LENGTH) || subject.findings;
-    if (!summary) summary = findings ? findings.slice(0, 140) : '';
-    if (!summary) {
-      PMS.Util.fail('Describe the finding before filing a ticket.', 'VALIDATION_ERROR');
-    }
-    var actionRequired = PMS.Util.cleanText(request.actionRequired, TEXT_MAX_LENGTH) || subject.actionRequired;
+    // A linked record can supply both, so the fallback is applied before the
+    // requirement is tested rather than after.
+    var findings = requireTicketText(request.findings, 'Findings', subject.findings);
+    var actionRequired = requireTicketText(request.actionRequired, 'The required action', subject.actionRequired);
+    var summary = PMS.Util.cleanText(request.summary, 300) || findings.slice(0, 140);
     var priority = normalizePriority(request.priority, 'MEDIUM');
+    // The filer chooses the starting status: work is sometimes already under way
+    // by the time anyone writes the ticket down.
+    var status = normalizeStatus(request.status, 'OPEN');
     var openingRemarks = PMS.Util.cleanText(request.remarks, REMARKS_MAX_LENGTH) ||
       ('Ticket filed from ' + (subject.sourceRecordId || 'a manual report') + '.');
 
@@ -421,9 +439,10 @@ PMS.Tickets = (function () {
       var year = PMS.Util.currentCycle().year;
       var ticketId = nextTicketId(tickets, year);
 
+      var closedOnArrival = CLOSED_STATUSES.indexOf(status) >= 0;
       var ticket = {
         ticketId: ticketId,
-        status: 'OPEN',
+        status: status,
         priority: priority,
         section: subject.section,
         assetTag: subject.assetTag,
@@ -442,8 +461,10 @@ PMS.Tickets = (function () {
         updatedByName: actorName,
         lastAction: 'CREATED',
         lastRemarks: openingRemarks,
-        resolvedAt: '',
-        resolvedBy: '',
+        // Filing straight into Resolved or Cancelled is a legitimate case: the
+        // fix happened during maintenance and the ticket is the paper trail.
+        resolvedAt: closedOnArrival ? timestamp : '',
+        resolvedBy: closedOnArrival ? actor : '',
         changeCount: 1
       };
       var targetRow = Math.max(tickets.getLastRow() + 1, 2);
@@ -456,12 +477,12 @@ PMS.Tickets = (function () {
         changedByName: actorName,
         action: 'CREATED',
         fromStatus: '',
-        toStatus: 'OPEN',
+        toStatus: status,
         remarks: openingRemarks
       });
 
       ticket._rowNumber = targetRow;
-      ticket.isActive = true;
+      ticket.isActive = ACTIVE_STATUSES.indexOf(status) >= 0;
       return { ok: true, ticket: ticket };
     });
   }

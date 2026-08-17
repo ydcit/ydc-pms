@@ -806,6 +806,21 @@
     font-weight: 520;
   }
 
+  /* Says a field may be left blank, opposite the required asterisk. */
+  .field-optional {
+    margin-left: 6px;
+    padding: 1px 7px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-full);
+    background: var(--surface-soft);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 620;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+  }
+
   .field.has-error input,
   .field.has-error select,
   .field.has-error textarea,
@@ -3162,6 +3177,21 @@
     color: var(--ink);
   }
 
+  /*
+    Marks the checks that are blocking the step from advancing. Applied only
+    after a blocked Continue, so an untouched checklist does not open covered
+    in warnings.
+  */
+  .checklist-item.is-missing {
+    background: var(--warning-soft);
+    box-shadow: inset 3px 0 0 var(--warning);
+  }
+
+  .checklist-item.is-missing .checklist-item__label {
+    color: var(--ink);
+    font-weight: 560;
+  }
+
   .na-toggle {
     flex: none;
     min-height: 26px;
@@ -3186,6 +3216,92 @@
     border-color: var(--warning-line);
     background: var(--warning-soft);
     color: var(--warning);
+  }
+
+  /* Findings ticket inside the questionnaire ----------------------------------- */
+
+  .record-ticket {
+    display: grid;
+    gap: 16px;
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-soft);
+  }
+
+  .record-ticket__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .record-ticket__header h3 {
+    margin: 2px 0 4px;
+    font-size: 15px;
+  }
+
+  .record-ticket__header p {
+    margin: 0;
+    max-width: 62ch;
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  .record-ticket__header .button {
+    flex: none;
+  }
+
+  .record-ticket__body {
+    display: grid;
+    gap: 14px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+  }
+
+  .record-ticket__body .button {
+    justify-self: start;
+  }
+
+  /* Tickets already filed against this record, so the same finding is not
+     raised twice in one sitting. */
+  .record-ticket__filed {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 14px 0 0;
+    border-top: 1px solid var(--line);
+    list-style: none;
+  }
+
+  .record-ticket__filed li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+  }
+
+  .record-ticket__filed strong {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .record-ticket__filed span:last-child {
+    overflow: hidden;
+    color: var(--muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 620px) {
+    .record-ticket__header {
+      flex-direction: column;
+    }
+
+    .record-ticket__header .button {
+      width: 100%;
+      justify-content: center;
+    }
   }
 
   /* Review card ---------------------------------------------------------------- */

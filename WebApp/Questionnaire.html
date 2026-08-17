@@ -188,7 +188,7 @@
             <div>
               <p class="eyebrow">Step 2 of 4</p>
               <h2 id="step-2-title">Included peripheral asset tags</h2>
-              <p id="step-2-description">Add every tagged peripheral included in this maintenance. These fields are optional.</p>
+              <p id="step-2-description">Add every tagged peripheral included in this maintenance. Every field on this step is optional — you can continue without entering any tags.</p>
             </div>
           </div>
 
@@ -212,8 +212,8 @@
                 <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
               </span>
               <div>
-                <strong>Evidence is required to complete PMS</strong>
-                <p>You can save a draft without evidence. Existing evidence remains linked until a replacement upload succeeds.</p>
+                <strong>Both evidence files are required</strong>
+                <p>Attach firmware and backup evidence before you can continue to the checklist. Save progress still works without them, and existing evidence stays linked until a replacement upload succeeds.</p>
               </div>
             </div>
 
@@ -340,6 +340,79 @@
             <textarea id="recommendation" name="recommendation" rows="4" maxlength="4000" placeholder="State the recommended next step, monitoring need, replacement, or None." aria-describedby="recommendation-error"></textarea>
             <p class="field-error" id="recommendation-error" hidden></p>
           </div>
+
+          <!--
+            Findings tickets are filed from here because this is where findings
+            are written. The ticket is posted without leaving the questionnaire:
+            opening the tickets dialog on top would put a second focus trap on
+            the page, and the technician would lose their place mid-assessment.
+
+            Every control here is type="button". A submit button inside
+            #questionnaire-form would finalize PMS instead of filing a ticket.
+          -->
+          <section class="record-ticket" id="record-ticket" aria-labelledby="record-ticket-title">
+            <div class="record-ticket__header">
+              <div>
+                <p class="eyebrow">Findings ticket</p>
+                <h3 id="record-ticket-title">Does this asset still need fixing?</h3>
+                <p id="record-ticket-intro">File a ticket so the repair is tracked to completion after this record is closed. Any user can move it along, and every change is logged.</p>
+              </div>
+              <button class="button button--secondary" id="record-ticket-toggle" type="button" aria-expanded="false" aria-controls="record-ticket-body">
+                <svg class="icon" aria-hidden="true"><use href="#i-wrench"></use></svg>
+                <span id="record-ticket-toggle-label">File a ticket</span>
+              </button>
+            </div>
+
+            <div class="record-ticket__body" id="record-ticket-body" hidden>
+              <div class="field-grid">
+                <div class="field">
+                  <label for="record-ticket-priority">Priority</label>
+                  <div class="select-wrap">
+                    <select id="record-ticket-priority"></select>
+                    <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="record-ticket-status">Status</label>
+                  <div class="select-wrap">
+                    <select id="record-ticket-status"></select>
+                    <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+                  </div>
+                  <p class="field-help">Use In progress if the repair has already started.</p>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="record-ticket-findings">Findings <span class="required-mark" aria-hidden="true">*</span></label>
+                <textarea id="record-ticket-findings" rows="3" maxlength="4000" placeholder="What is wrong with this asset" aria-describedby="record-ticket-findings-help record-ticket-findings-error"></textarea>
+                <p class="field-help" id="record-ticket-findings-help">Prefilled from the asset findings above. Edit it if the ticket needs different wording.</p>
+                <p class="field-error" id="record-ticket-findings-error" hidden></p>
+              </div>
+
+              <div class="field">
+                <label for="record-ticket-action">Action required <span class="required-mark" aria-hidden="true">*</span></label>
+                <textarea id="record-ticket-action" rows="2" maxlength="4000" placeholder="What has to happen before this can be closed" aria-describedby="record-ticket-action-help record-ticket-action-error"></textarea>
+                <p class="field-help" id="record-ticket-action-help">Prefilled from the recommendation above.</p>
+                <p class="field-error" id="record-ticket-action-error" hidden></p>
+              </div>
+
+              <div class="field">
+                <label for="record-ticket-remarks">Opening remarks <span class="field-optional">Optional</span></label>
+                <textarea id="record-ticket-remarks" rows="2" maxlength="2000" placeholder="Context for the first history entry"></textarea>
+                <p class="field-help">Remarks become mandatory once the ticket changes status.</p>
+              </div>
+
+              <p class="field-help" id="record-ticket-note">Filing saves this record as a draft first, so the ticket can link back to it. Your progress is not lost.</p>
+              <p class="field-error" id="record-ticket-error" hidden></p>
+
+              <button class="button button--primary" id="record-ticket-submit" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+                <span>File ticket</span>
+              </button>
+            </div>
+
+            <ul class="record-ticket__filed" id="record-ticket-filed" aria-live="polite" hidden></ul>
+          </section>
 
           <section class="review-card" aria-labelledby="review-title">
             <div class="review-card__header">

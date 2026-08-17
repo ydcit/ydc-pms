@@ -219,9 +219,27 @@
           </p>
 
           <div class="field-grid">
+            <!--
+              Same ARIA combobox as the questionnaire's asset picker, reusing its
+              styles. The tags are loaded for the selected section when this view
+              opens, so a ticket can only name an asset that actually exists.
+            -->
             <div class="field">
               <label for="ticket-create-asset">Asset tag <span class="required-mark" aria-hidden="true">*</span></label>
-              <input id="ticket-create-asset" type="text" autocomplete="off" spellcheck="false" placeholder="YDC-AP-01">
+              <div class="combobox" id="ticket-asset-combobox">
+                <div class="combobox__control">
+                  <svg class="icon combobox__icon" aria-hidden="true"><use href="#i-search"></use></svg>
+                  <input id="ticket-create-asset" type="text" autocomplete="off" spellcheck="false"
+                         placeholder="Search by asset tag"
+                         role="combobox" aria-expanded="false" aria-controls="ticket-asset-listbox"
+                         aria-autocomplete="list" aria-describedby="ticket-create-asset-help ticket-create-asset-error">
+                  <button class="combobox__toggle" id="ticket-asset-combobox-toggle" type="button" tabindex="-1" aria-label="Show assets">
+                    <svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+                  </button>
+                </div>
+                <div class="combobox__panel" id="ticket-asset-listbox" role="listbox" aria-label="Assets" hidden></div>
+              </div>
+              <p class="field-help" id="ticket-create-asset-help">Choose the asset that needs fixing.</p>
               <p class="field-error" id="ticket-create-asset-error" hidden></p>
             </div>
             <div class="field">
@@ -230,6 +248,7 @@
                 <select id="ticket-create-section"></select>
                 <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
               </div>
+              <p class="field-help" id="ticket-create-section-help">Switching sections reloads the asset list.</p>
             </div>
           </div>
 
@@ -248,24 +267,36 @@
           </div>
 
           <div class="field">
+            <label for="ticket-create-status">Status</label>
+            <div class="select-wrap">
+              <select id="ticket-create-status"></select>
+              <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+            </div>
+            <p class="field-help" id="ticket-create-status-help">Starts as Open. Any user can change it later, with remarks.</p>
+          </div>
+
+          <div class="field">
             <label for="ticket-create-summary">Summary <span class="required-mark" aria-hidden="true">*</span></label>
             <input id="ticket-create-summary" type="text" maxlength="300" placeholder="Short description of what needs fixing">
             <p class="field-error" id="ticket-create-summary-error" hidden></p>
           </div>
 
           <div class="field">
-            <label for="ticket-create-findings">Findings</label>
-            <textarea id="ticket-create-findings" rows="3" maxlength="4000" placeholder="What was observed on the asset"></textarea>
+            <label for="ticket-create-findings">Findings <span class="required-mark" aria-hidden="true">*</span></label>
+            <textarea id="ticket-create-findings" rows="3" maxlength="4000" placeholder="What was observed on the asset" aria-describedby="ticket-create-findings-error"></textarea>
+            <p class="field-error" id="ticket-create-findings-error" hidden></p>
           </div>
 
           <div class="field">
-            <label for="ticket-create-action">Action required</label>
-            <textarea id="ticket-create-action" rows="2" maxlength="4000" placeholder="What needs to happen to close this"></textarea>
+            <label for="ticket-create-action">Action required <span class="required-mark" aria-hidden="true">*</span></label>
+            <textarea id="ticket-create-action" rows="2" maxlength="4000" placeholder="What needs to happen to close this" aria-describedby="ticket-create-action-error"></textarea>
+            <p class="field-error" id="ticket-create-action-error" hidden></p>
           </div>
 
           <div class="field">
-            <label for="ticket-create-remarks">Opening remarks</label>
+            <label for="ticket-create-remarks">Opening remarks <span class="field-optional">Optional</span></label>
             <textarea id="ticket-create-remarks" rows="2" maxlength="2000" placeholder="Context for the first history entry"></textarea>
+            <p class="field-help">Remarks become mandatory once the ticket changes status.</p>
           </div>
 
           <p class="field-error" id="ticket-create-error" hidden></p>

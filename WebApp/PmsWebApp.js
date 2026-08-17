@@ -237,6 +237,22 @@ function PMS_apiUpdateTicket(payload) {
 }
 
 /**
+ * Asset tags for the ticket form's picker.
+ *
+ * Kept out of the bootstrap on purpose. Tickets may be filed against either
+ * section, so this can return both sections' assets at once, and the bootstrap
+ * payload is already the largest response the app produces.
+ */
+function PMS_apiAssetOptions(sectionKey) {
+  try {
+    PMS.Auth.requireProfile();
+    return PMS_jsonResponse_({ ok: true, assets: PMS.Assets.listOptions(sectionKey) });
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+/**
  * Active ticket count for the dashboard badge. Fetched after the dashboard
  * paints rather than inside the bootstrap, so it cannot slow first load.
  */
