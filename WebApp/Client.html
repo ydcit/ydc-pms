@@ -1850,31 +1850,60 @@
         return;
       }
       setBusy(true, 'Saving ticket update…');
+      // One call: the response carries the updated ticket, its history and the
+      // refreshed list, so the current list request goes along with the write.
       serverCall('PMS_apiUpdateTicket', {
         ticketId: state.tickets.currentId,
         status: byId('ticket-update-status').value,
         priority: byId('ticket-update-priority').value,
         remarks: remarks
-      })
+      }, ticketsRequest({}))
         .then(function (result) {
           var changed = result && result.statusChanged;
           showToast(changed ? 'Status updated' : 'Note added',
             changed ? 'The ticket moved to ' + ticketLabel(result.ticket.status) + '.' : 'Your note was added to the history.',
             'success');
-          return serverCall('PMS_apiTicketDetail', state.tickets.currentId)
-            .then(function (data) { renderTicketDetail(data); });
+          return applyTicketWriteResult(result);
         })
-        .then(function () { return loadTickets({}); })
         .catch(function (error) {
           setFieldError('ticket-update-remarks', 'ticket-update-remarks-error', errorMessage(error));
         })
         .finally(function () { setBusy(false); });
     }
 
+    /**
+     * Renders a write response that already contains everything.
+     *
+     * Falls back to separate fetches only when the server could not build the
+     * refresh, so a partial response still leaves the screen consistent.
+     */
+    function applyTicketWriteResult(result) {
+      var payload = result || {};
+      if (payload.history && payload.ticket) {
+        renderTicketDetail({
+          ticket: payload.ticket,
+          history: payload.history,
+          statuses: payload.statuses,
+          priorities: payload.priorities
+        });
+      }
+      if (payload.list) {
+        // renderTickets also refreshes the tabs and the dashboard badge.
+        renderTickets(payload.list);
+        return Promise.resolve(payload);
+      }
+      var ticketId = payload.ticket ? normalizeText(payload.ticket.ticketId) : '';
+      return Promise.all([
+        ticketId ? serverCall('PMS_apiTicketDetail', ticketId).then(renderTicketDetail) : Promise.resolve(),
+        loadTickets({})
+      ]).then(function () { return payload; });
+    }
+
     /* ------------------------------------------------------------- create */
 
     var TICKET_ASSET_LIMIT = 50;
     var TICKET_STATUS_FALLBACK = ['OPEN', 'IN_PROGRESS', 'ON_HOLD', 'RESOLVED', 'CANCELLED'];
+    var TICKET_CLOSED_STATUSES = ['RESOLVED', 'CANCELLED'];
     var TICKET_PRIORITY_FALLBACK = ['LOW', 'MEDIUM', 'HIGH'];
 
     function ticketCreateFieldIds() {
@@ -2217,6 +2246,11 @@
       }
 
       setBusy(true, 'Filing ticket…');
+      // A ticket filed straight into Resolved or Cancelled is not in the "needs
+      // attention" bucket, so the filter is switched before the call and sent
+      // with it, which lets the response carry a list that actually contains it.
+      var submittedStatus = byId('ticket-create-status').value;
+      state.tickets.status = TICKET_CLOSED_STATUSES.indexOf(submittedStatus) >= 0 ? '' : 'ACTIVE';
       serverCall('PMS_apiCreateTicket', {
         sourceRecordId: state.tickets.sourceRecordId,
         assetTag: assetTag,
@@ -2226,20 +2260,16 @@
         findings: findings,
         actionRequired: actionRequired,
         priority: byId('ticket-create-priority').value,
-        status: byId('ticket-create-status').value,
+        status: submittedStatus,
         remarks: normalizeText(byId('ticket-create-remarks').value)
-      })
+      }, ticketsRequest({ page: 1 }))
         .then(function (result) {
           var ticket = (result && result.ticket) || {};
           var ticketId = normalizeText(ticket.ticketId);
           showToast('Ticket filed', ticketId + ' is now tracked as ' + ticketLabel(ticket.status) + '.', 'success');
-          // A ticket filed straight into Resolved or Cancelled is not in the
-          // "needs attention" bucket, so show a filter that actually contains it.
-          state.tickets.status = ticket.isActive === false ? '' : 'ACTIVE';
-          loadTicketSummary();
-          return loadTickets({ page: 1 }).then(function () {
-            if (ticketId) openTicketDetail(ticketId);
-            else showTicketsView('list');
+          return applyTicketWriteResult(result).then(function () {
+            showTicketsView(ticketId && result.history ? 'detail' : 'list');
+            if (ticketId && !result.history) openTicketDetail(ticketId);
           });
         })
         .catch(function (error) {
@@ -2426,14 +2456,16 @@
           // Everything the payload carries is now persisted.
           state.dirty = false;
           // Findings and the required action are deliberately omitted: the
-          // server derives both from the record this ticket links to.
+          // server derives both from the record this ticket links to. A tiny
+          // page is requested because only the counts are needed here, for the
+          // dashboard badge.
           return serverCall('PMS_apiCreateTicket', {
             sourceRecordId: state.recordId,
             summary: (result ? result + ' on ' : 'Needs fixing: ') + assetTag,
             priority: byId('record-ticket-priority').value,
             status: byId('record-ticket-status').value,
             remarks: normalizeText(byId('record-ticket-remarks').value)
-          });
+          }, { page: 1, pageSize: 5, status: 'ACTIVE' });
         })
         .then(function (payload) {
           var ticket = (payload && payload.ticket) || {};
@@ -2449,8 +2481,9 @@
           updateFooterActions();
           showToast('Ticket filed',
             normalizeText(ticket.ticketId) + ' is now tracking ' + assetTag + ' for fixing.', 'success');
-          // Keeps the dashboard badge honest without a reload.
-          loadTicketSummary();
+          // The counts came back with the write, so the badge needs no extra call.
+          if (payload && payload.list && payload.list.counts) updateTicketsBadge(payload.list.counts);
+          else loadTicketSummary();
         })
         .catch(function (error) {
           var target = byId('record-ticket-error');

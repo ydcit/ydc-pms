@@ -218,19 +218,29 @@ function PMS_apiTicketDetail(ticketId) {
   }
 }
 
-function PMS_apiCreateTicket(payload) {
+/*
+  Both write endpoints take the browser's current list request as a second
+  argument and return the changed ticket, its history and the refreshed list in
+  one response. Filing or moving a ticket used to cost three sequential
+  google.script.run calls, which is most of what made it feel slow.
+*/
+function PMS_apiCreateTicket(payload, listOptions) {
   try {
     var context = PMS.Auth.requireProfile();
-    return PMS_jsonResponse_(PMS.Tickets.create(context, payload));
+    return PMS_jsonResponse_(
+      PMS.Tickets.withRefresh(context, PMS.Tickets.create(context, payload), listOptions)
+    );
   } catch (error) {
     return PMS_jsonResponse_(PMS.Util.publicError(error));
   }
 }
 
-function PMS_apiUpdateTicket(payload) {
+function PMS_apiUpdateTicket(payload, listOptions) {
   try {
     var context = PMS.Auth.requireProfile();
-    return PMS_jsonResponse_(PMS.Tickets.updateStatus(context, payload));
+    return PMS_jsonResponse_(
+      PMS.Tickets.withRefresh(context, PMS.Tickets.updateStatus(context, payload), listOptions)
+    );
   } catch (error) {
     return PMS_jsonResponse_(PMS.Util.publicError(error));
   }
@@ -323,6 +333,7 @@ function PMS_adminSetup() {
   var infraSheet = PMS.Records.responseSheet(true, 'INFRA_SECURITY');
   var baseline = PMS.Records.ensureTrackerBaseline();
   var tickets = PMS.Tickets.ensureSheets();
+  var recipients = PMS.Notify.ensureSheet();
   return {
     ok: true,
     userSheetName: users.getName(),
@@ -331,10 +342,28 @@ function PMS_adminSetup() {
       { name: infraSheet.getName(), columns: PMS.CONFIG.INFRA_RECORD_COLUMNS.length }
     ],
     ticketSheets: tickets,
+    recipientSheetName: recipients.getName(),
     baseline: baseline,
     evidence: PMS.Evidence.readiness(),
-    message: 'PMS Users, both section record sheets, ticket sheets, and evidence folders are ready.'
+    notifications: PMS.Notify.readiness(),
+    message: 'PMS Users, both section record sheets, ticket sheets, the notification recipients sheet, ' +
+      'and evidence folders are ready. Add recipients to the ' + PMS.Notify.sheetName() +
+      ' sheet, then run PMS_notifyTest to confirm email delivery.'
   };
+}
+
+/**
+ * Sends a sample notification to the live recipient list.
+ *
+ * Run from the Apps Script editor after adding recipients. The result is logged
+ * because the editor does not render return values.
+ */
+function PMS_notifyTest() {
+  var admin = PMS.Auth.requireAdmin();
+  var result = PMS.Notify.sendTest(admin);
+  result.readiness = PMS.Notify.readiness();
+  console.log(JSON.stringify(result, null, 2));
+  return result;
 }
 
 /**

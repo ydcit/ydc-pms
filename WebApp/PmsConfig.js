@@ -7,6 +7,14 @@ PMS.CONFIG = {
   INFRA_RESPONSE_SHEET: 'PMS Records - Infra & Security',
   TICKET_SHEET: 'PMS Tickets',
   TICKET_LOG_SHEET: 'PMS Ticket Log',
+  // Who receives email notifications, maintained in this sheet rather than in
+  // code so the list can change without a deployment.
+  NOTIFY_SHEET: 'PMS Notification Recipients',
+  // Master switch. Set to false to stop all outbound notifications without
+  // emptying the recipients sheet.
+  NOTIFY_ENABLED: true,
+  NOTIFY_SENDER_NAME: 'YDC PMS',
+  NOTIFY_SUBJECT_PREFIX: '[YDC PMS]',
   // Findings tickets are visible to every rostered user regardless of section,
   // because repairing an asset is cross-team work and any user may move a ticket
   // along. Accountability comes from the append-only log rather than from

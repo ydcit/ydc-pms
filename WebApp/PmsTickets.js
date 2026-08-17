@@ -304,21 +304,45 @@ PMS.Tickets = (function () {
     });
   }
 
+  /*
+    Per-execution memo for the two sheet reads.
+
+    A write request now builds its own response: the changed ticket, its history,
+    and the refreshed list. Without this memo that would re-read the ticket sheet
+    for the detail and again for the list, on top of the read the write itself
+    needed. Every write invalidates it, so a read after a write is never stale.
+  */
+  var readMemo = { tickets: null, log: null };
+
+  function invalidateReadMemo() {
+    readMemo.tickets = null;
+    readMemo.log = null;
+  }
+
   function readTickets() {
+    if (readMemo.tickets) return readMemo.tickets;
     var sheet = ticketSheet(false);
-    if (!sheet || sheet.getLastRow() < 2) return [];
+    if (!sheet || sheet.getLastRow() < 2) {
+      readMemo.tickets = [];
+      return readMemo.tickets;
+    }
     var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, TICKET_COLUMNS.length).getValues();
     var tickets = [];
     values.forEach(function (row, index) {
       if (!cellText(row[0])) return;
       tickets.push(rowToTicket(row, index + 2));
     });
+    readMemo.tickets = tickets;
     return tickets;
   }
 
   function readLog() {
+    if (readMemo.log) return readMemo.log;
     var sheet = logSheet(false);
-    if (!sheet || sheet.getLastRow() < 2) return [];
+    if (!sheet || sheet.getLastRow() < 2) {
+      readMemo.log = [];
+      return readMemo.log;
+    }
     var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, LOG_COLUMNS.length).getValues();
     var entries = [];
     values.forEach(function (row, index) {
@@ -329,6 +353,7 @@ PMS.Tickets = (function () {
       });
       entries.push(entry);
     });
+    readMemo.log = entries;
     return entries;
   }
 
@@ -432,7 +457,7 @@ PMS.Tickets = (function () {
     var openingRemarks = PMS.Util.cleanText(request.remarks, REMARKS_MAX_LENGTH) ||
       ('Ticket filed from ' + (subject.sourceRecordId || 'a manual report') + '.');
 
-    return withScriptLock(function () {
+    var outcome = withScriptLock(function () {
       var tickets = ticketSheet(true);
       var log = logSheet(true);
       var timestamp = PMS.Util.nowIso();
@@ -481,6 +506,7 @@ PMS.Tickets = (function () {
         remarks: openingRemarks
       });
 
+      invalidateReadMemo();
       ticket._rowNumber = targetRow;
       ticket.isActive = ACTIVE_STATUSES.indexOf(status) >= 0;
       // A ticket against an already-completed record flips its tracker cell from
@@ -489,6 +515,13 @@ PMS.Tickets = (function () {
       var tracker = syncTrackerForRecord(ticket.sourceRecordId);
       return { ok: true, ticket: ticket, tracker: tracker };
     });
+
+    outcome.notification = announce(outcome, {
+      action: 'CREATED',
+      remarks: openingRemarks,
+      actorName: actorName
+    });
+    return outcome;
   }
 
   function findTicketRow(sheet, ticketId) {
@@ -522,7 +555,7 @@ PMS.Tickets = (function () {
     var actor = PMS.Util.normalizeEmail(context.email);
     var actorName = PMS.Util.cleanText(context.name, 250) || actor;
 
-    return withScriptLock(function () {
+    var outcome = withScriptLock(function () {
       var tickets = ticketSheet(true);
       var log = logSheet(true);
       var rowNumber = findTicketRow(tickets, ticketId);
@@ -572,18 +605,36 @@ PMS.Tickets = (function () {
         remarks: remarks
       });
 
+      invalidateReadMemo();
       updated._rowNumber = rowNumber;
       updated.isActive = ACTIVE_STATUSES.indexOf(nextStatus) >= 0;
-      // Keeps the section tracker sheet showing the live repair state.
-      var tracker = statusChanged ? syncTrackerForRecord(updated.sourceRecordId) : null;
+      /*
+        Keeps the section tracker sheet showing the live repair state, but only
+        when the cell could actually differ. A closed-to-closed move such as
+        RESOLVED to CANCELLED maps to COMPLETED either way, and a closed ticket
+        contributes nothing to the aggregate, so the cell cannot change and the
+        record lookup plus tracker read are skipped entirely.
+      */
+      var cellCouldChange = statusChanged &&
+        trackerValueForStatus(existing.status) !== trackerValueForStatus(nextStatus);
+      var tracker = cellCouldChange ? syncTrackerForRecord(updated.sourceRecordId) : null;
       return {
         ok: true,
         ticket: updated,
         action: action,
         statusChanged: statusChanged,
+        fromStatus: existing.status,
         tracker: tracker
       };
     });
+
+    outcome.notification = announce(outcome, {
+      action: outcome.action,
+      fromStatus: outcome.fromStatus,
+      remarks: remarks,
+      actorName: actorName
+    });
+    return outcome;
   }
 
   /* ------------------------------------------------------------------- read */
@@ -785,6 +836,33 @@ PMS.Tickets = (function () {
     return { ok: true, counts: countByStatus(scopedTickets(context)) };
   }
 
+  /**
+   * Attaches the changed ticket's history and the refreshed list to a write
+   * result, so the browser needs one round trip per status change instead of
+   * three. Both reads come out of the per-execution memo.
+   *
+   * A refresh failure is reported rather than thrown: the write already
+   * succeeded, and the browser can fall back to fetching separately.
+   */
+  function withRefresh(context, result, listOptions) {
+    var payload = result || {};
+    try {
+      var ticketId = payload.ticket ? payload.ticket.ticketId : '';
+      if (ticketId) {
+        var full = detail(context, ticketId);
+        payload.ticket = full.ticket;
+        payload.history = full.history;
+        payload.statuses = full.statuses;
+        payload.priorities = full.priorities;
+      }
+      payload.list = list(context, listOptions || {});
+    } catch (error) {
+      console.warn('The ticket refresh payload could not be built: ' + error.message);
+      payload.refreshFailed = true;
+    }
+    return payload;
+  }
+
   /* --------------------------------------------------- record interconnection */
 
   /**
@@ -799,6 +877,31 @@ PMS.Tickets = (function () {
    * directions are runtime-only calls inside function bodies, which is required
    * because Apps Script evaluates PmsTickets before PmsTracker.
    */
+  /**
+   * Announces a ticket movement by email.
+   *
+   * Called after the script lock is released: sending mail takes long enough
+   * that holding the lock across it would make concurrent updates queue behind
+   * each other. Best effort, and tolerant of the module being absent, so neither
+   * a mail failure nor a partial deployment can undo a committed ticket write.
+   */
+  function announce(outcome, event) {
+    if (!PMS.Notify || !outcome || !outcome.ticket) return null;
+    try {
+      return PMS.Notify.ticketEvent({
+        ticket: outcome.ticket,
+        action: event.action,
+        fromStatus: event.fromStatus || '',
+        remarks: event.remarks || '',
+        actorName: event.actorName || '',
+        trackerStatus: outcome.tracker && outcome.tracker.status ? outcome.tracker.status : ''
+      });
+    } catch (error) {
+      console.warn('Ticket notification failed for ' + outcome.ticket.ticketId + ': ' + error.message);
+      return null;
+    }
+  }
+
   function syncTrackerForRecord(recordId) {
     var id = PMS.Util.cleanText(recordId, 100);
     if (!id) return null;
@@ -848,6 +951,11 @@ PMS.Tickets = (function () {
   */
   var TRACKER_STATUS_PRECEDENCE = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD']);
 
+  /** The cell text one ticket status maps to, ignoring any siblings. */
+  function trackerValueForStatus(status) {
+    return PMS.CONFIG.TRACKER_REPAIR_VALUES[status] || PMS.CONFIG.TRACKER_COMPLETED_VALUE;
+  }
+
   /**
    * The text the tracker cycle cell should carry for a record.
    *
@@ -878,6 +986,7 @@ PMS.Tickets = (function () {
     list: list,
     detail: detail,
     summary: summary,
+    withRefresh: withRefresh,
     forRecord: forRecord,
     hasForRecord: hasForRecord,
     trackerStatusForRecord: trackerStatusForRecord

@@ -457,6 +457,9 @@ PMS.Records = (function () {
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(30000)) PMS.Util.fail('The system is busy. Please try again.', 'BUSY');
     var result;
+    // Set when maintenance actually completes, so the email goes out after the
+    // lock is released rather than extending how long it is held.
+    var completionNotice = null;
     try {
       var existing = null;
       if (normalized.recordId) {
@@ -553,6 +556,7 @@ PMS.Records = (function () {
 
         var completedWithoutTracker = syncResult.status === 'HISTORICAL_COMPLETED';
         if (syncResult.status === 'COMPLETED' || completedWithoutTracker) {
+          completionNotice = { record: record, trackerStatus: syncResult.trackerStatus || '' };
           record.submittedAt = record.submittedAt || record.updatedAt;
           if (completedWithoutTracker && String(record.dataQualityFlags || '').indexOf('HISTORICAL_NO_TRACKER_WRITE') < 0) {
             record.dataQualityFlags = [record.dataQualityFlags, 'HISTORICAL_NO_TRACKER_WRITE'].filter(Boolean).join(' | ');
@@ -592,6 +596,18 @@ PMS.Records = (function () {
       result.recentRecords = recent(profile, 10, refreshedRecords);
     } catch (error) {
       console.error('Post-save dashboard refresh failed: ' + error.message);
+    }
+
+    // Outside the lock, and best effort: a completed record must not be undone
+    // by a mail failure, and the module may be absent in a partial deployment.
+    if (completionNotice && PMS.Notify) {
+      try {
+        result.notification = PMS.Notify.pmsCompleted(completionNotice.record, {
+          trackerStatus: completionNotice.trackerStatus
+        });
+      } catch (error) {
+        console.warn('PMS completion notification failed: ' + error.message);
+      }
     }
     return result;
   }

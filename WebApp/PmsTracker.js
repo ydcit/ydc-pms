@@ -650,7 +650,6 @@ PMS.Tracker = (function () {
     if (!cycleConfig) return { ok: false, changed: false, reason: 'UNKNOWN_CYCLE' };
 
     var row = findAssetRow(sheet, record.assetTag);
-    removeLegacyCycleProtectionsFromSheet(sheet);
     var statusCell = sheet.getRange(row, cycleConfig.checkboxColumn);
     var previousStatus = String(statusCell.getDisplayValue() || '');
     var expectedStatus = repairAwareStatus(record);
@@ -663,15 +662,31 @@ PMS.Tracker = (function () {
       return { ok: false, changed: false, reason: 'UNEXPECTED_CELL_VALUE', previousStatus: previousStatus, row: row };
     }
 
-    try {
+    function writeStatusCell() {
       statusCell.setDataValidation(statusValidationRule());
       statusCell
         .setValue(expectedStatus)
         .setHorizontalAlignment('center')
         .setVerticalAlignment('middle');
       SpreadsheetApp.flush();
+    }
+
+    try {
+      writeStatusCell();
     } catch (error) {
-      protectedWriteFailure(sheet, statusCell, 'repair status', error);
+      /*
+        Enumerating protections costs a slow API call, and this runs on every
+        ticket status change. A reverted release may have left a stale cycle lock
+        behind, so pay for the cleanup only when a write actually fails, then
+        retry once. The completion path still cleans up eagerly because it writes
+        the remarks cell too.
+      */
+      try {
+        removeLegacyCycleProtectionsFromSheet(sheet);
+        writeStatusCell();
+      } catch (retryError) {
+        protectedWriteFailure(sheet, statusCell, 'repair status', retryError);
+      }
     }
     if (String(statusCell.getDisplayValue() || '') !== expectedStatus) {
       PMS.Util.fail('Tracker repair status verification failed.', 'SYNC_FAILED');
