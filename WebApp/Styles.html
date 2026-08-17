@@ -1193,9 +1193,21 @@
     gap: 16px;
   }
 
+  /*
+     Wrapping rather than another breakpoint. Four action buttons beside a title
+     need about 1050px, so between the dialogs' 860px breakpoint and that width
+     they used to push the page sideways. Letting them fall onto their own line
+     solves every width in between without guessing at one.
+  */
   .page-heading {
     margin-bottom: 24px;
     align-items: flex-end;
+    flex-wrap: wrap;
+    row-gap: 14px;
+  }
+
+  .page-heading__actions {
+    flex-wrap: wrap;
   }
 
   .page-heading h1 {
@@ -2133,6 +2145,19 @@
 
     .archive-pager__controls {
       justify-content: space-between;
+    }
+
+    /*
+       The heading has to stack here too, not only at 780px.
+
+       These action buttons became a full-width column at 860px while the heading
+       around them stayed a row until 780px, so between those two widths a
+       100%-wide column of buttons sat beside the title and pushed the page
+       sideways. The two breakpoints have to be the same one.
+    */
+    .page-heading {
+      flex-direction: column;
+      align-items: flex-start;
     }
 
     .page-heading__actions {
@@ -4339,6 +4364,381 @@
       left: 12px;
       bottom: 12px;
       width: auto;
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     Phones
+
+     Two rules run through everything below. Nothing scrolls sideways, because a
+     column pushed off-screen is a column nobody knows exists. And anything you
+     tap is at least 40px tall, which is roughly a fingertip.
+     -------------------------------------------------------------------------- */
+
+  @media (max-width: 760px) {
+    /*
+       iOS zooms the whole page when a focused field's text is under 16px, and it
+       does not zoom back out afterwards. Setting the size is cheaper than
+       fighting the viewport, and 16px is a reasonable size to type into anyway.
+    */
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+
+    /* Comfortable targets for the controls that sit in dense rows. */
+    .button--small,
+    .table-action,
+    .ticket-tab {
+      min-height: 38px;
+    }
+
+    .icon-button {
+      min-width: 38px;
+      min-height: 38px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    /*
+       The top bar was the one thing still pushing the page sideways on a small
+       phone: the brand lockup cannot shrink below its longest word, and the two
+       context pills plus the avatar need what is left.
+
+       So the brand name truncates instead of setting a floor, and the section
+       pill goes. The section is not lost — every page states it, and the
+       dashboard leads with it — whereas the cycle pill is the one piece of
+       context that appears nowhere else on screen.
+    */
+    .topbar__inner {
+      gap: 10px;
+      padding-top: 10px;
+      padding-bottom: 10px;
+    }
+
+    .brand {
+      min-width: 0;
+      gap: 8px;
+    }
+
+    .brand__text {
+      min-width: 0;
+    }
+
+    .brand__name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .topbar__context {
+      flex: none;
+    }
+
+    #header-section {
+      display: none;
+    }
+
+    .user-menu {
+      padding-left: 8px;
+    }
+  }
+
+  @media (max-width: 620px) {
+    /*
+       Dialog header. The buttons keep the top-right corner and lose their text,
+       so the title and the summary get the full width instead of being squeezed
+       into a third of it and wrapping over four lines.
+
+       The labels are hidden the accessible way rather than removed: an icon-only
+       button with no text in the tree is a button screen readers cannot name.
+    */
+    .archive-dialog__header-actions .button > span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      border: 0;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .archive-dialog__header-actions .button {
+      padding: 0 11px;
+    }
+
+    .archive-dialog__title-row {
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .archive-dialog__title-row h1 {
+      font-size: 18px;
+    }
+
+    .archive-dialog__header,
+    .archive-dialog__footer {
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+
+    /* One filter per row. Two half-width selects left neither of them readable. */
+    .archive-toolbar__search,
+    .archive-toolbar__filter {
+      width: 100%;
+    }
+
+    .archive-toolbar {
+      gap: 8px;
+    }
+
+    /* "Sort by [control]" keeps its label but the control takes the rest. */
+    .archive-control {
+      width: 100%;
+    }
+
+    .archive-control .select-wrap,
+    .archive-control select {
+      width: 100%;
+    }
+
+    .archive-control--end {
+      margin-left: 0;
+    }
+
+    /* Paging: full-width Previous and Next with the page jump between them. */
+    .archive-pager__controls {
+      width: 100%;
+      gap: 6px;
+    }
+
+    .archive-pager__controls .button {
+      flex: 1 1 auto;
+      justify-content: center;
+    }
+
+    .archive-jump {
+      flex: none;
+    }
+
+    /* Tabs scroll sideways by design, but the scrollbar itself is noise. */
+    .ticket-tabs {
+      margin-left: -16px;
+      margin-right: -16px;
+      padding-left: 16px;
+      padding-right: 16px;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .ticket-tabs::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Ticket views: narrower gutters so the content is not a column of margin. */
+    .ticket-back,
+    .ticket-detail,
+    .ticket-update,
+    .ticket-history-wrap,
+    .ticket-create {
+      margin-left: 14px;
+      margin-right: 14px;
+    }
+
+    .ticket-detail,
+    .ticket-update,
+    .ticket-history-wrap,
+    .ticket-create {
+      padding: 16px;
+    }
+
+    .ticket-detail__head h2 {
+      font-size: 17px;
+    }
+
+    /* The submit button spans the form: a thumb-sized target at the end of it. */
+    .ticket-update > .button,
+    .ticket-create > .button {
+      width: 100%;
+      justify-content: center;
+    }
+  }
+
+  /*
+     Notched phones. viewport-fit=cover lets the page use the full screen, which
+     also means the bottom bar can sit under the home indicator unless the inset
+     is added back.
+  */
+  @supports (padding: max(0px)) {
+    @media (max-width: 860px) {
+      .archive-dialog__footer,
+      .questionnaire__footer,
+      .legacy-import-dialog__footer {
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
+      }
+
+      .toast-region {
+        bottom: max(12px, env(safe-area-inset-bottom));
+      }
+
+      .topbar__inner {
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+      }
+    }
+  }
+
+  /* --------------------------------------------------------------------------
+     Tables as cards on small screens
+
+     A seven-column table on a phone is not a table anybody can read. Sideways
+     scrolling hid the columns that matter most — the assessment and the row's
+     own buttons were both off-screen — so below this width each row becomes a
+     card and each cell becomes a labelled line.
+
+     The label comes from the cell's data-label, written by labelledCell() when
+     the row is built. That keeps one set of row-building code serving both
+     shapes: no duplicate markup, no template switching, nothing to keep in sync
+     beyond the label itself.
+
+     The breakpoint is 860px, matching the width at which the dialogs already go
+     full-screen, so the app has one story about what a small screen is rather
+     than three. It also covers a tablet held in portrait, which would otherwise
+     have been left scrolling a 900px table sideways inside a 768px dialog.
+     -------------------------------------------------------------------------- */
+
+  @media (max-width: 860px) {
+    /* The floor that keeps columns legible on a desktop is what forces the
+       sideways scroll here, so it is lifted along with the table layout. */
+    #archive-table-wrap table,
+    #tickets-table-wrap table,
+    .legacy-import-table {
+      min-width: 0;
+    }
+
+    .table-wrap {
+      margin: 0;
+      overflow-x: visible;
+    }
+
+    .table--cards {
+      display: block;
+      width: 100%;
+      font-size: 13px;
+    }
+
+    /* The header row is replaced by the per-cell labels below. */
+    .table--cards thead {
+      display: none;
+    }
+
+    .table--cards tbody,
+    .table--cards tr,
+    .table--cards td {
+      display: block;
+      width: auto;
+    }
+
+    .table--cards tr {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-md);
+      background: var(--surface);
+    }
+
+    .table--cards tr + tr {
+      margin-top: 10px;
+    }
+
+    .table--cards tr:hover {
+      background: var(--surface);
+    }
+
+    .table--cards td {
+      display: grid;
+      grid-template-columns: 8.5rem minmax(0, 1fr);
+      gap: 4px 12px;
+      padding: 5px 0;
+      border-bottom: 0;
+      vertical-align: baseline;
+      /* Chips and badges keep their own width instead of being stretched to the
+         grid track, which would turn a small status pill into a full-width bar. */
+      justify-items: start;
+      align-items: baseline;
+    }
+
+    /* Anything that is genuinely a block of text should still fill the row. */
+    .table--cards td > div,
+    .table--cards td > p {
+      width: 100%;
+    }
+
+    .table--cards td::before {
+      content: attr(data-label);
+      color: var(--muted);
+      font-size: 10.5px;
+      font-weight: 620;
+      letter-spacing: 0.055em;
+      line-height: 1.6;
+      text-transform: uppercase;
+    }
+
+    /* A cell holding only controls gets the full width and no label: "Actions"
+       printed beside a button is noise. */
+    .table--cards td.is-controls {
+      display: block;
+      padding-top: 10px;
+    }
+
+    .table--cards td.is-controls:empty {
+      display: none;
+    }
+
+    .table--cards .table-actions {
+      justify-content: stretch;
+    }
+
+    /* Row buttons span the card, whether there are two of them in a flex row or
+       a single bare one, so every card ends in the same thumb-sized target. */
+    .table--cards .table-actions .table-action,
+    .table--cards td.is-controls > .table-action {
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 38px;
+    }
+
+    /* Hidden columns must stay hidden: the technician column is admin-only, and
+       display:block would otherwise override the hidden attribute. */
+    .table--cards td[hidden],
+    .table--cards th[hidden] {
+      display: none;
+    }
+
+    /* Row-level empty states span the card rather than being labelled. */
+    .table--cards td[colspan] {
+      display: block;
+      padding: 6px 0;
+    }
+
+    .table--cards td[colspan]::before {
+      content: none;
+    }
+
+    /* In a card the assessment column no longer needs its desktop floor. */
+    .archive-col-assessment {
+      min-width: 0;
+    }
+  }
+
+  @media (max-width: 420px) {
+    /* Labels above values rather than beside them: at this width a fixed label
+       column leaves too little room for an asset tag and a date. */
+    .table--cards td {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 1px;
     }
   }
 

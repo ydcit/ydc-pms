@@ -253,6 +253,24 @@
       return svg;
     }
 
+    /**
+     * A table cell that knows what column it belongs to.
+     *
+     * On a phone the tables become stacked cards, and a cell with no visible
+     * column header above it is just an unlabelled value. The label is carried on
+     * the cell so the card layout can render it from CSS, which keeps one set of
+     * row-building code serving both shapes.
+     *
+     * Cells holding only controls are created without a label, because "Actions"
+     * printed beside a button reads as noise.
+     */
+    function labelledCell(label) {
+      var cell = document.createElement('td');
+      if (label) cell.dataset.label = label;
+      else cell.className = 'is-controls';
+      return cell;
+    }
+
     function parseServerValue(value) {
       var parsed = value;
       if (typeof parsed === 'string') {
@@ -1066,26 +1084,26 @@
         var decision = completionDecision(completionText);
         var row = document.createElement('tr');
 
-        var idCell = document.createElement('td');
+        var idCell = labelledCell('Record');
         var idStrong = document.createElement('strong');
         idStrong.textContent = id || '—';
         idCell.appendChild(idStrong);
 
-        var dateCell = document.createElement('td');
+        var dateCell = labelledCell('Performed on');
         dateCell.textContent = formatDate(maintenanceDate);
-        var assetCell = document.createElement('td');
+        var assetCell = labelledCell('Asset tag');
         var assetStrong = document.createElement('strong');
         assetStrong.textContent = assetTag || '—';
         assetCell.appendChild(assetStrong);
-        var resultCell = document.createElement('td');
+        var resultCell = labelledCell('Assessment');
         resultCell.textContent = result;
-        var statusCell = document.createElement('td');
+        var statusCell = labelledCell('PMS completion');
         var chip = document.createElement('span');
         chip.className = 'status-chip ' + decision.className;
         chip.textContent = decision.display;
         chip.title = completionText;
         statusCell.appendChild(chip);
-        var actionCell = document.createElement('td');
+        var actionCell = labelledCell('');
         var editable = record.editable !== undefined ? Boolean(record.editable) : decision.label === 'INCOMPLETE';
         if (id && editable) {
           var action = document.createElement('button');
@@ -1375,7 +1393,7 @@
     function archiveRow(record, isAdmin) {
       var row = document.createElement('tr');
 
-      var assetCell = document.createElement('td');
+      var assetCell = labelledCell('Asset tag');
       var assetWrap = document.createElement('div');
       assetWrap.className = 'archive-asset';
       var tag = document.createElement('strong');
@@ -1389,7 +1407,7 @@
       }
       assetCell.appendChild(assetWrap);
 
-      var locationCell = document.createElement('td');
+      var locationCell = labelledCell('Location');
       locationCell.textContent = normalizeText(record.location) || 'Not recorded';
       if (record.locationDiscrepancy) {
         var flag = document.createElement('span');
@@ -1399,16 +1417,16 @@
         locationCell.appendChild(flag);
       }
 
-      var dateCell = document.createElement('td');
+      var dateCell = labelledCell('Performed on');
       dateCell.textContent = formatDate(record.maintenanceDate);
 
-      var cycleCell = document.createElement('td');
+      var cycleCell = labelledCell('Cycle');
       var cycleChip = document.createElement('span');
       cycleChip.className = 'status-chip status-chip--neutral';
       cycleChip.textContent = normalizeText(record.cycleId) || '—';
       cycleCell.appendChild(cycleChip);
 
-      var technicianCell = document.createElement('td');
+      var technicianCell = labelledCell('Technician');
       technicianCell.className = 'archive-col-technician';
       technicianCell.hidden = !isAdmin;
       if (isAdmin) {
@@ -1423,7 +1441,7 @@
         technicianCell.appendChild(technician);
       }
 
-      var resultCell = document.createElement('td');
+      var resultCell = labelledCell('Assessment');
       resultCell.className = 'archive-col-assessment';
       var resultWrap = document.createElement('div');
       resultWrap.className = 'assessment-cell';
@@ -1439,7 +1457,7 @@
       resultCell.appendChild(resultWrap);
 
       var openTicketCount = asNumber(record.openTicketCount, 0);
-      var actionCell = document.createElement('td');
+      var actionCell = labelledCell('');
       var actions = document.createElement('div');
       actions.className = 'table-actions';
       // The server refuses to open another technician's record, including for
@@ -1873,7 +1891,7 @@
       var row = document.createElement('tr');
       var id = normalizeText(ticket.ticketId);
 
-      var idCell = document.createElement('td');
+      var idCell = labelledCell('Ticket');
       var idWrap = document.createElement('div');
       idWrap.className = 'archive-asset';
       var idStrong = document.createElement('strong');
@@ -1884,7 +1902,7 @@
       idWrap.appendChild(summary);
       idCell.appendChild(idWrap);
 
-      var assetCell = document.createElement('td');
+      var assetCell = labelledCell('Asset');
       var assetWrap = document.createElement('div');
       assetWrap.className = 'archive-asset';
       var tag = document.createElement('strong');
@@ -1895,13 +1913,13 @@
       assetWrap.appendChild(where);
       assetCell.appendChild(assetWrap);
 
-      var statusCell = document.createElement('td');
+      var statusCell = labelledCell('Status');
       statusCell.appendChild(ticketChip(ticket.status, TICKET_STATUS_CHIP, 'status-chip--neutral'));
 
-      var sectionCell = document.createElement('td');
+      var sectionCell = labelledCell('IT section');
       sectionCell.textContent = sectionLabel(normalizeText(ticket.section));
 
-      var updatedCell = document.createElement('td');
+      var updatedCell = labelledCell('Last update');
       var updatedWrap = document.createElement('div');
       updatedWrap.className = 'archive-asset';
       var when = document.createElement('span');
@@ -1912,7 +1930,7 @@
       updatedWrap.appendChild(who);
       updatedCell.appendChild(updatedWrap);
 
-      var actionCell = document.createElement('td');
+      var actionCell = labelledCell('');
       var actions = document.createElement('div');
       actions.className = 'table-actions';
       var open = document.createElement('button');
@@ -3206,10 +3224,10 @@
     function appendLegacyPreviewRow(body, row) {
       var status = legacyPreviewStatus(row);
       var tableRow = document.createElement('tr');
-      var tagCell = document.createElement('td');
-      var detailCell = document.createElement('td');
-      var resultCell = document.createElement('td');
-      var reasonCell = document.createElement('td');
+      var tagCell = labelledCell('Asset tag');
+      var detailCell = labelledCell('Asset details');
+      var resultCell = labelledCell('Result');
+      var reasonCell = labelledCell('Explanation');
       tagCell.textContent = legacyImportRowTag(row) || 'Unknown tag';
       detailCell.textContent = legacyImportAssetDetails(row);
       resultCell.appendChild(statusChip(status, false));
@@ -3481,9 +3499,9 @@
     function appendLegacyResultRow(body, row) {
       var status = legacyResultStatus(row);
       var tableRow = document.createElement('tr');
-      var tagCell = document.createElement('td');
-      var resultCell = document.createElement('td');
-      var detailCell = document.createElement('td');
+      var tagCell = labelledCell('Asset tag');
+      var resultCell = labelledCell('Result');
+      var detailCell = labelledCell('Details');
       tagCell.textContent = legacyImportRowTag(row) || 'Unknown tag';
       resultCell.appendChild(statusChip(status, true));
       detailCell.textContent = legacyImportReason(row) || (status === 'IMPORTED' ? 'Legacy PMS record saved.' :
