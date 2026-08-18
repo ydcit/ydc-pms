@@ -274,5 +274,68 @@
         </div>
       </div>
     </section>
+
+    <!--
+      Clearing pilot data. Deliberately the last thing on the page, styled apart
+      from everything above it, and it states what survives before it states what
+      goes: the objection to a reset button is always "what else will it take with
+      it", and that has to be answered on the screen rather than in a manual.
+    -->
+    <section class="panel danger-zone" id="danger-zone" hidden aria-labelledby="danger-zone-title">
+      <div class="panel__header">
+        <div>
+          <p class="eyebrow eyebrow--danger">Danger zone</p>
+          <h2 id="danger-zone-title">Clear test data</h2>
+          <p>
+            Removes every maintenance record, findings ticket and ticket log entry, and
+            empties the T1–T3 tracker cells. Record and ticket numbering starts again
+            from 1. Users, email recipients, your assets and every sheet format are kept.
+          </p>
+        </div>
+        <span class="status-chip status-chip--danger">Irreversible</span>
+      </div>
+
+      <p class="danger-zone__last" id="reset-last-run" hidden></p>
+
+      <button class="button button--secondary" id="reset-preview" type="button">
+        <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+        <span>Show me what would be cleared</span>
+      </button>
+
+      <div class="rollover-review" id="reset-review" hidden>
+        <div class="notice notice--danger">
+          <span class="notice__icon" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-alert-triangle"></use></svg>
+          </span>
+          <div>
+            <strong id="reset-summary-title">This cannot be undone</strong>
+            <p id="reset-summary">Nothing has been changed yet.</p>
+          </div>
+        </div>
+
+        <dl class="rollover-stats" id="reset-stats"></dl>
+
+        <div class="danger-zone__kept">
+          <p class="eyebrow">Kept, untouched</p>
+          <ul id="reset-kept"></ul>
+        </div>
+
+        <div class="confirmation-box">
+          <label class="check-control" for="reset-reviewed">
+            <input id="reset-reviewed" type="checkbox">
+            <span>I have read what will be cleared and I want to clear it.</span>
+          </label>
+          <div class="field">
+            <label for="reset-confirmation">Type <strong id="reset-confirmation-phrase">RESET</strong> to confirm</label>
+            <input id="reset-confirmation" type="text" autocomplete="off" spellcheck="false">
+          </div>
+          <p class="field-error" id="reset-error" hidden></p>
+          <button class="button button--danger" id="reset-execute" type="button" disabled>
+            <svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg>
+            <span>Clear test data</span>
+          </button>
+        </div>
+      </div>
+    </section>
   </div>
 </section>

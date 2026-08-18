@@ -304,6 +304,28 @@ function PMS_apiRetryReconciliation(year) {
   return PMS_jsonResponse_(PMS.Rollover.retryReconciliation(year));
 }
 
+/**
+ * What a data reset would clear. Read-only, and it hands back the token the
+ * execute call has to return, so the browser cannot reset without having first
+ * been shown the numbers.
+ */
+function PMS_apiResetPreview() {
+  try {
+    return PMS_jsonResponse_(PMS.Reset.preview());
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+/** Clears the test data. Administrator only, token and typed phrase required. */
+function PMS_apiExecuteReset(confirmationToken, phrase) {
+  try {
+    return PMS_jsonResponse_(PMS.Reset.execute(confirmationToken, phrase));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
 function PMS_apiAdminSetUserSection(userEmail, sectionKey) {
   return PMS_jsonResponse_(PMS.Auth.adminSetUserSection(userEmail, sectionKey));
 }

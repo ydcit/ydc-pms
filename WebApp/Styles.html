@@ -617,14 +617,54 @@
     gap: 16px;
   }
 
+  /*
+     The loading skeleton has to survive a narrow screen too.
+
+     Its title and button placeholders were fixed at 260px and 190px, which needs
+     466px before the gap. On a phone that pushed the page sideways, and the grids
+     below then measured themselves against the widened page and laid out two
+     columns that ran off the edge — so the very first thing anybody saw on a
+     phone was a broken layout. Proportional now, with the old sizes as ceilings.
+  */
+  /*
+     min-width: 0 on the row is the part that matters. A flex container defaults
+     to min-width: auto, which floors it at its min-content width and lets it
+     push out of its own parent no matter what the children are told — which is
+     what kept the boot screen overflowing at 320px after the children had
+     already been made flexible.
+  */
+  .skeleton-row {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .skeleton--title {
+    flex: 1 1 140px;
+    min-width: 0;
+    max-width: 260px;
+  }
+
+  .skeleton--button {
+    flex: 0 1 190px;
+    min-width: 0;
+  }
+
+  /*
+     min() around the track minimum, not a bare pixel value.
+
+     minmax(320px, 1fr) cannot go below 320px, so on a 305px-wide screen the
+     track overflowed — and because these grids share a parent grid track, the
+     widest one dragged every sibling out with it. That is why the loading screen
+     scrolled sideways on a small phone while the dashboard behind it did not.
+  */
   .skeleton-grid {
     display: grid;
     gap: 16px;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
   }
 
   .skeleton-grid--halves {
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   }
 
   .skeleton {
@@ -646,8 +686,8 @@
     100% { transform: translateX(100%); }
   }
 
-  .skeleton--title { width: 260px; height: 34px; }
-  .skeleton--button { width: 190px; height: 40px; border-radius: var(--r-sm); }
+  .skeleton--title { height: 34px; }
+  .skeleton--button { height: 40px; border-radius: var(--r-sm); }
   .skeleton--banner { height: 92px; border-radius: var(--r-lg); }
   .skeleton--card { height: 116px; }
   .skeleton--panel { height: 244px; border-radius: var(--r-lg); }
@@ -2638,6 +2678,69 @@
     border: 1px solid var(--danger-line);
     border-radius: var(--r-md);
     background: var(--danger-soft);
+  }
+
+  /* --------------------------------------------------------------------------
+     Danger zone
+
+     Set apart from the panels above it rather than merely labelled. The border
+     and the heading colour are the only signals a reader gets before they start
+     reading, so they carry the warning; everything inside stays in ordinary
+     colours, because a panel that is entirely red is a panel where nothing
+     stands out.
+     -------------------------------------------------------------------------- */
+
+  .danger-zone {
+    display: grid;
+    gap: 16px;
+    justify-items: start;
+    margin-top: 24px;
+    border-color: var(--danger-line);
+  }
+
+  /*
+     The panel is justify-items: start so the preview button sizes to its label
+     rather than stretching across the panel. Everything else does want the full
+     width, so it asks for it.
+  */
+  .danger-zone .panel__header,
+  .danger-zone .rollover-review {
+    width: 100%;
+  }
+
+  .eyebrow--danger {
+    color: var(--danger);
+  }
+
+  .danger-zone__last {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .danger-zone__kept {
+    width: 100%;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-soft);
+  }
+
+  .danger-zone__kept ul {
+    margin: 8px 0 0;
+    padding-left: 18px;
+    color: var(--ink-soft);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .notice--danger {
+    border-color: var(--danger-line);
+    background: var(--danger-soft);
+  }
+
+  .notice--danger .notice__icon {
+    color: var(--danger);
   }
 
   /* --------------------------------------------------------------------------

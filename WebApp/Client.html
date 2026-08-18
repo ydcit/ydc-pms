@@ -63,6 +63,10 @@
       rolloverLoading: false,
       lastFocus: null,
       dryRun: null,
+      // The reset preview, held only long enough to confirm against. It carries
+      // the server's token, so losing it means starting the preview again.
+      resetPreview: null,
+      lastReset: null,
       submittedCompletion: '',
       // Tickets filed from the questionnaire's assessment step, listed back to
       // the technician so the same finding is not raised twice.
@@ -902,6 +906,7 @@
       // The server defers rollover status because it is expensive. Fetch it once
       // the dashboard is on screen so it never delays first paint.
       if (state.bootstrap.rolloverDeferred && userIsAdmin()) loadRolloverStatus();
+      renderDangerZone();
       // Ticket counts are also deferred, for the same reason.
       loadTicketSummary();
       warmListCaches();
@@ -3870,6 +3875,167 @@
     }
 
     /* ------------------------------------------------------------------------
+       Danger zone: clearing pilot data
+
+       Same shape as the rollover above it, for the same reason: a destructive
+       action is previewed, the preview hands back a token, and the token plus a
+       typed phrase are what authorise the write. Nothing here is reachable
+       without being an administrator, and nothing is reachable without having
+       first been shown the numbers.
+       ------------------------------------------------------------------------ */
+
+    function renderDangerZone() {
+      var panel = byId('danger-zone');
+      if (!panel) return;
+      panel.hidden = !userIsAdmin();
+      resetResetReview();
+      renderLastReset(null);
+    }
+
+    function renderLastReset(lastReset) {
+      var holder = byId('reset-last-run');
+      if (!holder) return;
+      var entry = lastReset || state.lastReset;
+      state.lastReset = entry || null;
+      var at = entry ? normalizeText(entry.at) : '';
+      holder.hidden = !at;
+      if (!at) return;
+      holder.textContent = 'Last cleared ' + formatDate(at.slice(0, 10)) +
+        (entry.by ? ' by ' + normalizeText(entry.by) : '') +
+        (entry.rowsCleared === undefined ? '' : ' · ' + formatNumber(asNumber(entry.rowsCleared, 0)) + ' rows');
+    }
+
+    function resetResetReview() {
+      state.resetPreview = null;
+      var review = byId('reset-review');
+      if (!review) return;
+      review.hidden = true;
+      byId('reset-reviewed').checked = false;
+      byId('reset-confirmation').value = '';
+      byId('reset-execute').disabled = true;
+      byId('reset-error').hidden = true;
+      byId('reset-stats').replaceChildren();
+      byId('reset-kept').replaceChildren();
+    }
+
+    function runResetPreview() {
+      setBusy(true, 'Counting what would be cleared…');
+      serverCall('PMS_apiResetPreview')
+        .then(function (result) {
+          state.resetPreview = result;
+          renderResetPreview(result);
+        })
+        .catch(function (error) {
+          resetResetReview();
+          showToast('Preview failed', errorMessage(error), 'danger');
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function renderResetPreview(result) {
+      byId('reset-review').hidden = false;
+      byId('reset-confirmation-phrase').textContent = normalizeText(result.phrase) || 'RESET';
+      byId('reset-confirmation').value = '';
+      byId('reset-reviewed').checked = false;
+      byId('reset-execute').disabled = true;
+      byId('reset-error').hidden = true;
+
+      var totals = result.totals || {};
+      var rows = asNumber(totals.rows, 0);
+      var cells = asNumber(totals.trackerCells, 0);
+      byId('reset-summary-title').textContent = rows || cells
+        ? 'This cannot be undone'
+        : 'There is nothing to clear';
+      byId('reset-summary').textContent = rows || cells
+        ? formatNumber(rows) + ' row' + (rows === 1 ? '' : 's') + ' and ' + formatNumber(cells) +
+          ' tracker cell' + (cells === 1 ? '' : 's') + ' would be cleared. Numbering restarts at 1. ' +
+          'This confirmation expires in ' + asNumber(result.expiresInSeconds, 0) + ' seconds.'
+        : 'The records, tickets and tracker cells are already empty.';
+
+      // One tile per sheet, then one per tracker, so the numbers are attributable
+      // rather than a single total nobody can check.
+      var stats = byId('reset-stats');
+      stats.replaceChildren();
+      toArray(result.sheets).forEach(function (sheet) {
+        stats.appendChild(statTile(
+          normalizeText(sheet.sheetName),
+          sheet.present ? formatNumber(asNumber(sheet.rows, 0)) + ' rows' : 'Not created yet'
+        ));
+      });
+      toArray(result.trackers).forEach(function (tracker) {
+        // Cells, not assets: one asset can hold up to six filled cycle cells, so
+        // "18 of 12 assets" would read as nonsense. The asset count is stated
+        // alongside because it is the reassuring half of the sentence.
+        var cells = asNumber(tracker.filledCells, 0);
+        stats.appendChild(statTile(
+          normalizeText(tracker.sheetName) + ' · ' + (tracker.trackerYear || '—'),
+          formatNumber(cells) + ' cell' + (cells === 1 ? '' : 's') + ' to clear · ' +
+            formatNumber(asNumber(tracker.assets, 0)) + ' assets kept'
+        ));
+      });
+
+      var kept = byId('reset-kept');
+      kept.replaceChildren();
+      toArray(result.kept).forEach(function (line) {
+        var item = document.createElement('li');
+        item.textContent = normalizeText(line);
+        kept.appendChild(item);
+      });
+
+      renderLastReset(result.lastReset);
+      byId('reset-review').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    /** A labelled figure, the same shape the rollover report uses. */
+    function statTile(label, value) {
+      var wrapper = document.createElement('div');
+      var term = document.createElement('dt');
+      term.textContent = label;
+      var detail = document.createElement('dd');
+      detail.textContent = value;
+      wrapper.appendChild(term);
+      wrapper.appendChild(detail);
+      return wrapper;
+    }
+
+    function updateResetConfirmation() {
+      if (!state.resetPreview) {
+        byId('reset-execute').disabled = true;
+        return;
+      }
+      var phrase = normalizeText(state.resetPreview.phrase).toUpperCase() || 'RESET';
+      var typed = normalizeText(byId('reset-confirmation').value).toUpperCase();
+      byId('reset-execute').disabled = !byId('reset-reviewed').checked || typed !== phrase;
+    }
+
+    function executeReset() {
+      if (!state.resetPreview || byId('reset-execute').disabled) return;
+      var token = normalizeText(state.resetPreview.confirmationToken);
+      var phrase = normalizeText(byId('reset-confirmation').value);
+      setBusy(true, 'Clearing test data…');
+      serverCall('PMS_apiExecuteReset', token, phrase)
+        .then(function (result) {
+          resetResetReview();
+          renderLastReset({
+            at: new Date().toISOString(),
+            by: userEmail(),
+            rowsCleared: asNumber(result.rowsCleared, 0)
+          });
+          // Everything on screen was built from the data that just went.
+          clearListCaches();
+          showToast('Test data cleared', normalizeText(result.message) || 'The workbook is back to a clean state.', 'success', 9000);
+          return loadBootstrap({ silent: true });
+        })
+        .catch(function (error) {
+          var target = byId('reset-error');
+          target.hidden = false;
+          target.textContent = errorMessage(error);
+          byId('reset-execute').disabled = true;
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    /* ------------------------------------------------------------------------
        Asset combobox.
 
        Replaces the native <datalist>, which cannot be styled and whose popup
@@ -5814,6 +5980,11 @@
       byId('rollover-reviewed').addEventListener('change', updateRolloverConfirmation);
       byId('rollover-confirmation').addEventListener('input', updateRolloverConfirmation);
       byId('rollover-execute').addEventListener('click', executeRollover);
+
+      byId('reset-preview').addEventListener('click', runResetPreview);
+      byId('reset-reviewed').addEventListener('change', updateResetConfirmation);
+      byId('reset-confirmation').addEventListener('input', updateResetConfirmation);
+      byId('reset-execute').addEventListener('click', executeReset);
       byId('retry-pending-sync').addEventListener('click', retryPendingSynchronization);
       document.addEventListener('keydown', trapLegacyImportFocus);
       document.addEventListener('keydown', trapModalFocus);

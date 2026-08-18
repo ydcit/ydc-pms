@@ -306,6 +306,34 @@ PMS.Records = (function () {
     return sheet;
   }
 
+  /*
+    Record ids read PMS-2026-T2-014: the year, the cycle, and a count within it.
+
+    They used to end in a 32-character UUID, which was unique and unreadable. An
+    id in this system is quoted in a ticket, read out over a phone and typed into
+    a search box, so its length is a feature of the product rather than an
+    implementation detail. Uniqueness now comes from counting under the script
+    lock that save() already holds, not from randomness.
+
+    Padded to three digits, unlike a ticket id, because these sit in a filtered
+    spreadsheet column that people sort by hand, and text sort puts 10 before 2.
+    Beyond 999 in one cycle the number simply grows a digit; the padding is for
+    the common case, not a limit.
+
+    Lives here rather than in PMS.Util because it needs to see the sheets.
+  */
+  function nextRecordId(cycle) {
+    var prefix = 'PMS-' + cycle.year + '-' + cycle.cycle + '-';
+    var highest = 0;
+    readRecordFields(['recordId']).forEach(function (record) {
+      var id = cellText(record.recordId).toUpperCase();
+      if (id.indexOf(prefix) !== 0) return;
+      var sequence = Number(id.slice(prefix.length));
+      if (Number.isFinite(sequence) && sequence > highest) highest = sequence;
+    });
+    return prefix + String(highest + 1).padStart(3, '0');
+  }
+
   function completionKey(sectionKey, assetTag, cycleId) {
     return [sectionKey, PMS.Util.normalizeAssetTag(assetTag), cycleId].join('|');
   }
@@ -392,7 +420,7 @@ PMS.Records = (function () {
     var timestamp = PMS.Util.nowIso();
     var priorCompletion = completedRecord(profile.section, asset.tag, normalized.cycle.cycleId, existing ? existing.recordId : '');
     var record = existing || {};
-    record.recordId = record.recordId || PMS.Util.makeRecordId(normalized.cycle);
+    record.recordId = record.recordId || nextRecordId(normalized.cycle);
     record.recordType = priorCompletion ? 'REINSPECTION' : (record.recordType || 'MAINTENANCE');
     // Preserve the schema that originally shaped an existing row. New records
     // use the current schema, while resuming a legacy Service Desk draft must
@@ -1646,6 +1674,9 @@ PMS.Records = (function () {
     pendingSyncPage: pendingSyncPage,
     stageSync: stageSync,
     finalizeSync: finalizeSync,
-    isMaintenanceRecord: isMaintenanceRecord
+    isMaintenanceRecord: isMaintenanceRecord,
+    // Exported for the reset, which empties the sheets behind this module's back
+    // and has to retire every cached projection built from them.
+    markChanged: markRecordsChanged
   };
 })();

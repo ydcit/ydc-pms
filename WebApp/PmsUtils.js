@@ -76,10 +76,6 @@ PMS.Util = (function () {
     return deriveCycle(parseDateInput(todayString()));
   }
 
-  function makeRecordId(cycle) {
-    return 'PMS-' + cycle.year + '-' + cycle.cycle + '-' + Utilities.getUuid().replace(/-/g, '').toUpperCase();
-  }
-
   function makeIdempotencyKey() {
     return Utilities.getUuid();
   }
@@ -436,7 +432,6 @@ PMS.Util = (function () {
     parseDateInput: parseDateInput,
     deriveCycle: deriveCycle,
     currentCycle: currentCycle,
-    makeRecordId: makeRecordId,
     makeIdempotencyKey: makeIdempotencyKey,
     hashText: hashText,
     section: section,

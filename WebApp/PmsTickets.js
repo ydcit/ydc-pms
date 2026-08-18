@@ -446,19 +446,41 @@ PMS.Tickets = (function () {
 
   /* ------------------------------------------------------------------ write */
 
+  /*
+    Ticket ids read YDC-PMS-2026-7: the product, the year, and a plain count.
+
+    The number is not padded. Sorting still comes out right because the list
+    comparator collates numerically, and an unpadded number is what somebody
+    says out loud when they refer to a ticket.
+
+    Tickets filed under the old TKT-YYYY-#### format are counted when finding the
+    highest number, so an existing sheet carries on from where it left off rather
+    than restarting at 1 next to a ticket that already claims that number.
+  */
+  var TICKET_ID_PREFIX = 'YDC-PMS-';
+  var RETIRED_TICKET_ID_PREFIX = 'TKT-';
+
+  function ticketIdSequence(value, year) {
+    var text = String(value || '').trim().toUpperCase();
+    var prefixes = [TICKET_ID_PREFIX + year + '-', RETIRED_TICKET_ID_PREFIX + year + '-'];
+    for (var index = 0; index < prefixes.length; index += 1) {
+      if (text.indexOf(prefixes[index]) !== 0) continue;
+      var sequence = Number(text.slice(prefixes[index].length));
+      return Number.isFinite(sequence) ? sequence : 0;
+    }
+    return 0;
+  }
+
   function nextTicketId(sheet, year) {
-    var prefix = 'TKT-' + year + '-';
     var highest = 0;
     if (sheet.getLastRow() >= 2) {
       var ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues();
       ids.forEach(function (row) {
-        var id = String(row[0] || '').trim();
-        if (id.indexOf(prefix) !== 0) return;
-        var sequence = Number(id.slice(prefix.length));
-        if (Number.isFinite(sequence) && sequence > highest) highest = sequence;
+        var sequence = ticketIdSequence(row[0], year);
+        if (sequence > highest) highest = sequence;
       });
     }
-    return prefix + String(highest + 1).padStart(4, '0');
+    return TICKET_ID_PREFIX + year + '-' + (highest + 1);
   }
 
   /**
@@ -468,7 +490,11 @@ PMS.Tickets = (function () {
    * (ticket, timestamp, actor) collides when the same person makes two changes
    * to the same ticket inside one second, and timestamps only carry second
    * resolution. Counting existing entries under the caller's lock cannot
-   * collide, and the result reads in order: TKT-2026-0001-003.
+   * collide, and the result reads in order: YDC-PMS-2026-7-L03.
+   *
+   * The L is there to keep the two numbers apart. Ticket ids now end in a plain
+   * count, so "YDC-PMS-2026-7-3" would read as though the ticket itself were
+   * numbered 7-3.
    */
   function appendLog(sheet, entry) {
     var sequence = 1;
@@ -480,7 +506,7 @@ PMS.Tickets = (function () {
         if (String(row[0] || '').trim() === entry.ticketId) sequence += 1;
       });
     }
-    entry.logId = entry.ticketId + '-' + String(sequence).padStart(3, '0');
+    entry.logId = entry.ticketId + '-L' + String(sequence).padStart(2, '0');
     var targetRow = Math.max(sheet.getLastRow() + 1, 2);
     sheet.getRange(targetRow, 1, 1, LOG_COLUMNS.length).setValues([logToRow(entry)]);
     return targetRow;
@@ -1228,6 +1254,9 @@ PMS.Tickets = (function () {
     openForAsset: openForAsset,
     ticketsByAsset: ticketsByAsset,
     ticketsForAsset: ticketsForAsset,
-    trackerStatusForRecord: trackerStatusForRecord
+    trackerStatusForRecord: trackerStatusForRecord,
+    // Exported for the reset, which empties the ticket sheets behind this
+    // module's back and has to retire every cached page built from them.
+    markChanged: invalidateReadMemo
   };
 })();
