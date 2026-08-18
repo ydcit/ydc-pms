@@ -101,12 +101,15 @@ PMS.CONFIG = {
     T3: Object.freeze({ key: 'T3', startMonth: 9, endMonth: 12, endDay: 31, checkboxColumn: 8, remarksColumn: 9 })
   }),
   /*
-    Labels only. The keys, PERIPHERAL_RECORD_KEYS mapping, and RECORD_COLUMNS
-    sheet headers below are deliberately untouched: verifyHeaders() rejects a
-    live sheet whose header row doesn't match, so renaming "Peripheral - NUC"
-    would SCHEMA_MISMATCH every existing spreadsheet. Data already recorded
-    under the old "NUC" label lives on in the same peripheralNuc column/field —
-    it now just reads as Yubikey.
+    The keys and PERIPHERAL_RECORD_KEYS mapping stay nuc/nucAdaptor, so data
+    already recorded under the old NUC labels lives on in the same
+    peripheralNuc/peripheralNucAdaptor column. The sheet header text is
+    renamed too (see RECORD_COLUMNS below), which normally SCHEMA_MISMATCHes
+    every existing spreadsheet the moment a header stops matching — that risk
+    is what legacyLabel on those two RECORD_COLUMNS entries exists to remove:
+    PMS.Records.verifyHeaders renames a legacy header in place on first touch
+    instead of rejecting it, self-healing every live "PMS Records" sheet the
+    first time it's read or written after this deploys.
   */
   PERIPHERALS: Object.freeze([
     Object.freeze({ key: 'nuc', label: 'Yubikey' }),
@@ -257,8 +260,8 @@ PMS.CONFIG.RECORD_COLUMNS = Object.freeze([
   { key: 'masterLocation', label: 'Master Location' },
   { key: 'observedLocation', label: 'Observed Location' },
   { key: 'locationDiscrepancy', label: 'Location Discrepancy' },
-  { key: 'peripheralNuc', label: 'Peripheral - NUC' },
-  { key: 'peripheralNucAdaptor', label: 'Peripheral - NUC Adaptor' },
+  { key: 'peripheralNuc', label: 'Peripheral - Yubikey', legacyLabel: 'Peripheral - NUC' },
+  { key: 'peripheralNucAdaptor', label: 'Peripheral - Laptop Charger', legacyLabel: 'Peripheral - NUC Adaptor' },
   { key: 'peripheralMonitor', label: 'Peripheral - Monitor' },
   { key: 'peripheralKeyboard', label: 'Peripheral - Keyboard' },
   { key: 'peripheralMouse', label: 'Peripheral - Mouse' },

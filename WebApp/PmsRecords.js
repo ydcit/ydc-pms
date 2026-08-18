@@ -96,6 +96,17 @@ PMS.Records = (function () {
     if (index >= 0) sheet.setColumnWidth(index + 1, width);
   }
 
+  /**
+   * A column may carry `legacyLabel`: exactly one prior header text that is
+   * accepted in place of the current one and silently renamed in the sheet.
+   * This is how a header rename (e.g. "Peripheral - NUC" to "Peripheral -
+   * Yubikey") ships without SCHEMA_MISMATCHing every live spreadsheet the
+   * first time it's touched after the deploy — the alternative to a header
+   * rename breaking every existing sheet is not "never rename a header", it's
+   * "the reader recognises both spellings and heals the older one in place".
+   * Once healed, the cell holds the current label and this path is never hit
+   * again for that column.
+   */
   function verifyHeaders(sheet, columns) {
     var expected = columns.map(function (column) { return column.label; });
     if (sheet.getMaxColumns() < expected.length) {
@@ -108,11 +119,23 @@ PMS.Records = (function () {
       return;
     }
     var mismatches = [];
+    var renames = [];
     expected.forEach(function (label, index) {
-      if (current[index] !== label) mismatches.push((index + 1) + ': ' + current[index] + ' ≠ ' + label);
+      if (current[index] === label) return;
+      if (columns[index].legacyLabel && current[index] === columns[index].legacyLabel) {
+        renames.push({ column: index + 1, label: label });
+        return;
+      }
+      mismatches.push((index + 1) + ': ' + current[index] + ' ≠ ' + label);
     });
     if (mismatches.length) {
       PMS.Util.fail(sheet.getName() + ' header mismatch. Refusing to write: ' + mismatches.slice(0, 5).join('; '), 'SCHEMA_MISMATCH');
+    }
+    if (renames.length) {
+      renames.forEach(function (rename) {
+        sheet.getRange(1, rename.column).setValue(rename.label);
+      });
+      console.log(sheet.getName() + ': renamed ' + renames.length + ' legacy header(s) to their current label.');
     }
   }
 
