@@ -155,10 +155,24 @@ PMS.Tickets = (function () {
   /**
    * Presentation is gated on a property so the formatting calls, which are the
    * expensive part, run once rather than on every read.
+   *
+   * The signature includes the current status/priority vocabulary, not just
+   * the sheet id and column count. Sheets.setDataValidation for the Status
+   * column is inside this same gated block, so a signature keyed on shape
+   * alone let an already-initialized ticket sheet keep enforcing whatever
+   * STATUSES list existed the first time this ran on it — forever, since nothing
+   * about the sheet's shape changes when the code's vocabulary does. That is
+   * exactly what happened when DEFERRED was added: existing PMS Tickets sheets
+   * kept a Google Sheets data-validation rule listing only the original five
+   * values (OPEN, IN_PROGRESS, ON_HOLD, RESOLVED, CANCELLED) and rejected
+   * DEFERRED with "violates the data validation rules on this cell", even
+   * though the code itself was correct. Folding the vocabulary into the
+   * signature makes any future status/priority change self-heal the same way
+   * a header rename already does via legacyLabel.
    */
   function applyPresentation(sheet, columns, presentationProperty) {
     var propertyStore = PropertiesService.getScriptProperties();
-    var signature = String(sheet.getSheetId()) + ':' + columns.length;
+    var signature = String(sheet.getSheetId()) + ':' + columns.length + ':' + STATUSES.join(',') + ':' + PRIORITIES.join(',');
     if (propertyStore.getProperty(presentationProperty) === signature) return;
 
     var rowCount = Math.max(1, sheet.getMaxRows() - 1);
@@ -212,6 +226,14 @@ PMS.Tickets = (function () {
         'SCHEMA_MISMATCH'
       );
     }
+    // Re-checked on every call, not only at creation: applyPresentation's own
+    // signature gate makes this a cheap no-op once the sheet is already
+    // current, but an already-initialized sheet was otherwise never revisited
+    // after its first setup, so its Status/Priority data-validation rules
+    // could never catch up with a later code change to STATUSES/PRIORITIES.
+    applyPresentation(sheet, columns, sheet.getName() === ticketSheetName()
+      ? TICKET_PRESENTATION_PROPERTY
+      : LOG_PRESENTATION_PROPERTY);
   }
 
   function ticketSheetName() {
