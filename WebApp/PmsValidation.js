@@ -174,7 +174,23 @@ PMS.Validation = (function () {
     var isInfra = profile.section === 'INFRA_SECURITY';
     var recordId = PMS.Util.cleanText(source.recordId, 100);
     var idempotencyKey = PMS.Util.cleanText(source.idempotencyKey, 200) || PMS.Util.makeIdempotencyKey();
-    if (recordId && !/^PMS-\d{4}-T[123]-[A-F0-9]{32}$/.test(recordId)) {
+    /*
+      A shape check, not an authorisation check.
+
+      A record id only ever arrives here because the server issued it and the
+      browser echoed it back, and save() then verifies that it exists and belongs
+      to the caller before acting on it. So this rejects a malformed string and
+      nothing more — deliberately without encoding any one generator's output.
+
+      The pattern it replaces demanded PMS-YYYY-Tn- followed by exactly 32 hex
+      characters, which rejected two kinds of id the system itself creates: the
+      sequential PMS-2026-T2-014 issued now, and the LEGACY-SEED-… ids the
+      importer writes. Anybody who opened one of those and pressed Save progress
+      or Complete PMS was told their record identifier was invalid, with no way
+      forward. Coupling a validator to a format is what made a rename a data
+      outage.
+    */
+    if (recordId && !/^[A-Z0-9]+(?:[-_][A-Z0-9]+)*$/.test(recordId.toUpperCase())) {
       PMS.Util.fail('The PMS record identifier is invalid.', 'VALIDATION_ERROR');
     }
     var uuidKey = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
