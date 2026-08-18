@@ -1,17 +1,17 @@
 <div class="modal-layer" id="deferred-assets-modal" hidden>
   <div class="modal-backdrop" data-close-deferred-assets aria-hidden="true"></div>
-  <section class="deferred-assets-dialog" role="dialog" aria-modal="true"
+  <section class="archive-dialog" role="dialog" aria-modal="true"
            aria-labelledby="deferred-assets-title" aria-describedby="deferred-assets-summary">
-    <header class="deferred-assets-dialog__header">
-      <div class="deferred-assets-dialog__title-row">
+    <header class="archive-dialog__header">
+      <div class="archive-dialog__title-row">
         <div>
-          <p class="eyebrow">Attention · this cycle</p>
+          <p class="eyebrow" id="deferred-assets-eyebrow">Attention · this cycle</p>
           <h1 id="deferred-assets-title">Deferred assets</h1>
-          <p class="deferred-assets-dialog__summary" id="deferred-assets-summary">
+          <p class="archive-dialog__summary" id="deferred-assets-summary">
             PMS could not be performed on these assets. Each is tracked by a findings ticket until it gets a revisit.
           </p>
         </div>
-        <div class="deferred-assets-dialog__header-actions">
+        <div class="archive-dialog__header-actions">
           <button class="button button--quiet button--small" id="deferred-assets-refresh" type="button">
             <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
             <span>Refresh</span>
@@ -33,7 +33,7 @@
       </div>
     </header>
 
-    <div class="deferred-assets-dialog__body" id="deferred-assets-dialog-body">
+    <div class="archive-dialog__body" id="deferred-assets-dialog-body">
       <div class="table-wrap" id="deferred-assets-table-wrap">
         <table class="table--cards">
           <thead>
@@ -58,7 +58,7 @@
       </div>
     </div>
 
-    <footer class="deferred-assets-dialog__footer">
+    <footer class="archive-dialog__footer">
       <span class="archive-pager__status" id="deferred-assets-range" aria-live="polite"></span>
     </footer>
   </section>

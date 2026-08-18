@@ -1637,16 +1637,6 @@
       }
       assetCell.appendChild(assetWrap);
 
-      var locationCell = labelledCell('Location');
-      locationCell.textContent = normalizeText(record.location) || 'Not recorded';
-      if (record.locationDiscrepancy) {
-        var flag = document.createElement('span');
-        flag.className = 'location-flag';
-        flag.title = 'Observed location differed from the asset master';
-        flag.appendChild(iconSvg('alert-triangle'));
-        locationCell.appendChild(flag);
-      }
-
       var dateCell = labelledCell('Performed on');
       dateCell.textContent = formatDate(record.maintenanceDate);
 
@@ -1722,7 +1712,7 @@
       }
       actionCell.appendChild(actions);
 
-      [assetCell, locationCell, dateCell, cycleCell, technicianCell, resultCell, actionCell]
+      [assetCell, dateCell, cycleCell, technicianCell, resultCell, actionCell]
         .forEach(function (cell) { row.appendChild(cell); });
       return row;
     }

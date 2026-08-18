@@ -1370,16 +1370,6 @@
     transform: translateY(-1px);
   }
 
-  .metric-card--accent {
-    border-color: var(--accent-line);
-    background: linear-gradient(180deg, var(--accent-soft), var(--surface) 72%);
-  }
-
-  .metric-card--danger {
-    border-color: var(--danger-line);
-    background: linear-gradient(180deg, var(--danger-soft), var(--surface) 72%);
-  }
-
   .metric-card__top {
     display: flex;
     align-items: center;
@@ -1414,11 +1404,6 @@
   .metric-icon--warning {
     background: var(--warning-soft);
     color: var(--warning);
-  }
-
-  .metric-icon--accent {
-    background: var(--accent);
-    color: var(--on-accent);
   }
 
   .metric-icon--danger {
@@ -1915,85 +1900,6 @@
     background: var(--surface);
   }
 
-  /* --------------------------------------------------------------------------
-     Deferred assets modal. Lighter than the archive dialog on purpose: the
-     list behind it is already capped and scoped to the dashboard's own cycle
-     filter, so there is no pagination or extra filter row to make room for.
-     -------------------------------------------------------------------------- */
-
-  .deferred-assets-dialog {
-    position: relative;
-    display: flex;
-    width: min(100%, 820px);
-    max-height: min(88vh, 760px);
-    flex-direction: column;
-    overflow: hidden;
-    border-radius: var(--r-xl);
-    background: var(--surface);
-    box-shadow: var(--shadow-xl);
-    animation: pop-in 220ms var(--ease);
-  }
-
-  .deferred-assets-dialog__header {
-    flex: none;
-    padding: 22px 26px 16px;
-    border-bottom: 1px solid var(--line);
-    background: var(--surface);
-  }
-
-  .deferred-assets-dialog__title-row {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 18px;
-  }
-
-  .deferred-assets-dialog__title-row h1 {
-    font-size: 21px;
-  }
-
-  .deferred-assets-dialog__summary {
-    margin-top: 5px;
-    color: var(--muted);
-    font-size: 12.5px;
-  }
-
-  .deferred-assets-dialog__header-actions {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .deferred-assets-dialog__body {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    background: var(--surface-soft);
-  }
-
-  .deferred-assets-dialog__body .table-wrap {
-    margin: 0;
-  }
-
-  .deferred-assets-dialog__body thead th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-  }
-
-  .deferred-assets-dialog__footer {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 16px;
-    padding: 13px 26px;
-    border-top: 1px solid var(--line);
-    background: var(--surface);
-  }
-
   .archive-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -2102,19 +2008,6 @@
     padding: 0 8px;
     text-align: center;
     font-variant-numeric: tabular-nums;
-  }
-
-  .location-flag {
-    display: inline-flex;
-    align-items: center;
-    margin-left: 6px;
-    color: var(--warning);
-    vertical-align: -2px;
-  }
-
-  .location-flag .icon {
-    width: 14px;
-    height: 14px;
   }
 
   .archive-asset {
@@ -2289,21 +2182,6 @@
 
     .archive-toolbar__filter {
       width: calc(50% - 5px);
-    }
-
-    .deferred-assets-dialog {
-      width: 100%;
-      height: 100vh;
-      max-height: 100vh;
-      border-radius: 0;
-    }
-
-    .deferred-assets-dialog__header {
-      padding: 18px 18px 14px;
-    }
-
-    .deferred-assets-dialog__footer {
-      padding: 12px 18px;
     }
 
     .archive-toolbar--secondary {
@@ -4836,23 +4714,7 @@
       padding: 0 11px;
     }
 
-    .deferred-assets-dialog__header-actions .button > span {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      margin: -1px;
-      padding: 0;
-      overflow: hidden;
-      border: 0;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-
-    .deferred-assets-dialog__header-actions .button {
-      padding: 0 11px;
-    }
-
-    .archive-dialog__title-row {
+.archive-dialog__title-row {
       gap: 12px;
       margin-bottom: 14px;
     }
@@ -4863,21 +4725,6 @@
 
     .archive-dialog__header,
     .archive-dialog__footer {
-      padding-left: 16px;
-      padding-right: 16px;
-    }
-
-    .deferred-assets-dialog__title-row {
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-
-    .deferred-assets-dialog__title-row h1 {
-      font-size: 18px;
-    }
-
-    .deferred-assets-dialog__header,
-    .deferred-assets-dialog__footer {
       padding-left: 16px;
       padding-right: 16px;
     }
@@ -4973,8 +4820,7 @@
     @media (max-width: 860px) {
       .archive-dialog__footer,
       .questionnaire__footer,
-      .legacy-import-dialog__footer,
-      .deferred-assets-dialog__footer {
+      .legacy-import-dialog__footer {
         padding-bottom: max(12px, env(safe-area-inset-bottom));
       }
 
