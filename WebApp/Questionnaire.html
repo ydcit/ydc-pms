@@ -305,14 +305,17 @@
           -->
           <section class="checklist-skip" id="checklist-skip" aria-labelledby="checklist-skip-title">
             <div class="checklist-skip__header">
-              <div>
+              <span class="checklist-skip__icon" aria-hidden="true">
+                <svg class="icon" aria-hidden="true"><use href="#i-alert-triangle"></use></svg>
+              </span>
+              <div class="checklist-skip__copy">
                 <p class="eyebrow">Could not perform PMS on this asset?</p>
                 <h3 id="checklist-skip-title">Skip the entire checklist</h3>
                 <p>Marks every check below as Not done with the reason you give. Use this only when maintenance genuinely could not happen — for example the asset was offline or unreachable for the whole visit.</p>
               </div>
-              <button class="button button--secondary" id="checklist-skip-toggle" type="button" aria-expanded="false" aria-controls="checklist-skip-body">
-                <svg class="icon" aria-hidden="true"><use href="#i-alert-circle"></use></svg>
+              <button class="button button--secondary checklist-skip__toggle" id="checklist-skip-toggle" type="button" aria-expanded="false" aria-controls="checklist-skip-body">
                 <span id="checklist-skip-toggle-label">Skip everything</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
               </button>
             </div>
             <div class="checklist-skip__body" id="checklist-skip-body" hidden>
@@ -321,8 +324,8 @@
                 <textarea id="checklist-skip-reason" rows="2" maxlength="500" placeholder="Why PMS could not be performed on this asset"></textarea>
                 <p class="field-error" id="checklist-skip-reason-error" hidden></p>
               </div>
-              <button class="button button--primary" id="checklist-skip-confirm" type="button">
-                <svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>
+              <button class="button button--danger" id="checklist-skip-confirm" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-alert-triangle"></use></svg>
                 <span>Mark every check Not done</span>
               </button>
             </div>

@@ -652,10 +652,30 @@
       applyQuestionnaireMode();
       renderRegistrationOptions();
       renderLegacyImportOptions();
+      renderTicketSectionOptions();
       renderAssetOptions();
       renderPeripheralSchema();
       renderChecklistSchema();
       renderEvidenceUI();
+    }
+
+    /**
+     * The tickets dialog's IT-section filter, populated from the configured
+     * sections rather than from whichever sections happen to appear in the
+     * current query's results. The previous approach derived options from
+     * payload.filters.sections (only sections a ticket in the current result
+     * set actually belongs to) and hid the whole control below two sections —
+     * so with tickets concentrated in one section so far, the filter was
+     * either missing every other section or hidden outright. Tickets are
+     * visible across sections by default (TICKET_VISIBILITY), so the filter
+     * should always offer every section regardless of today's ticket mix.
+     */
+    function renderTicketSectionOptions() {
+      var select = byId('tickets-section');
+      if (!select) return;
+      fillSelect(select, 'All sections', state.sections.map(function (section) {
+        return { value: section.key, label: section.label };
+      }));
     }
 
     function applyBootstrap(data) {
@@ -1894,11 +1914,9 @@
       renderTicketTabs(counts);
       updateTicketsBadge(counts);
 
-      var sections = toArray(payload.filters && payload.filters.sections);
-      byId('tickets-section-wrap').hidden = sections.length < 2;
-      fillSelect(byId('tickets-section'), 'All sections', sections.map(function (key) {
-        return { value: key, label: sectionLabel(key) };
-      }));
+      // Section options are static (renderTicketSectionOptions, from config),
+      // not derived from this query's results, so the filter never disappears
+      // just because today's results happen to sit in one section.
 
       if (normalizeText(payload.sort)) byId('tickets-sort').value = payload.sort;
       state.tickets.direction = payload.direction === 'ASC' ? 'ASC' : 'DESC';

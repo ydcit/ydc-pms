@@ -246,13 +246,27 @@ function PMS_apiCreateTicket(payload, listOptions) {
  * email both writes already do. Collapsing them into one call removes
  * exactly one of those round trips; the two writes underneath (and their two
  * separate script locks) are unchanged.
+ *
+ * save()'s includeRecord option hands back the exact record object it just
+ * built, and that same object is threaded into PMS.Tickets.create(), which
+ * passes it on again for the tracker sync afterward. Without it, filing a
+ * ticket against the record just saved would look that record up by id two
+ * more times in the same execution — subjectFromRecord to build the ticket,
+ * then syncTrackerForRecord to point the tracker cell at the new ticket —
+ * three full record lookups where one save already had the answer. The
+ * client never sees the record object itself: the final response below is
+ * built by naming only the fields it needs.
  */
 function PMS_apiFileTicketForRecord(recordPayload, ticketPayload, listOptions) {
   try {
-    var saveResult = PMS.Records.save(recordPayload, 'SAVE');
+    var saveResult = PMS.Records.save(recordPayload, 'SAVE', { includeRecord: true });
     var context = PMS.Auth.requireProfile();
     var ticketRequest = Object.assign({}, ticketPayload || {}, { sourceRecordId: saveResult.recordId });
-    var ticketOutcome = PMS.Tickets.withRefresh(context, PMS.Tickets.create(context, ticketRequest), listOptions);
+    var ticketOutcome = PMS.Tickets.withRefresh(
+      context,
+      PMS.Tickets.create(context, ticketRequest, saveResult.record),
+      listOptions
+    );
     return PMS_jsonResponse_(Object.assign({}, ticketOutcome, {
       recordId: saveResult.recordId,
       pmsCompletion: saveResult.pmsCompletion,

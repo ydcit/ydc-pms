@@ -3507,47 +3507,86 @@
     font-size: 11.5px;
   }
 
-  /* A whole-checklist escape hatch, styled like the record-ticket card it sits
-     above: a bordered panel that opens into a small form on demand. */
+  /*
+    A whole-checklist escape hatch. Amber, not neutral: unlike the
+    record-ticket card below it (which is neutral until a ticket is actually
+    required), this one is always offering a deliberately unusual action, so
+    it reads as "pay attention here" the moment the step loads rather than
+    blending into the ordinary form chrome around it.
+  */
   .checklist-skip {
     display: grid;
     gap: 16px;
     margin-bottom: 20px;
-    padding: 18px 20px;
-    border: 1px solid var(--line);
+    padding: 16px 20px;
+    border: 1px solid var(--warning-line);
     border-radius: var(--r-md);
-    background: var(--surface-soft);
+    background: var(--warning-soft);
   }
 
   .checklist-skip__header {
     display: flex;
     align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
+    gap: 14px;
   }
 
-  .checklist-skip__header h3 {
+  .checklist-skip__icon {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    place-items: center;
+    border-radius: var(--r-full);
+    background: var(--surface);
+    color: var(--warning);
+    box-shadow: inset 0 0 0 1px var(--warning-line);
+  }
+
+  .checklist-skip__icon .icon {
+    width: 17px;
+    height: 17px;
+  }
+
+  .checklist-skip__copy {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .checklist-skip__copy .eyebrow {
+    color: var(--warning);
+  }
+
+  .checklist-skip__copy h3 {
     margin: 2px 0 4px;
     font-size: 15px;
   }
 
-  .checklist-skip__header p {
+  .checklist-skip__copy p {
     margin: 0;
-    max-width: 62ch;
-    color: var(--muted);
+    max-width: 60ch;
+    color: var(--ink-soft);
     font-size: 12.5px;
     line-height: 1.55;
   }
 
-  .checklist-skip__header .button {
+  .checklist-skip__toggle {
     flex: none;
+    align-self: flex-start;
+  }
+
+  .checklist-skip__toggle .icon {
+    transition: transform 0.15s ease;
+  }
+
+  .checklist-skip__toggle[aria-expanded="true"] .icon {
+    transform: rotate(180deg);
   }
 
   .checklist-skip__body {
     display: grid;
     gap: 14px;
     padding-top: 16px;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--warning-line);
   }
 
   .checklist-skip__body .button {
@@ -3556,10 +3595,10 @@
 
   @media (max-width: 620px) {
     .checklist-skip__header {
-      flex-direction: column;
+      flex-wrap: wrap;
     }
 
-    .checklist-skip__header .button {
+    .checklist-skip__toggle {
       width: 100%;
       justify-content: center;
     }

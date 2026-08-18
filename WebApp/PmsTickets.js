@@ -540,9 +540,16 @@ PMS.Tickets = (function () {
   /**
    * Derives the ticket subject from a maintenance record so the server, not the
    * browser, decides which asset and section a ticket belongs to.
+   *
+   * `knownRecord` skips the sheet lookup when the caller already has the
+   * exact record in hand (PMS_apiFileTicketForRecord passes the one save()
+   * just built): filing a ticket right after saving the record it links to
+   * would otherwise re-fetch by id a value the caller already computed
+   * moments earlier in the same execution. Ignored unless its id actually
+   * matches, so a mismatched or stale object can never substitute silently.
    */
-  function subjectFromRecord(recordId) {
-    var record = PMS.Records.findByRecordId(recordId);
+  function subjectFromRecord(recordId, knownRecord) {
+    var record = (knownRecord && knownRecord.recordId === recordId) ? knownRecord : PMS.Records.findByRecordId(recordId);
     if (!record) {
       PMS.Util.fail('The maintenance record for this ticket was not found.', 'NOT_FOUND');
     }
@@ -557,7 +564,8 @@ PMS.Tickets = (function () {
       maintenanceYear: cellText(record.maintenanceYear),
       findings: cellText(record.assetFindings),
       actionRequired: cellText(record.recommendation),
-      assessmentResult: cellText(record.assessmentResult)
+      assessmentResult: cellText(record.assessmentResult),
+      _record: record
     };
   }
 
@@ -573,13 +581,19 @@ PMS.Tickets = (function () {
     return subject.assessmentResult === 'PMS not performed' ? 'DEFERRED' : 'IN_PROGRESS';
   }
 
-  function create(context, payload) {
+  /**
+   * `knownRecord` (optional): a record the caller already has loaded, passed
+   * through to subjectFromRecord and reused again for the post-write tracker
+   * sync instead of that sync re-fetching by id a third time. See
+   * PMS_apiFileTicketForRecord.
+   */
+  function create(context, payload, knownRecord) {
     var request = payload && typeof payload === 'object' ? payload : {};
     var actor = PMS.Util.normalizeEmail(context.email);
     var actorName = PMS.Util.cleanText(context.name, 250) || actor;
     var sourceRecordId = PMS.Util.cleanText(request.sourceRecordId, 100);
 
-    var subject = sourceRecordId ? subjectFromRecord(sourceRecordId) : {
+    var subject = sourceRecordId ? subjectFromRecord(sourceRecordId, knownRecord) : {
       sourceRecordId: '',
       assetTag: PMS.Util.normalizeAssetTag(request.assetTag),
       section: PMS.Util.section(request.section || context.section).key,
@@ -669,8 +683,10 @@ PMS.Tickets = (function () {
       ticket.isActive = ACTIVE_STATUSES.indexOf(status) >= 0;
       // A ticket against an already-completed record flips its tracker cell from
       // COMPLETED to the repair state. Filing from a draft is a no-op here; the
-      // completion write picks the value up instead.
-      var tracker = syncTrackerForRecord(ticket.sourceRecordId);
+      // completion write picks the value up instead. subject._record (when the
+      // ticket was linked to a record) is still valid here: this write only
+      // touched the ticket sheet, never the record itself.
+      var tracker = syncTrackerForRecord(ticket.sourceRecordId, subject._record);
       return { ok: true, ticket: ticket, tracker: tracker };
     });
 
@@ -1061,11 +1077,11 @@ PMS.Tickets = (function () {
     }
   }
 
-  function syncTrackerForRecord(recordId) {
+  function syncTrackerForRecord(recordId, knownRecord) {
     var id = PMS.Util.cleanText(recordId, 100);
     if (!id) return null;
     try {
-      var record = PMS.Records.findByRecordId(id);
+      var record = (knownRecord && knownRecord.recordId === id) ? knownRecord : PMS.Records.findByRecordId(id);
       if (!record) return { ok: false, reason: 'RECORD_NOT_FOUND' };
       return PMS.Tracker.syncRepairStatus(record);
     } catch (error) {

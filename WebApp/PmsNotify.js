@@ -478,10 +478,30 @@ PMS.Notify = (function () {
     };
   }
 
+  /*
+    How the tracker cell's text reads as an email headline. Authored directly
+    rather than run through a generic titleCase() — that was tried for ticket
+    status wording and produced "Filed · in Progress" (see PmsTickets.js).
+    TRACKER_COMPLETED_VALUE is deliberately absent: it is the default,
+    handled inline below rather than listed here.
+  */
+  var TRACKER_STATUS_HEADLINE = {
+    'FOR FIXING': 'For Fixing',
+    'IN PROGRESS': 'In Progress',
+    'ON HOLD': 'On Hold',
+    'DEFERRED': 'Deferred'
+  };
+
   /**
-   * Sent when maintenance is completed. The assessment is the point of the
-   * message, so the result, findings, action taken and recommendation are all
-   * carried in full rather than summarized.
+   * Sent when a PMS record finishes: pmsCompletion reaches COMPLETED, whether
+   * or not the tracker cell itself still reads plain COMPLETED. Those are
+   * different things — the record is always done by the time this fires, but
+   * the asset can still have an outstanding repair or, for a PMS-not-performed
+   * assessment, still need an actual revisit. The subject and title follow
+   * the tracker cell rather than always saying "Completed", so a Deferred or
+   * still-being-fixed asset doesn't read as fully done in an inbox scan. The
+   * assessment is still the point of the message, so the result, findings,
+   * action taken and recommendation are all carried in full either way.
    */
   function pmsCompleted(record, extras) {
     if (!enabled()) return skipped('DISABLED');
@@ -496,6 +516,9 @@ PMS.Notify = (function () {
       var assetTag = fieldText(source.assetTag);
       var linkedTickets = ticketSummaryLines(source.recordId);
       var trackerStatus = PMS.Util.cleanText(options.trackerStatus, 60) || PMS.CONFIG.TRACKER_COMPLETED_VALUE;
+      var headline = trackerStatus === PMS.CONFIG.TRACKER_COMPLETED_VALUE
+        ? 'Completed'
+        : (TRACKER_STATUS_HEADLINE[trackerStatus] || humanize(trackerStatus));
       var checklist = checklistSection(source);
 
       var rows = [
@@ -514,9 +537,9 @@ PMS.Notify = (function () {
         ['Record ID', fieldText(source.recordId)]
       ];
 
-      var title = 'Preventive Maintenance Completed';
-      var subject = 'PMS Completed · ' + assetTag + ' · ' + fieldText(source.cycleId, '');
-      var subtitle = sectionLabel + ' · Completed by ' + fieldText(source.technicianName);
+      var title = 'Preventive Maintenance ' + headline;
+      var subject = 'PMS ' + headline + ' · ' + assetTag + ' · ' + fieldText(source.cycleId, '');
+      var subtitle = sectionLabel + ' · ' + headline + ' by ' + fieldText(source.technicianName);
       var html = detailTable(rows) +
         (checklist ? '<h3 style="margin:22px 0 8px;font-size:14px;font-family:Arial,Helvetica,sans-serif;">Maintenance Checklist</h3>' +
           gridTable(checklist.headings, checklist.rows) : '');

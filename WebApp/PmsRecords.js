@@ -283,10 +283,42 @@ PMS.Records = (function () {
     );
   }
 
-  function findByColumn(key, value) {
+  /**
+   * `sectionKey` is an optional narrowing, not a security boundary: recordId
+   * and idempotencyKey are already unique across both sheets (nextRecordId
+   * counts across every record regardless of section, and idempotencyKey is a
+   * fresh UUID per record), so a real *current-schema* match can never live in
+   * the other section's sheet. Callers that already know the section (save(),
+   * below) skip a full scan of a sheet the answer could never be in; callers
+   * that don't (ticket lookups, the admin get-record endpoint) omit it and
+   * search both, exactly as before.
+   *
+   * INFRA_SECURITY is the one exception: before INFRA_RESPONSE_SHEET existed,
+   * Infra drafts were written into the shared RESPONSE_SHEET, and save() and
+   * clientRecord() both still explicitly detect and reject that legacy shape
+   * (LEGACY_DRAFT_INCOMPATIBLE) rather than silently touching it. Scoping an
+   * Infra lookup to INFRA_RESPONSE_SHEET alone would make that guard
+   * unreachable — a legacy draft's id or idempotencyKey would just read as
+   * "not found" and let save() write a brand-new row instead of flagging the
+   * old one — so an Infra-scoped lookup still checks both sheets. Service
+   * Desk has no such history and stays a true single-sheet scan.
+   */
+  function findByColumn(key, value, sectionKey) {
     if (!value) return null;
+    var entries;
+    if (sectionKey === 'INFRA_SECURITY') {
+      entries = ['INFRA_SECURITY', 'SERVICE_DESK'].map(function (key2) {
+        var sheet = responseSheet(false, key2);
+        return sheet ? { sheet: sheet, definition: sheetDefinition(key2) } : null;
+      }).filter(Boolean);
+    } else if (sectionKey) {
+      var sheet = responseSheet(false, sectionKey);
+      entries = sheet ? [{ sheet: sheet, definition: sheetDefinition(sectionKey) }] : [];
+    } else {
+      entries = recordSheets(false);
+    }
     var matches = [];
-    recordSheets(false).forEach(function (entry) {
+    entries.forEach(function (entry) {
       var row = findRowByColumn(entry.sheet, key, value, entry.definition.columns);
       if (row) matches.push(getByRow(entry.sheet, row));
     });
@@ -296,12 +328,12 @@ PMS.Records = (function () {
     return matches.length ? matches[0] : null;
   }
 
-  function findByRecordId(recordId) {
-    return findByColumn('recordId', recordId);
+  function findByRecordId(recordId, sectionKey) {
+    return findByColumn('recordId', recordId, sectionKey);
   }
 
-  function findByIdempotencyKey(idempotencyKey) {
-    return findByColumn('idempotencyKey', idempotencyKey);
+  function findByIdempotencyKey(idempotencyKey, sectionKey) {
+    return findByColumn('idempotencyKey', idempotencyKey, sectionKey);
   }
 
   function ensureRowCapacity(sheet, rowNumber) {
@@ -512,7 +544,17 @@ PMS.Records = (function () {
     return record;
   }
 
-  function save(rawPayload, mode) {
+  /**
+   * `options.includeRecord` attaches the full internal record object (the
+   * same shape findByRecordId returns) as `result.record`, stripped back off
+   * before PMS_apiSaveRecord's plain JSON response — it exists only so
+   * PMS_apiFileTicketForRecord can hand the record it just built straight to
+   * PMS.Tickets.create() instead of that call re-fetching by id a moment
+   * later. Default (unset) behaves exactly as before: no such field, so
+   * ordinary saves are unaffected.
+   */
+  function save(rawPayload, mode, options) {
+    var settings = options || {};
     var profile = PMS.Auth.requireProfile();
     var normalized = PMS.Validation.payload(rawPayload, mode, profile);
     var lock = LockService.getScriptLock();
@@ -523,11 +565,14 @@ PMS.Records = (function () {
     var completionNotice = null;
     try {
       var existing = null;
+      // Scoped to the caller's own section: a draft or a retried idempotency
+      // key can only ever live in that section's sheet (see findByColumn),
+      // so this is one sheet scan instead of two.
       if (normalized.recordId) {
-        existing = findByRecordId(normalized.recordId);
+        existing = findByRecordId(normalized.recordId, profile.section);
         if (!existing) PMS.Util.fail('The PMS draft was not found. Start a new questionnaire.', 'NOT_FOUND');
       }
-      if (!existing) existing = findByIdempotencyKey(normalized.idempotencyKey);
+      if (!existing) existing = findByIdempotencyKey(normalized.idempotencyKey, profile.section);
       if (existing && existing.technicianEmail !== profile.email) {
         PMS.Util.fail('You cannot edit another technician’s record.', 'ACCESS_DENIED');
       }
@@ -535,13 +580,15 @@ PMS.Records = (function () {
         PMS.Util.fail('You cannot edit a record assigned to another IT section.', 'ACCESS_DENIED');
       }
       if (existing && PMS.Util.completionState(existing.pmsCompletion) === 'COMPLETED') {
-        return {
+        var alreadyCompleted = {
           ok: true,
           recordId: existing.recordId,
           pmsCompletion: existing.pmsCompletion,
           syncStatus: 'COMPLETED',
           message: 'This record was already completed.'
         };
+        if (settings.includeRecord) alreadyCompleted.record = existing;
+        return alreadyCompleted;
       }
 
       if (existing && existing.itSection === 'INFRA_SECURITY' && existing._sheetName === PMS.CONFIG.RESPONSE_SHEET) {
@@ -651,12 +698,27 @@ PMS.Records = (function () {
       lock.releaseLock();
     }
 
-    try {
-      var refreshedRecords = dashboardRecords();
-      result.metrics = PMS.Metrics.dashboard({ section: profile.isAdmin ? 'ALL' : profile.section }, refreshedRecords);
-      result.recentRecords = recent(profile, 10, refreshedRecords);
-    } catch (error) {
-      console.error('Post-save dashboard refresh failed: ' + error.message);
+    /*
+      A SAVE-mode write is always stamped INCOMPLETE (see above), so it can
+      never change what counts as eligible/completed/pending, and dashboard
+      metrics are therefore provably unaffected by it. dashboardRecords()
+      re-reads every record ever written across both sheets to build them —
+      the one part of a save that grows with the workbook's whole history
+      rather than with this one write — so this refresh is skipped entirely
+      unless the mode is COMPLETE, where compliance genuinely can have
+      changed. The client already tolerates a response with no metrics/
+      recentRecords (applySaveResultToDashboard only applies what is present),
+      so a plain "Save progress" simply leaves the dashboard as it was; the
+      next completion, refresh, or bootstrap catches it up.
+    */
+    if (normalized.mode === 'COMPLETE') {
+      try {
+        var refreshedRecords = dashboardRecords();
+        result.metrics = PMS.Metrics.dashboard({ section: profile.isAdmin ? 'ALL' : profile.section }, refreshedRecords);
+        result.recentRecords = recent(profile, 10, refreshedRecords);
+      } catch (error) {
+        console.error('Post-save dashboard refresh failed: ' + error.message);
+      }
     }
 
     // Outside the lock, and best effort: a completed record must not be undone
@@ -670,6 +732,7 @@ PMS.Records = (function () {
         console.warn('PMS completion notification failed: ' + error.message);
       }
     }
+    if (settings.includeRecord) result.record = record;
     return result;
   }
 
