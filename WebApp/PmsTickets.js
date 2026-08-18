@@ -34,11 +34,13 @@ PMS.Tickets = (function () {
 
   /*
     Statuses a user may choose. A ticket exists because somebody is fixing
-    something, so there are only two states worth recording: it is being worked,
-    or it is closed. It starts as IN_PROGRESS the moment it is filed and can be
-    closed immediately.
+    something, or because PMS itself could not be carried out on the asset, so
+    there are three states worth recording: being worked, deferred until a
+    revisit, or closed. It starts as IN_PROGRESS the moment it is filed —
+    unless it was raised from a "PMS not performed" record, which starts
+    DEFERRED instead — and can be closed immediately.
   */
-  var STATUSES = Object.freeze(['IN_PROGRESS', 'RESOLVED']);
+  var STATUSES = Object.freeze(['IN_PROGRESS', 'DEFERRED', 'RESOLVED']);
   /*
     Retired statuses that tickets filed earlier may still carry.
 
@@ -56,6 +58,7 @@ PMS.Tickets = (function () {
   */
   var STATUS_LABELS = Object.freeze({
     IN_PROGRESS: 'In Progress',
+    DEFERRED: 'Deferred',
     RESOLVED: 'Closed',
     OPEN: 'Open',
     ON_HOLD: 'On Hold',
@@ -63,7 +66,7 @@ PMS.Tickets = (function () {
   });
   // Statuses that still need someone's attention. Used for the dashboard count
   // and the default filter, so "for fixing" is answerable at a glance.
-  var ACTIVE_STATUSES = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD']);
+  var ACTIVE_STATUSES = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD', 'DEFERRED']);
   var CLOSED_STATUSES = Object.freeze(['RESOLVED', 'CANCELLED']);
   /*
     Priority is no longer part of the product: nobody triaged by it, so it was
@@ -531,8 +534,21 @@ PMS.Tickets = (function () {
       cycleId: cellText(record.cycleId),
       maintenanceYear: cellText(record.maintenanceYear),
       findings: cellText(record.assetFindings),
-      actionRequired: cellText(record.recommendation)
+      actionRequired: cellText(record.recommendation),
+      assessmentResult: cellText(record.assessmentResult)
     };
+  }
+
+  /**
+   * The status a new ticket starts in.
+   *
+   * A "PMS not performed" record means the whole visit didn't happen — that
+   * reads as deferred until a revisit, not as work already underway. Every
+   * other linked or unlinked ticket still starts as ordinary in-progress
+   * repair work.
+   */
+  function defaultStatusForSubject(subject) {
+    return subject.assessmentResult === 'PMS not performed' ? 'DEFERRED' : 'IN_PROGRESS';
   }
 
   function create(context, payload) {
@@ -549,7 +565,8 @@ PMS.Tickets = (function () {
       cycleId: '',
       maintenanceYear: '',
       findings: '',
-      actionRequired: ''
+      actionRequired: '',
+      assessmentResult: ''
     };
     if (!subject.assetTag) {
       PMS.Util.fail('An asset tag is required to open a ticket.', 'VALIDATION_ERROR');
@@ -565,12 +582,14 @@ PMS.Tickets = (function () {
     var summary = PMS.Util.cleanText(request.summary, 300) || findings.slice(0, 140);
     var priority = normalizePriority(request.priority, 'MEDIUM');
     /*
-      A ticket is raised because somebody is going to fix the thing, so it starts
-      as work in progress. Neither create form asks: priority and status are
-      changed from the ticket's own page once it exists, which keeps filing to the
-      few facts the filer actually knows.
+      A ticket is raised because somebody is going to fix the thing, or because
+      PMS itself could not be carried out, so it starts as either in-progress
+      repair work or deferred until a revisit (see defaultStatusForSubject).
+      Neither create form asks: priority and status are changed from the
+      ticket's own page once it exists, which keeps filing to the few facts
+      the filer actually knows.
     */
-    var status = normalizeSelectableStatus(request.status, 'IN_PROGRESS');
+    var status = normalizeSelectableStatus(request.status, defaultStatusForSubject(subject));
     var openingRemarks = PMS.Util.cleanText(request.remarks, REMARKS_MAX_LENGTH) ||
       ('Ticket filed from ' + (subject.sourceRecordId || 'a manual report') + '.');
 
@@ -1209,7 +1228,7 @@ PMS.Tickets = (function () {
     yet, and ON_HOLD ranks last of the active states because it is waiting on
     something external.
   */
-  var TRACKER_STATUS_PRECEDENCE = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD']);
+  var TRACKER_STATUS_PRECEDENCE = Object.freeze(['OPEN', 'IN_PROGRESS', 'ON_HOLD', 'DEFERRED']);
 
   /** The cell text one ticket status maps to, ignoring any siblings. */
   function trackerValueForStatus(status) {

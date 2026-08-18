@@ -295,6 +295,39 @@
             </div>
           </div>
 
+          <!--
+            For the rare visit where PMS genuinely could not be performed at
+            all (asset unreachable, offline, missing, etc.) rather than one
+            check at a time. Builds on the same "Not done + reason" grammar
+            every item already supports — it is not a second mechanism, it
+            is every item's Not-done state applied at once with one shared
+            reason.
+          -->
+          <section class="checklist-skip" id="checklist-skip" aria-labelledby="checklist-skip-title">
+            <div class="checklist-skip__header">
+              <div>
+                <p class="eyebrow">Could not perform PMS on this asset?</p>
+                <h3 id="checklist-skip-title">Skip the entire checklist</h3>
+                <p>Marks every check below as Not done with the reason you give. Use this only when maintenance genuinely could not happen — for example the asset was offline or unreachable for the whole visit.</p>
+              </div>
+              <button class="button button--secondary" id="checklist-skip-toggle" type="button" aria-expanded="false" aria-controls="checklist-skip-body">
+                <svg class="icon" aria-hidden="true"><use href="#i-alert-circle"></use></svg>
+                <span id="checklist-skip-toggle-label">Skip everything</span>
+              </button>
+            </div>
+            <div class="checklist-skip__body" id="checklist-skip-body" hidden>
+              <div class="field">
+                <label for="checklist-skip-reason">Reason <span class="required-mark" aria-hidden="true">*</span></label>
+                <textarea id="checklist-skip-reason" rows="2" maxlength="500" placeholder="Why PMS could not be performed on this asset"></textarea>
+                <p class="field-error" id="checklist-skip-reason-error" hidden></p>
+              </div>
+              <button class="button button--primary" id="checklist-skip-confirm" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>
+                <span>Mark every check Not done</span>
+              </button>
+            </div>
+          </section>
+
           <div class="checklist-groups" id="checklist-groups"></div>
         </section>
 
@@ -316,6 +349,7 @@
                 <option value="No findings">No findings</option>
                 <option value="Findings resolved">Findings resolved</option>
                 <option value="Follow-up required">Follow-up required</option>
+                <option value="PMS not performed">PMS not performed</option>
               </select>
               <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
             </div>
@@ -363,7 +397,7 @@
               <div>
                 <p class="eyebrow" id="record-ticket-eyebrow">Findings ticket</p>
                 <h3 id="record-ticket-title">Track the repair</h3>
-                <p id="record-ticket-intro">A “Follow-up required” assessment needs a ticket, so the repair is followed to completion after this record is closed.</p>
+                <p id="record-ticket-intro">A “Follow-up required” or “PMS not performed” assessment needs a ticket, so the repair or revisit is followed to completion after this record is closed.</p>
               </div>
               <button class="button button--secondary" id="record-ticket-toggle" type="button" aria-expanded="false" aria-controls="record-ticket-body">
                 <svg class="icon" aria-hidden="true"><use href="#i-wrench"></use></svg>

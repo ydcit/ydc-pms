@@ -72,6 +72,33 @@ PMS.LegacyImport = (function () {
     ];
   }
 
+  /**
+   * Legacy import is open to any registered technician, not administrators
+   * only, but scoped down from what an administrator can do:
+   *
+   *   - a technician may import only into their own registered section —
+   *     they cannot backfill work for a section they don't belong to;
+   *   - a technician may import only into the currently open tracker year —
+   *     the "historical" mode that rewrites a past, already-closed year
+   *     without touching the live tracker stays administrator-only, since it
+   *     can silently create completed history for a year nobody is actively
+   *     working in.
+   *
+   * An administrator is unrestricted, exactly as before.
+   */
+  function requireImportAuthorization(actor, sectionKey, historical) {
+    if (actor.isAdmin) return;
+    if (sectionKey !== actor.section) {
+      PMS.Util.fail('You can import legacy PMS only for your own registered IT section.', 'ACCESS_DENIED');
+    }
+    if (historical) {
+      PMS.Util.fail(
+        'Only an administrator can import legacy PMS for a year other than the current open tracker year.',
+        'ACCESS_DENIED'
+      );
+    }
+  }
+
   function assertImportWindowOpen() {
     var rollover = PropertiesService.getScriptProperties().getProperty(PMS.CONFIG.ROLLOVER_STATE_PROPERTY);
     if (rollover) {
@@ -430,10 +457,11 @@ PMS.LegacyImport = (function () {
   }
 
   function preview(request) {
-    var admin = PMS.Auth.requireAdmin();
+    var actor = PMS.Auth.requireProfile();
     var openYear = assertImportWindowOpen();
     var normalized = normalizeRequest(request);
     var plan = buildPlan(normalized);
+    requireImportAuthorization(actor, normalized.section.key, plan.historical);
     var confirmedOpenYear = assertImportWindowOpen();
     if (openYear !== confirmedOpenYear || Number(plan.trackerYear) !== confirmedOpenYear) {
       PMS.Util.fail('The tracker year changed while preparing the preview. Preview it again.', 'IMPORT_PREVIEW_STALE');
@@ -452,7 +480,7 @@ PMS.LegacyImport = (function () {
       writeState({
         token: token,
         batchId: batchId,
-        adminEmail: admin.email,
+        adminEmail: actor.email,
         requestDigest: normalized.requestDigest,
         createdAt: PMS.Util.nowIso(),
         expiresAt: expiresAt,
@@ -495,9 +523,9 @@ PMS.LegacyImport = (function () {
     }
   }
 
-  function assertState(state, normalized, admin) {
-    if (PMS.Util.normalizeEmail(state.adminEmail) !== admin.email) {
-      PMS.Util.fail('This legacy import confirmation belongs to another administrator.', 'ACCESS_DENIED');
+  function assertState(state, normalized, actor) {
+    if (PMS.Util.normalizeEmail(state.adminEmail) !== actor.email) {
+      PMS.Util.fail('This legacy import confirmation belongs to another user.', 'ACCESS_DENIED');
     }
     if (state.requestDigest !== normalized.requestDigest) {
       PMS.Util.fail('The legacy import input changed after preview. Preview it again.', 'IMPORT_PREVIEW_STALE');
@@ -505,10 +533,10 @@ PMS.LegacyImport = (function () {
   }
 
   function execute(request, confirmationToken) {
-    var admin = PMS.Auth.requireAdmin();
+    var actor = PMS.Auth.requireProfile();
     var normalized = normalizeRequest(request);
     var state = readState(confirmationToken);
-    assertState(state, normalized, admin);
+    assertState(state, normalized, actor);
     var lock = LockService.getScriptLock();
     if (!lock.tryLock(30000)) {
       PMS.Util.fail('Another maintenance operation is running. Try the import again shortly.', 'BUSY');
@@ -520,9 +548,10 @@ PMS.LegacyImport = (function () {
       // planned item into an idempotent skip.
       assertImportWindowOpen();
       state = readState(confirmationToken);
-      assertState(state, normalized, admin);
+      assertState(state, normalized, actor);
       var allRecords = PMS.Records.allRecords();
       var plan = buildPlan(normalized, allRecords);
+      requireImportAuthorization(actor, normalized.section.key, plan.historical);
       if (state.section !== normalized.section.key || state.cycleId !== normalized.cycle.cycleId ||
           Number(state.trackerYear) !== Number(plan.trackerYear) || state.trackerMode !== plan.trackerMode) {
         PMS.Util.fail(
@@ -569,8 +598,8 @@ PMS.LegacyImport = (function () {
           cycleId: normalized.cycle.cycleId,
           section: normalized.section.key,
           batchId: state.batchId,
-          adminEmail: admin.email,
-          adminName: admin.name,
+          adminEmail: actor.email,
+          adminName: actor.name,
           requestDigest: normalized.requestDigest,
           totalReady: state.totalReady,
           timestamp: PMS.Util.nowIso()
@@ -588,7 +617,7 @@ PMS.LegacyImport = (function () {
           trackerYear: plan.trackerYear,
           asset: row._asset,
           sourceNote: normalized.sourceNote,
-          admin: admin,
+          admin: actor,
           historical: plan.historical,
           existing: row._existing || null
         };
@@ -661,8 +690,8 @@ PMS.LegacyImport = (function () {
           cycleId: normalized.cycle.cycleId,
           section: normalized.section.key,
           batchId: state.batchId,
-          adminEmail: admin.email,
-          adminName: admin.name,
+          adminEmail: actor.email,
+          adminName: actor.name,
           requestDigest: normalized.requestDigest,
           totals: state.totals,
           timestamp: PMS.Util.nowIso()

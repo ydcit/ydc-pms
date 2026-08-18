@@ -79,8 +79,8 @@
     ];
 
     var FALLBACK_PERIPHERALS = [
-      { key: 'nuc', label: 'NUC' },
-      { key: 'nucAdaptor', label: 'NUC adaptor' },
+      { key: 'nuc', label: 'Yubikey' },
+      { key: 'nucAdaptor', label: 'Laptop charger' },
       { key: 'monitor', label: 'Monitor' },
       { key: 'keyboard', label: 'Keyboard' },
       { key: 'mouse', label: 'Mouse' },
@@ -879,7 +879,9 @@
         button.disabled = !hasOpenAsset;
         button.title = hasOpenAsset ? 'Open the preventive maintenance questionnaire' : 'No INPROD assets are available in your IT section';
       });
-      byId('open-legacy-import').hidden = !userIsAdmin();
+      // Legacy import is open to every registered user, scoped to their own
+      // section and the currently open tracker year unless they are an admin.
+      byId('open-legacy-import').hidden = false;
       byId('cycle-badge').textContent = cycle;
       byId('cycle-banner-title').textContent = year + ' ' + cycle + ' preventive maintenance';
       byId('cycle-date-range').textContent = formatDate(deriveCycle(year + (cycle === 'T1' ? '-01-01' : cycle === 'T2' ? '-05-01' : '-09-01')).start, { month: 'long', day: 'numeric' }) + ' – ' + formatDate(deadline, { month: 'long', day: 'numeric', year: 'numeric' });
@@ -887,6 +889,10 @@
       byId('cycle-days-label').textContent = daysRemaining !== null && daysRemaining < 0 ? 'days overdue' : daysRemaining === 1 ? 'day remaining' : 'days remaining';
       byId('header-cycle').textContent = year + ' ' + cycle;
       byId('header-cycle').hidden = false;
+      byId('cycle-banner-eyebrow').textContent = (year === derived.year && cycle === derived.cycle)
+        ? 'Current PMS cycle'
+        : 'Viewing PMS cycle';
+      renderDashboardCycleOptions(metrics.cycleOptions, year + '-' + cycle);
 
       byId('metric-eligible').textContent = formatNumber(eligible);
       byId('metric-completed').textContent = formatNumber(completed);
@@ -894,6 +900,7 @@
       byId('metric-compliance').textContent = compliance === null ? 'N/A' : formatPercent(compliance);
       byId('metric-findings').textContent = formatNumber(pick(summary, ['withFindings', 'findings', 'assetsWithFindings'], 0));
       byId('metric-follow-up').textContent = formatNumber(pick(summary, ['followUpRequired', 'followUp', 'requiresFollowUp'], 0));
+      byId('metric-pms-not-performed').textContent = formatNumber(pick(summary, ['pmsNotPerformed'], 0));
       byId('metric-mine').textContent = formatNumber(pick(summary, ['myCompleted', 'completedByMe', 'technicianCompleted'], 0));
       byId('pending-detail').textContent = daysRemaining !== null && daysRemaining < 0 && pending > 0 ? 'Overdue assets' : 'Assets remaining';
       byId('coverage-ratio').textContent = completed + ' of ' + eligible + ' eligible assets';
@@ -910,6 +917,52 @@
       // Ticket counts are also deferred, for the same reason.
       loadTicketSummary();
       warmListCaches();
+    }
+
+    /**
+     * Populates the dashboard's cycle filter from the metrics response.
+     *
+     * cycleOptions is discovered server-side from stored records, so it only
+     * ever lists a cycle something actually happened in — plus the current
+     * one, always, even with zero history. The currently displayed cycle is
+     * added defensively if the metrics response predates this field.
+     */
+    function renderDashboardCycleOptions(options, selectedCycleId) {
+      var select = byId('dashboard-cycle-select');
+      if (!select) return;
+      var list = toArray(options).slice();
+      if (!list.some(function (item) { return item.cycleId === selectedCycleId; })) {
+        var parts = /^(\d{4})-(T[123])$/.exec(selectedCycleId);
+        if (parts) list = list.concat([{ year: Number(parts[1]), cycle: parts[2], cycleId: selectedCycleId }]);
+      }
+      select.replaceChildren();
+      list.forEach(function (item) {
+        var option = document.createElement('option');
+        option.value = item.cycleId;
+        option.textContent = item.year + ' · ' + item.cycle;
+        select.appendChild(option);
+      });
+      select.value = selectedCycleId;
+    }
+
+    /** Reloads dashboard metrics for the cycle chosen in the filter. */
+    function changeDashboardCycle() {
+      var match = /^(\d{4})-(T[123])$/.exec(byId('dashboard-cycle-select').value);
+      if (!match) return;
+      setBusy(true, 'Loading cycle…');
+      serverCall('PMS_apiDashboard', {
+        year: Number(match[1]),
+        cycle: match[2],
+        section: userIsAdmin() ? 'ALL' : sectionKey()
+      })
+        .then(function (data) {
+          state.bootstrap.metrics = data.metrics;
+          renderDashboard();
+        })
+        .catch(function (error) {
+          showToast('Could not load cycle', errorMessage(error), 'danger');
+        })
+        .finally(function () { setBusy(false); });
     }
 
     /* ------------------------------------------------------------------------
@@ -1511,7 +1564,8 @@
     var ASSESSMENT_TONE = {
       'NO FINDINGS': 'assessment-tag--clear',
       'FINDINGS RESOLVED': 'assessment-tag--resolved',
-      'FOLLOW-UP REQUIRED': 'assessment-tag--followup'
+      'FOLLOW-UP REQUIRED': 'assessment-tag--followup',
+      'PMS NOT PERFORMED': 'assessment-tag--notperformed'
     };
 
     function assessmentTag(result) {
@@ -1600,6 +1654,7 @@
     var TICKET_STATUS_CHIP = {
       OPEN: 'status-chip--warning',
       IN_PROGRESS: 'status-chip--info',
+      DEFERRED: 'status-chip--warning',
       ON_HOLD: 'status-chip--neutral',
       RESOLVED: 'status-chip--success',
       CANCELLED: 'status-chip--neutral'
@@ -1609,6 +1664,7 @@
     var TICKET_TABS = [
       { value: 'ACTIVE', label: 'Needs attention' },
       { value: 'IN_PROGRESS', label: 'In progress' },
+      { value: 'DEFERRED', label: 'Deferred' },
       { value: 'RESOLVED', label: 'Closed' },
       { value: '', label: 'All' }
     ];
@@ -1635,6 +1691,7 @@
     */
     var TICKET_STATUS_LABELS = {
       IN_PROGRESS: 'In Progress',
+      DEFERRED: 'Deferred',
       RESOLVED: 'Closed',
       OPEN: 'Open',
       ON_HOLD: 'On Hold',
@@ -2202,6 +2259,9 @@
       byId('ticket-create-section').disabled = Boolean(state.tickets.sourceRecordId);
       byId('ticket-asset-combobox-toggle').disabled = Boolean(state.tickets.sourceRecordId);
       byId('ticket-create-section-help').hidden = Boolean(state.tickets.sourceRecordId);
+      byId('ticket-create-status-help').textContent = normalizeText(source.assessmentResult) === 'PMS not performed'
+        ? 'Filed as Deferred, since PMS could not be performed on this asset. The status is changed on the ticket itself.'
+        : 'Filed as In Progress. The status is changed on the ticket itself.';
 
       showTicketsView('create');
       // A linked record already names the asset, so there is nothing to load.
@@ -2453,7 +2513,8 @@
         assetTag: normalizeText(source.assetTag),
         section: normalizeText(source.section),
         location: normalizeText(source.location),
-        summary: summary ? summary + ' on ' + normalizeText(source.assetTag) : ''
+        summary: summary ? summary + ' on ' + normalizeText(source.assetTag) : '',
+        assessmentResult: normalizeText(source.assessmentResult)
       });
       closeArchiveModal();
       if (!state.tickets.open) openTicketsModal('create');
@@ -2559,12 +2620,14 @@
     }
 
     /**
-     * Only "Follow-up required" leaves work outstanding, so only it forces a
-     * ticket. "Findings resolved" was dealt with during the maintenance, and
+     * "Follow-up required" and "PMS not performed" both leave work outstanding
+     * — one on the asset, one on the visit itself — so both force a ticket.
+     * "Findings resolved" was dealt with during the maintenance, and
      * "No findings" had nothing to deal with.
      */
     function recordNeedsTicket() {
-      return normalizeText(byId('assessment-result').value) === 'Follow-up required';
+      var result = normalizeText(byId('assessment-result').value);
+      return result === 'Follow-up required' || result === 'PMS not performed';
     }
 
     /**
@@ -2573,7 +2636,7 @@
      */
     function recordAllowsTicket() {
       var result = normalizeText(byId('assessment-result').value);
-      return result === 'Follow-up required' || result === 'Findings resolved';
+      return result === 'Follow-up required' || result === 'Findings resolved' || result === 'PMS not performed';
     }
 
     function recordTicketCount() {
@@ -2590,19 +2653,22 @@
       var needed = recordNeedsTicket();
       var offered = recordAllowsTicket();
       var filed = recordTicketCount() > 0;
+      var notPerformed = normalizeText(byId('assessment-result').value) === 'PMS not performed';
       // Hidden for a clean assessment unless a ticket was filed anyway.
       byId('record-ticket').hidden = !offered && !filed;
       byId('record-ticket-eyebrow').textContent = needed && !filed ? 'Required before completing' : 'Findings ticket';
       byId('record-ticket').classList.toggle('record-ticket--required', needed && !filed);
       byId('record-ticket-title').textContent = filed
-        ? 'This repair is being tracked'
+        ? (notPerformed ? 'This revisit is being tracked' : 'This repair is being tracked')
         : needed
-          ? 'Track the repair before completing'
+          ? (notPerformed ? 'Track the revisit before completing' : 'Track the repair before completing')
           : 'Track this repair as well?';
       byId('record-ticket-intro').textContent = filed
         ? 'The ticket below carries this finding. Any user can move it along, and the section tracker follows its status.'
         : needed
-          ? 'This assessment needs follow-up, so PMS cannot be completed until a ticket exists to follow the repair.'
+          ? (notPerformed
+            ? 'PMS could not be performed on this asset, so PMS cannot be completed until a ticket exists to track the revisit.'
+            : 'This assessment needs follow-up, so PMS cannot be completed until a ticket exists to follow the repair.')
           : 'The findings were resolved during maintenance, so a ticket is optional. File one only if something still needs watching.';
       byId('record-ticket-toggle-label').textContent = byId('record-ticket-body').hidden
         ? (filed ? 'File another ticket' : 'File a ticket')
@@ -2710,31 +2776,35 @@
       var assetTag = state.selectedAsset ? state.selectedAsset.tag : normalizeTag(byId('asset-tag').value);
       var result = normalizeText(byId('assessment-result').value);
       setBusy(true, 'Saving draft and filing ticket…');
-      // A linked ticket needs a persisted record, so a draft is saved first.
-      // This is the same first step the infra evidence upload already takes.
-      serverCall('PMS_apiSaveRecord', buildPayload(), 'SAVE')
-        .then(function (draft) {
-          state.recordId = normalizeText(draft.recordId) || state.recordId;
+      /*
+        One round trip instead of two: PMS_apiFileTicketForRecord saves the
+        draft and files the ticket against it server-side, in that order,
+        under its own two locks. Filing this way used to cost two sequential
+        google.script.run calls, and each one pays roughly half a second of
+        Apps Script round-trip overhead before any work even starts — most of
+        what made this feel slow. Only the record link and optional remarks
+        are sent for the ticket half; the server copies the findings and the
+        required action from the record, and picks its starting status from
+        the assessment (Deferred for "PMS not performed", In Progress
+        otherwise). A tiny page is requested because only the counts are
+        needed here, for the dashboard badge.
+      */
+      serverCall('PMS_apiFileTicketForRecord', buildPayload(), {
+        summary: (result ? result + ' on ' : 'Needs fixing: ') + assetTag,
+        remarks: normalizeText(byId('record-ticket-remarks').value)
+      }, { page: 1, pageSize: 5, status: 'ACTIVE' })
+        .then(function (payload) {
+          state.recordId = normalizeText(payload.recordId) || state.recordId;
           state.loadedAssetTag = assetTag || state.loadedAssetTag;
-          state.submittedCompletion = normalizeText(draft.pmsCompletion);
+          state.submittedCompletion = normalizeText(payload.pmsCompletion);
           if (!state.recordId) {
             throw clientError('The draft was saved without a record ID. Save progress and try again.', 'DRAFT_ID_MISSING');
           }
           byId('record-save-state').textContent = 'Draft ' + state.recordId + ' saved';
           // Everything the payload carries is now persisted.
           state.dirty = false;
-          // Only the record link and optional remarks are sent. The server copies
-          // the findings and the required action from the record, and files the
-          // ticket as In Progress. A tiny page is requested because only the
-          // counts are needed here, for the dashboard badge.
-          return serverCall('PMS_apiCreateTicket', {
-            sourceRecordId: state.recordId,
-            summary: (result ? result + ' on ' : 'Needs fixing: ') + assetTag,
-            remarks: normalizeText(byId('record-ticket-remarks').value)
-          }, { page: 1, pageSize: 5, status: 'ACTIVE' });
-        })
-        .then(function (payload) {
-          var ticket = (payload && payload.ticket) || {};
+
+          var ticket = payload.ticket || {};
           state.recordTickets = (state.recordTickets || []).concat([{
             ticketId: normalizeText(ticket.ticketId),
             status: normalizeText(ticket.status),
@@ -2747,9 +2817,9 @@
           updateRecordTicketRequirement();
           updateFooterActions();
           showToast('Ticket filed',
-            normalizeText(ticket.ticketId) + ' is now tracking ' + assetTag + ' for fixing.', 'success');
+            normalizeText(ticket.ticketId) + ' is now tracking ' + assetTag + ' as ' + ticketLabel(ticket.status) + '.', 'success');
           // The counts came back with the write, so the badge needs no extra call.
-          if (payload && payload.list && payload.list.counts) updateTicketsBadge(payload.list.counts);
+          if (payload.list && payload.list.counts) updateTicketsBadge(payload.list.counts);
           else loadTicketSummary();
         })
         .catch(function (error) {
@@ -2786,16 +2856,28 @@
     function renderLegacyImportOptions() {
       var select = byId('legacy-import-section');
       if (!select) return;
+      var isAdmin = userIsAdmin();
+      // A technician can import only their own registered section — the
+      // server enforces this regardless, but there is no point offering a
+      // choice that will always be rejected.
+      var offered = isAdmin ? state.sections : state.sections.filter(function (section) {
+        return section.key === sectionKey();
+      });
       while (select.options.length > 1) select.remove(1);
-      state.sections.forEach(function (section) {
+      offered.forEach(function (section) {
         var option = document.createElement('option');
         option.value = section.key;
         option.textContent = section.label;
         select.appendChild(option);
       });
-      if (state.sections.some(function (section) { return section.key === sectionKey(); })) {
+      if (offered.some(function (section) { return section.key === sectionKey(); })) {
         select.value = sectionKey();
       }
+      select.disabled = !isAdmin;
+      byId('legacy-import-eyebrow').textContent = isAdmin ? 'Administrator tool' : 'Legacy PMS';
+      byId('legacy-import-scope-note').textContent = isAdmin
+        ? 'As an administrator, you can import into any section, including a year other than the currently open tracker year.'
+        : 'Scoped to ' + sectionLabel(sectionKey()) + ' in the currently open tracker year. Ask an administrator for a different section or an older year.';
     }
 
     function clearLegacyImportAlert() {
@@ -2863,9 +2945,13 @@
     function updateLegacyImportCycle() {
       var derived = deriveCycle(byId('legacy-import-maintenance-date').value);
       byId('legacy-import-cycle-value').textContent = derived ? derived.cycleId : 'Choose a date';
-      byId('legacy-import-cycle-detail').textContent = derived
+      var detail = derived
         ? 'Every valid asset will be recorded in ' + derived.cycleId + '. The server preview will confirm tracker impact.'
         : 'The server will confirm whether this updates the live tracker or creates a historical record only.';
+      if (!userIsAdmin()) {
+        detail += ' A date outside the currently open tracker year requires an administrator.';
+      }
+      byId('legacy-import-cycle-detail').textContent = detail;
     }
 
     function csvFirstColumn(text) {
@@ -2996,7 +3082,7 @@
     }
 
     function openLegacyImport() {
-      if (!userIsAdmin() || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      if (state.modalOpen || state.archive.open || state.legacyImport.open) return;
       state.legacyImport.lastFocus = document.activeElement;
       state.legacyImport.open = true;
       resetLegacyImport();
@@ -4863,6 +4949,53 @@
       updateFooterActions();
     }
 
+    /*
+      Skip the whole checklist in one action, for the rare visit where PMS
+      could not be performed on the asset at all. Reuses the exact per-item
+      "Not done + reason" grammar every check already supports rather than
+      inventing a second mechanism: every item is set to NOT_DONE with the one
+      reason given here, the same shape setChecklistEntry/formatChecklistValue
+      already read and write for a single item skipped by hand.
+      ---------------------------------------------------------------------- */
+
+    function toggleChecklistSkip() {
+      var body = byId('checklist-skip-body');
+      if (!body) return;
+      var opening = body.hidden;
+      body.hidden = !opening;
+      byId('checklist-skip-toggle').setAttribute('aria-expanded', String(opening));
+      if (opening) window.setTimeout(function () { byId('checklist-skip-reason').focus(); }, 0);
+    }
+
+    function applyChecklistSkip() {
+      var reasonInput = byId('checklist-skip-reason');
+      var reason = normalizeText(reasonInput.value);
+      clearFieldError('checklist-skip-reason', 'checklist-skip-reason-error');
+      if (!reason) {
+        setFieldError('checklist-skip-reason', 'checklist-skip-reason-error', 'State why PMS could not be performed on this asset.');
+        reasonInput.focus();
+        return;
+      }
+      allChecklistItems().forEach(function (item) {
+        setChecklistEntry(item.key, { state: 'NOT_DONE', reason: reason });
+      });
+      updateChecklistInputs();
+      updateChecklistProgress();
+      markDirty();
+      reasonInput.value = '';
+      byId('checklist-skip-body').hidden = true;
+      byId('checklist-skip-toggle').setAttribute('aria-expanded', 'false');
+      showToast('Checklist skipped', 'Every check was marked Not done: ' + reason, 'warning');
+    }
+
+    function resetChecklistSkip() {
+      if (!byId('checklist-skip-body')) return;
+      byId('checklist-skip-body').hidden = true;
+      byId('checklist-skip-toggle').setAttribute('aria-expanded', 'false');
+      byId('checklist-skip-reason').value = '';
+      clearFieldError('checklist-skip-reason', 'checklist-skip-reason-error');
+    }
+
     function resetFormData() {
       state.peripheralValues = {};
       state.checklistValues = {};
@@ -4878,6 +5011,7 @@
       state.dirty = false;
       state.submittedCompletion = '';
       resetRecordTicket();
+      resetChecklistSkip();
     }
 
     function createIdempotencyKey() {
@@ -5786,6 +5920,7 @@
           .catch(function () {})
           .finally(function () { setBusy(false); });
       });
+      byId('dashboard-cycle-select').addEventListener('change', changeDashboardCycle);
       byId('open-legacy-import').addEventListener('click', openLegacyImport);
       byId('legacy-import-close').addEventListener('click', function () { requestCloseLegacyImport(false); });
       document.querySelectorAll('[data-close-legacy-import]').forEach(function (element) {
@@ -5975,6 +6110,8 @@
       });
       byId('record-ticket-toggle').addEventListener('click', toggleRecordTicket);
       byId('record-ticket-submit').addEventListener('click', submitRecordTicket);
+      byId('checklist-skip-toggle').addEventListener('click', toggleChecklistSkip);
+      byId('checklist-skip-confirm').addEventListener('click', applyChecklistSkip);
       byId('rollover-dry-run').addEventListener('click', runRolloverDryRun);
       byId('rollover-year').addEventListener('input', resetRolloverReview);
       byId('rollover-reviewed').addEventListener('change', updateRolloverConfirmation);

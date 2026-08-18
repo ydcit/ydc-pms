@@ -31,9 +31,16 @@
       <div class="cycle-banner__content">
         <span class="cycle-badge" id="cycle-badge">T1</span>
         <div>
-          <p class="eyebrow">Current PMS cycle</p>
+          <p class="eyebrow" id="cycle-banner-eyebrow">Current PMS cycle</p>
           <h2 id="cycle-banner-title">Loading cycle…</h2>
           <p id="cycle-date-range"></p>
+        </div>
+      </div>
+      <div class="cycle-banner__filter">
+        <label for="dashboard-cycle-select">Viewing cycle</label>
+        <div class="select-wrap">
+          <select id="dashboard-cycle-select" aria-label="Dashboard cycle filter"></select>
+          <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
         </div>
       </div>
       <div class="cycle-banner__deadline">
@@ -153,6 +160,15 @@
             <div>
               <strong id="metric-follow-up">—</strong>
               <span>Follow-up required</span>
+            </div>
+          </div>
+          <div class="attention-item">
+            <span class="attention-item__icon attention-item__icon--amber" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-alert-circle"></use></svg>
+            </span>
+            <div>
+              <strong id="metric-pms-not-performed">—</strong>
+              <span>PMS not performed</span>
             </div>
           </div>
           <div class="attention-item">

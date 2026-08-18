@@ -234,13 +234,14 @@
 
           <!--
             No status picker here on purpose. A ticket is filed because somebody
-            is going to fix the thing, so it starts In Progress and is closed
-            from the ticket's own page.
+            is going to fix the thing (or, for a PMS-not-performed record, is
+            going to revisit the asset), so it starts at that default status and
+            is changed from the ticket's own page.
           -->
           <div class="field">
             <label for="ticket-create-location">Location</label>
             <input id="ticket-create-location" type="text" autocomplete="off" maxlength="200" placeholder="Where the asset is now">
-            <p class="field-help">Filed as In Progress. The status is changed on the ticket itself.</p>
+            <p class="field-help" id="ticket-create-status-help">Filed as In Progress. The status is changed on the ticket itself.</p>
           </div>
 
           <div class="field">

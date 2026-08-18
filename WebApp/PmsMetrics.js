@@ -13,6 +13,38 @@ PMS.Metrics = (function () {
     return Utilities.parseDate(text, PMS.CONFIG.TIME_ZONE, 'yyyy-MM-dd');
   }
 
+  var CYCLE_RANK = { T1: 1, T2: 2, T3: 3 };
+
+  /**
+   * Cycle choices for the dashboard's cycle filter: YYYY-T1/T2/T3.
+   *
+   * Discovered from stored records rather than a hardcoded range, so a filter
+   * never offers a cycle nobody has touched and never needs a code change for
+   * a new year. The current cycle is always included, even with zero history,
+   * so the filter is usable on a freshly deployed workbook.
+   */
+  function cycleOptionsFrom(records, current) {
+    var seen = {};
+    var options = [];
+    function addOption(year, cycleKey) {
+      var cycleId = year + '-' + cycleKey;
+      if (seen[cycleId]) return;
+      seen[cycleId] = true;
+      options.push({ year: year, cycle: cycleKey, cycleId: cycleId });
+    }
+    addOption(current.year, current.cycle);
+    records.forEach(function (record) {
+      if (!PMS.Records.isMaintenanceRecord(record)) return;
+      var year = Number(record.maintenanceYear);
+      var cycleKey = String(record.cycle || '');
+      if (!year || !PMS.CONFIG.CYCLES[cycleKey]) return;
+      addOption(year, cycleKey);
+    });
+    return options.sort(function (a, b) {
+      return b.year - a.year || CYCLE_RANK[b.cycle] - CYCLE_RANK[a.cycle];
+    });
+  }
+
   function dashboard(filters, recordSet) {
     var profile = PMS.Auth.requireProfile();
     var input = filters && typeof filters === 'object' ? filters : {};
@@ -60,6 +92,7 @@ PMS.Metrics = (function () {
     var completed = 0;
     var withFindings = 0;
     var followUp = 0;
+    var pmsNotPerformed = 0;
     var locations = {};
     var pendingAssets = [];
     var completionSources = { record: 0, tracker: 0 };
@@ -79,6 +112,7 @@ PMS.Metrics = (function () {
           withFindings += 1;
         }
         if (assessment && assessment.assessmentResult === 'Follow-up required') followUp += 1;
+        if (assessment && assessment.assessmentResult === 'PMS not performed') pmsNotPerformed += 1;
       } else {
         locations[location].pending += 1;
         if (pendingAssets.length < 100) {
@@ -117,12 +151,14 @@ PMS.Metrics = (function () {
       compliance: compliance,
       withFindings: withFindings,
       followUp: followUp,
+      pmsNotPerformed: pmsNotPerformed,
       overdue: overdue,
       myCompleted: Object.keys(myCompletedKeys).length,
       sections: sections,
       completionSources: completionSources,
       locations: locationRows.slice(0, 20),
       pendingAssets: pendingAssets,
+      cycleOptions: cycleOptionsFrom(records, current),
       liveEligibility: true,
       generatedAt: PMS.Util.nowIso()
     };

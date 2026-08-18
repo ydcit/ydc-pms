@@ -44,7 +44,13 @@ PMS.CONFIG = {
   TRACKER_REPAIR_VALUES: Object.freeze({
     OPEN: 'FOR FIXING',
     IN_PROGRESS: 'IN PROGRESS',
-    ON_HOLD: 'ON HOLD'
+    ON_HOLD: 'ON HOLD',
+    // A "PMS not performed" assessment's ticket starts life in this status;
+    // see PMS.Tickets.create. Included here so the same generic mechanism
+    // (PMS.Util.isTrackerComplete/isTrackerAwaitingRepair, the status
+    // validation dropdown, PMS.Tickets.trackerStatusForRecord) already used
+    // for FOR FIXING/IN PROGRESS/ON HOLD picks this up for free.
+    DEFERRED: 'DEFERRED'
   }),
   CACHE_SECONDS: 300,
   ROLLOVER_TOKEN_SECONDS: 300,
@@ -94,9 +100,17 @@ PMS.CONFIG = {
     T2: Object.freeze({ key: 'T2', startMonth: 5, endMonth: 8, endDay: 31, checkboxColumn: 6, remarksColumn: 7 }),
     T3: Object.freeze({ key: 'T3', startMonth: 9, endMonth: 12, endDay: 31, checkboxColumn: 8, remarksColumn: 9 })
   }),
+  /*
+    Labels only. The keys, PERIPHERAL_RECORD_KEYS mapping, and RECORD_COLUMNS
+    sheet headers below are deliberately untouched: verifyHeaders() rejects a
+    live sheet whose header row doesn't match, so renaming "Peripheral - NUC"
+    would SCHEMA_MISMATCH every existing spreadsheet. Data already recorded
+    under the old "NUC" label lives on in the same peripheralNuc column/field —
+    it now just reads as Yubikey.
+  */
   PERIPHERALS: Object.freeze([
-    Object.freeze({ key: 'nuc', label: 'NUC' }),
-    Object.freeze({ key: 'nucAdaptor', label: 'NUC Adaptor' }),
+    Object.freeze({ key: 'nuc', label: 'Yubikey' }),
+    Object.freeze({ key: 'nucAdaptor', label: 'Laptop Charger' }),
     Object.freeze({ key: 'monitor', label: 'Monitor' }),
     Object.freeze({ key: 'keyboard', label: 'Keyboard' }),
     Object.freeze({ key: 'mouse', label: 'Mouse' }),
@@ -210,7 +224,14 @@ PMS.CONFIG = {
       ])
     })
   ]),
-  ASSESSMENT_RESULTS: Object.freeze(['No findings', 'Findings resolved', 'Follow-up required'])
+  /*
+    "PMS not performed" means IT could not carry out maintenance on this asset
+    at all (offline, inaccessible, missing, etc.), as distinct from "Follow-up
+    required" which means maintenance happened and found something outstanding.
+    Both leave work behind, so both require a findings ticket before PMS can
+    complete — see PMS.Records.requireFindingsTicket.
+  */
+  ASSESSMENT_RESULTS: Object.freeze(['No findings', 'Findings resolved', 'Follow-up required', 'PMS not performed'])
 };
 
 PMS.CONFIG.RECORD_COLUMNS = Object.freeze([

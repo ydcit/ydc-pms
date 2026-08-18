@@ -235,6 +235,34 @@ function PMS_apiCreateTicket(payload, listOptions) {
   }
 }
 
+/**
+ * Saves a draft PMS record and files a findings ticket against it in one
+ * round trip.
+ *
+ * Filing mid-questionnaire used to be PMS_apiSaveRecord followed by
+ * PMS_apiCreateTicket as two sequential google.script.run calls. Each Apps
+ * Script round trip costs roughly half a second before any work even starts,
+ * so two of them made filing feel slow on top of the sheet reads and the
+ * email both writes already do. Collapsing them into one call removes
+ * exactly one of those round trips; the two writes underneath (and their two
+ * separate script locks) are unchanged.
+ */
+function PMS_apiFileTicketForRecord(recordPayload, ticketPayload, listOptions) {
+  try {
+    var saveResult = PMS.Records.save(recordPayload, 'SAVE');
+    var context = PMS.Auth.requireProfile();
+    var ticketRequest = Object.assign({}, ticketPayload || {}, { sourceRecordId: saveResult.recordId });
+    var ticketOutcome = PMS.Tickets.withRefresh(context, PMS.Tickets.create(context, ticketRequest), listOptions);
+    return PMS_jsonResponse_(Object.assign({}, ticketOutcome, {
+      recordId: saveResult.recordId,
+      pmsCompletion: saveResult.pmsCompletion,
+      syncStatus: saveResult.syncStatus
+    }));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
 function PMS_apiUpdateTicket(payload, listOptions) {
   try {
     var context = PMS.Auth.requireProfile();
