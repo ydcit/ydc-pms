@@ -12,6 +12,11 @@
           <span>Findings tickets</span>
           <span class="button__badge" id="tickets-badge" hidden></span>
         </button>
+        <button class="button button--secondary" id="open-deferred-assets" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-alert-circle"></use></svg>
+          <span>Deferred assets</span>
+          <span class="button__badge" id="deferred-assets-badge" hidden></span>
+        </button>
         <button class="button button--secondary" id="open-archive" type="button">
           <svg class="icon" aria-hidden="true"><use href="#i-list"></use></svg>
           <span>Completed assets</span>
@@ -92,15 +97,15 @@
           <span class="metric-card__detail" id="pending-detail">Assets remaining</span>
         </article>
 
-        <article class="metric-card metric-card--accent">
+        <article class="metric-card metric-card--danger">
           <div class="metric-card__top">
-            <span class="metric-icon metric-icon--accent" aria-hidden="true">
-              <svg class="icon" aria-hidden="true"><use href="#i-trending-up"></use></svg>
+            <span class="metric-icon metric-icon--danger" aria-hidden="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-alert-circle"></use></svg>
             </span>
-            <span class="metric-card__label">Compliance</span>
+            <span class="metric-card__label">Deferred</span>
           </div>
-          <strong class="metric-card__value" id="metric-compliance">—</strong>
-          <span class="metric-card__detail">Goal: 100% by deadline</span>
+          <strong class="metric-card__value" id="metric-deferred">—</strong>
+          <span class="metric-card__detail">PMS not performed; needs a revisit</span>
         </article>
       </div>
 

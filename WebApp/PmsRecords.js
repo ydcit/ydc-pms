@@ -254,7 +254,10 @@ PMS.Records = (function () {
       'recordId', 'recordType', 'createdAt', 'updatedAt', 'submittedAt',
       'technicianName', 'technicianEmail', 'itSection', 'maintenanceDate',
       'maintenanceYear', 'cycle', 'cycleId', 'assetTag', 'assessmentResult',
-      'pmsCompletion'
+      // assetFindings sits directly next to assessmentResult in every record
+      // sheet, so this rides the same clustered read instead of opening a
+      // second one — needed so the deferred-assets list can show a reason.
+      'assetFindings', 'pmsCompletion'
     ]);
   }
 

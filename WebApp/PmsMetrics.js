@@ -90,24 +90,68 @@ PMS.Metrics = (function () {
     });
 
     var completed = 0;
+    var deferred = 0;
     var withFindings = 0;
     var followUp = 0;
     var pmsNotPerformed = 0;
     var locations = {};
     var pendingAssets = [];
+    var deferredAssets = [];
     var completionSources = { record: 0, tracker: 0 };
+
+    /**
+     * A completed asset whose tracker cell currently reads DEFERRED needs a
+     * revisit before its PMS genuinely counts as done — that is exactly what
+     * "PMS not performed" means. Counting it as Completed would hide the
+     * outstanding work; counting it as Pending would say nothing was ever
+     * attempted, which is also false. It gets its own bucket instead, live
+     * off the same ticket data trackerStatusForRecord already uses to decide
+     * what the tracker cell itself shows, so this can never disagree with the
+     * sheet: the moment the linked ticket closes, the next read of this
+     * asset moves it back into Completed on its own. Returns the deferring
+     * ticket itself (not just a boolean) so the dashboard can link to it.
+     */
+    function deferringTicket(assessment) {
+      if (!assessment || !assessment.recordId) return null;
+      try {
+        var tickets = PMS.Tickets.forRecord(assessment.recordId);
+        for (var i = 0; i < tickets.length; i += 1) {
+          if (tickets[i].status === 'DEFERRED') return tickets[i];
+        }
+        return null;
+      } catch (error) {
+        console.warn('Deferred status could not be resolved for ' + assessment.recordId + ': ' + error.message);
+        return null;
+      }
+    }
 
     eligibleAssets.forEach(function (asset) {
       var key = PMS.Records.completionKey(asset.section, asset.tag, cycleId);
       var location = asset.location || 'Location not recorded';
-      if (!locations[location]) locations[location] = { location: location, eligible: 0, completed: 0, pending: 0 };
+      if (!locations[location]) locations[location] = { location: location, eligible: 0, completed: 0, pending: 0, deferred: 0 };
       locations[location].eligible += 1;
       if (completedKeys[key]) {
-        completed += 1;
-        locations[location].completed += 1;
-        if (completedKeys[key] === 'RECORD') completionSources.record += 1;
-        else completionSources.tracker += 1;
         var assessment = latestAssessment[key];
+        var ticket = deferringTicket(assessment);
+        if (ticket) {
+          deferred += 1;
+          locations[location].deferred += 1;
+          if (deferredAssets.length < 100) {
+            deferredAssets.push({
+              tag: asset.tag,
+              location: location,
+              ticketId: ticket.ticketId,
+              section: asset.section,
+              recordId: assessment.recordId,
+              findings: PMS.Util.cleanText(assessment.assetFindings, 300)
+            });
+          }
+        } else {
+          completed += 1;
+          locations[location].completed += 1;
+          if (completedKeys[key] === 'RECORD') completionSources.record += 1;
+          else completionSources.tracker += 1;
+        }
         if (assessment && (assessment.assessmentResult === 'Findings resolved' || assessment.assessmentResult === 'Follow-up required')) {
           withFindings += 1;
         }
@@ -122,14 +166,16 @@ PMS.Metrics = (function () {
     });
 
     var eligible = eligibleAssets.length;
-    var pending = Math.max(eligible - completed, 0);
+    var pending = Math.max(eligible - completed - deferred, 0);
     var compliance = eligible ? Math.round(completed / eligible * 1000) / 10 : null;
     var cycleConfig = PMS.CONFIG.CYCLES[cycle];
     var deadlineText = year + '-' + String(cycleConfig.endMonth).padStart(2, '0') + '-' + String(cycleConfig.endDay).padStart(2, '0');
     var today = dateFromText(PMS.Util.todayString());
     var deadline = dateFromText(deadlineText);
     var daysRemaining = PMS.Util.daysBetween(today, deadline);
-    var overdue = daysRemaining < 0 ? pending : 0;
+    // Deferred is not done either, so it is exactly as overdue as Pending
+    // once the cycle deadline has passed.
+    var overdue = daysRemaining < 0 ? pending + deferred : 0;
 
     var locationRows = Object.keys(locations).map(function (key) {
       var row = locations[key];
@@ -148,6 +194,7 @@ PMS.Metrics = (function () {
       eligible: eligible,
       completed: completed,
       pending: pending,
+      deferred: deferred,
       compliance: compliance,
       withFindings: withFindings,
       followUp: followUp,
@@ -158,6 +205,7 @@ PMS.Metrics = (function () {
       completionSources: completionSources,
       locations: locationRows.slice(0, 20),
       pendingAssets: pendingAssets,
+      deferredAssets: deferredAssets,
       cycleOptions: cycleOptionsFrom(records, current),
       liveEligibility: true,
       generatedAt: PMS.Util.nowIso()

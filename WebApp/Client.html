@@ -47,6 +47,11 @@
         open: false, page: 1, totalPages: 1, direction: 'DESC',
         token: 0, searchTimer: null, lastFocus: null, cache: {}
       },
+      // Unlike archive/tickets, the deferred-assets list rides along with the
+      // dashboard metrics response already loaded (PMS.Metrics.dashboard's
+      // deferredAssets) rather than its own paged endpoint — the list is
+      // capped small (100) and exists to be looked at, not paged through.
+      deferredAssets: { open: false, lastFocus: null },
       listsWarmed: false,
       legacyImport: {
         open: false,
@@ -369,10 +374,18 @@
       if (!state.busy) updateFooterActions();
     }
 
+    var TOAST_ICONS = { success: 'check-circle', warning: 'alert-triangle', danger: 'alert-circle', info: 'info' };
+
     function showToast(title, message, type, duration) {
+      var tone = type || 'info';
       var toast = document.createElement('div');
-      toast.className = 'toast toast--' + (type || 'info');
-      toast.setAttribute('role', type === 'danger' ? 'alert' : 'status');
+      toast.className = 'toast toast--' + tone;
+      toast.setAttribute('role', tone === 'danger' ? 'alert' : 'status');
+
+      var icon = document.createElement('span');
+      icon.className = 'toast__icon';
+      icon.setAttribute('aria-hidden', 'true');
+      icon.appendChild(iconSvg(TOAST_ICONS[tone] || TOAST_ICONS.info));
 
       var content = document.createElement('div');
       var heading = document.createElement('strong');
@@ -388,6 +401,7 @@
       close.appendChild(iconSvg('close'));
       close.addEventListener('click', function () { toast.remove(); });
 
+      toast.appendChild(icon);
       toast.appendChild(content);
       toast.appendChild(close);
       byId('toast-region').appendChild(toast);
@@ -917,7 +931,9 @@
       byId('metric-eligible').textContent = formatNumber(eligible);
       byId('metric-completed').textContent = formatNumber(completed);
       byId('metric-pending').textContent = formatNumber(pending);
-      byId('metric-compliance').textContent = compliance === null ? 'N/A' : formatPercent(compliance);
+      var deferredCount = asNumber(pick(summary, ['deferred'], 0), 0);
+      byId('metric-deferred').textContent = formatNumber(deferredCount);
+      updateDeferredAssetsBadge(deferredCount);
       byId('metric-findings').textContent = formatNumber(pick(summary, ['withFindings', 'findings', 'assetsWithFindings'], 0));
       byId('metric-follow-up').textContent = formatNumber(pick(summary, ['followUpRequired', 'followUp', 'requiresFollowUp'], 0));
       byId('metric-pms-not-performed').textContent = formatNumber(pick(summary, ['pmsNotPerformed'], 0));
@@ -1250,6 +1266,142 @@
       }
       if (event.key !== 'Tab') return;
       var focusable = Array.prototype.slice.call(byId('archive-modal').querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    /* ------------------------------------------------------------------------
+       Deferred assets.
+
+       A read-only view over PMS.Metrics.dashboard's own deferredAssets list —
+       the same data already backing the "Deferred" KPI card and already
+       scoped to whichever cycle the dashboard's cycle filter is showing, so
+       opening this never costs a server call and Refresh costs exactly the
+       one PMS_apiDashboard call the cycle filter itself already uses.
+       ------------------------------------------------------------------------ */
+
+    function deferredAssetsList() {
+      return toArray(state.bootstrap.metrics && state.bootstrap.metrics.deferredAssets);
+    }
+
+    function renderDeferredAssets() {
+      var all = deferredAssetsList();
+      var search = normalizeText(byId('deferred-assets-search').value).toUpperCase();
+      var isAdmin = userIsAdmin();
+      var rows = !search ? all : all.filter(function (asset) {
+        return [asset.tag, asset.location, asset.findings].join(' ').toUpperCase().indexOf(search) >= 0;
+      });
+
+      document.querySelectorAll('.deferred-assets-col-section').forEach(function (cell) { cell.hidden = !isAdmin; });
+
+      var body = byId('deferred-assets-body');
+      body.replaceChildren();
+      byId('deferred-assets-table-wrap').hidden = rows.length === 0;
+      byId('deferred-assets-empty').hidden = rows.length !== 0 || all.length !== 0;
+      byId('deferred-assets-empty-title').textContent = all.length ? 'No matches' : 'No deferred assets';
+      byId('deferred-assets-empty-message').textContent = all.length
+        ? 'No deferred asset matches "' + normalizeText(byId('deferred-assets-search').value) + '".'
+        : 'Every completed asset this cycle was actually maintained — nothing is waiting on a revisit.';
+
+      rows.forEach(function (asset) {
+        var row = document.createElement('tr');
+
+        var tagCell = labelledCell('Asset tag');
+        var tagStrong = document.createElement('strong');
+        tagStrong.textContent = asset.tag;
+        tagCell.appendChild(tagStrong);
+        row.appendChild(tagCell);
+
+        var locationCell = labelledCell('Location');
+        locationCell.textContent = asset.location || '—';
+        row.appendChild(locationCell);
+
+        var sectionCell = labelledCell('IT section');
+        sectionCell.className = 'deferred-assets-col-section';
+        sectionCell.hidden = !isAdmin;
+        sectionCell.textContent = sectionLabel(asset.section);
+        row.appendChild(sectionCell);
+
+        var findingsCell = labelledCell('Reason');
+        findingsCell.textContent = asset.findings || '—';
+        row.appendChild(findingsCell);
+
+        var actionCell = labelledCell('');
+        if (asset.ticketId) {
+          var ticketButton = document.createElement('button');
+          ticketButton.type = 'button';
+          ticketButton.className = 'text-button';
+          ticketButton.textContent = 'View ' + asset.ticketId;
+          ticketButton.addEventListener('click', function () {
+            openTicketFromDeferredAssets(asset.ticketId);
+          });
+          actionCell.appendChild(ticketButton);
+        }
+        row.appendChild(actionCell);
+
+        body.appendChild(row);
+      });
+
+      byId('deferred-assets-range').textContent = all.length
+        ? formatNumber(rows.length) + ' of ' + formatNumber(all.length) + ' deferred asset' + (all.length === 1 ? '' : 's')
+        : '';
+    }
+
+    function openDeferredAssetsModal() {
+      if (state.deferredAssets.open || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      state.deferredAssets.lastFocus = document.activeElement;
+      state.deferredAssets.open = true;
+      byId('deferred-assets-search').value = '';
+      byId('deferred-assets-modal').hidden = false;
+      syncBodyModalState();
+      renderDeferredAssets();
+      window.setTimeout(function () { byId('deferred-assets-search').focus(); }, 0);
+    }
+
+    function closeDeferredAssetsModal() {
+      if (!state.deferredAssets.open) return;
+      state.deferredAssets.open = false;
+      byId('deferred-assets-modal').hidden = true;
+      syncBodyModalState();
+      var target = state.deferredAssets.lastFocus;
+      if (target && typeof target.focus === 'function') target.focus();
+    }
+
+    function refreshDeferredAssets() {
+      setBusy(true, 'Refreshing deferred assets…');
+      serverCall('PMS_apiDashboard', {
+        year: state.bootstrap.metrics ? state.bootstrap.metrics.year : undefined,
+        cycle: state.bootstrap.metrics ? state.bootstrap.metrics.cycle : undefined,
+        section: userIsAdmin() ? 'ALL' : sectionKey()
+      })
+        .then(function (data) {
+          state.bootstrap.metrics = data.metrics;
+          renderDashboard();
+          renderDeferredAssets();
+        })
+        .catch(function (error) { showToast('Could not refresh', errorMessage(error), 'danger'); })
+        .finally(function () { setBusy(false); });
+    }
+
+    function trapDeferredAssetsFocus(event) {
+      if (!state.deferredAssets.open || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDeferredAssetsModal();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = Array.prototype.slice.call(byId('deferred-assets-modal').querySelectorAll(
         'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
       )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
       if (!focusable.length) return;
@@ -1657,6 +1809,15 @@
       openTicketDetail(id);
     }
 
+    /** Same idea as openTicketFromArchive, from the deferred-assets modal. */
+    function openTicketFromDeferredAssets(ticketId) {
+      var id = normalizeText(ticketId);
+      if (!id) return;
+      closeDeferredAssetsModal();
+      if (!state.tickets.open) openTicketsModal('detail');
+      openTicketDetail(id);
+    }
+
     function recordHasFindings(assessmentResult) {
       var result = normalizeText(assessmentResult);
       if (!result) return false;
@@ -2032,6 +2193,18 @@
       var active = asNumber(counts && counts.ACTIVE, 0);
       badge.textContent = formatNumber(active);
       badge.hidden = active <= 0;
+    }
+
+    /**
+     * Unlike the tickets badge, this never needs its own server round trip —
+     * the count already rides along with the dashboard metrics that just
+     * painted, so this is just a paint of a number already in hand.
+     */
+    function updateDeferredAssetsBadge(count) {
+      var badge = byId('deferred-assets-badge');
+      if (!badge) return;
+      badge.textContent = formatNumber(count);
+      badge.hidden = count <= 0;
     }
 
     /** Fetched after the dashboard paints so it cannot delay first load. */
@@ -2859,7 +3032,8 @@
     function syncBodyModalState() {
       var importOpen = Boolean(state.legacyImport && state.legacyImport.open);
       var ticketsOpen = Boolean(state.tickets && state.tickets.open);
-      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen));
+      var deferredAssetsOpen = Boolean(state.deferredAssets && state.deferredAssets.open);
+      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen || deferredAssetsOpen));
     }
 
     function modalFocusable(root) {
@@ -6075,6 +6249,14 @@
         }, 300);
       });
       document.addEventListener('keydown', trapArchiveFocus);
+      byId('open-deferred-assets').addEventListener('click', openDeferredAssetsModal);
+      byId('deferred-assets-close').addEventListener('click', closeDeferredAssetsModal);
+      document.querySelectorAll('[data-close-deferred-assets]').forEach(function (element) {
+        element.addEventListener('click', closeDeferredAssetsModal);
+      });
+      byId('deferred-assets-refresh').addEventListener('click', refreshDeferredAssets);
+      byId('deferred-assets-search').addEventListener('input', renderDeferredAssets);
+      document.addEventListener('keydown', trapDeferredAssetsFocus);
       byId('close-questionnaire').addEventListener('click', function () { requestCloseModal(false); });
       document.querySelectorAll('[data-close-modal]').forEach(function (element) {
         element.addEventListener('click', function () { requestCloseModal(false); });

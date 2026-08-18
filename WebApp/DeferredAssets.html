@@ -1,0 +1,65 @@
+<div class="modal-layer" id="deferred-assets-modal" hidden>
+  <div class="modal-backdrop" data-close-deferred-assets aria-hidden="true"></div>
+  <section class="deferred-assets-dialog" role="dialog" aria-modal="true"
+           aria-labelledby="deferred-assets-title" aria-describedby="deferred-assets-summary">
+    <header class="deferred-assets-dialog__header">
+      <div class="deferred-assets-dialog__title-row">
+        <div>
+          <p class="eyebrow">Attention · this cycle</p>
+          <h1 id="deferred-assets-title">Deferred assets</h1>
+          <p class="deferred-assets-dialog__summary" id="deferred-assets-summary">
+            PMS could not be performed on these assets. Each is tracked by a findings ticket until it gets a revisit.
+          </p>
+        </div>
+        <div class="deferred-assets-dialog__header-actions">
+          <button class="button button--quiet button--small" id="deferred-assets-refresh" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+            <span>Refresh</span>
+          </button>
+          <button class="icon-button" id="deferred-assets-close" type="button" aria-label="Close deferred assets">
+            <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="archive-toolbar">
+        <div class="field archive-toolbar__search">
+          <label class="sr-only" for="deferred-assets-search">Search deferred assets</label>
+          <div class="search-input">
+            <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></span>
+            <input id="deferred-assets-search" type="search" autocomplete="off" placeholder="Search asset tag, location, or reason">
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="deferred-assets-dialog__body" id="deferred-assets-dialog-body">
+      <div class="table-wrap" id="deferred-assets-table-wrap">
+        <table class="table--cards">
+          <thead>
+            <tr>
+              <th scope="col">Asset tag</th>
+              <th scope="col">Location</th>
+              <th scope="col" class="deferred-assets-col-section">IT section</th>
+              <th scope="col">Reason</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="deferred-assets-body"></tbody>
+        </table>
+      </div>
+
+      <div class="empty-state" id="deferred-assets-empty" hidden>
+        <span class="empty-state__art" aria-hidden="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-check-circle"></use></svg>
+        </span>
+        <h3 id="deferred-assets-empty-title">No deferred assets</h3>
+        <p id="deferred-assets-empty-message">Every completed asset this cycle was actually maintained — nothing is waiting on a revisit.</p>
+      </div>
+    </div>
+
+    <footer class="deferred-assets-dialog__footer">
+      <span class="archive-pager__status" id="deferred-assets-range" aria-live="polite"></span>
+    </footer>
+  </section>
+</div>
