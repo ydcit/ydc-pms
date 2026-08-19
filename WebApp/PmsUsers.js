@@ -23,12 +23,6 @@ PMS.Users = (function () {
     Object.freeze({ key: 'section', label: 'IT Section' }),
     Object.freeze({ key: 'role', label: 'Role' }),
     Object.freeze({ key: 'isAdmin', label: 'Administrator' }),
-    // Unlike Administrator (recomputed from PMS.CONFIG.ADMIN_EMAILS on every
-    // read — this cell is a display mirror only), this one is authoritative:
-    // it is read from and written to the sheet exactly like Active, because
-    // asset management is a routine, low-privilege permission meant to be
-    // grantable in-app rather than by editing Script Properties.
-    Object.freeze({ key: 'canManageAssets', label: 'Asset Manager' }),
     Object.freeze({ key: 'active', label: 'Active' }),
     Object.freeze({ key: 'registeredAt', label: 'Registered At' }),
     Object.freeze({ key: 'createdAt', label: 'Created At' }),
@@ -37,7 +31,24 @@ PMS.Users = (function () {
     Object.freeze({ key: 'updatedBy', label: 'Updated By' }),
     Object.freeze({ key: 'identityKeyHash', label: 'Identity Key Hash' }),
     Object.freeze({ key: 'identityBoundAt', label: 'Identity Bound At' }),
-    Object.freeze({ key: 'identitySource', label: 'Last Identity Source' })
+    Object.freeze({ key: 'identitySource', label: 'Last Identity Source' }),
+    // Added after every other column, never in the middle: inserting it
+    // between Administrator and Active shifted every column after it,
+    // which both SCHEMA_MISMATCHed every existing PMS Users sheet (their
+    // real headers no longer lined up with the new expected positions) and
+    // silently pointed initializeSheet's hardcoded $F2 Active-row formatting
+    // at what had become the Asset Manager column instead. Appended at the
+    // end, an existing sheet's first 14 headers still match exactly and only
+    // the new 15th column is missing — which newColumn below self-heals,
+    // the same way legacyLabel already self-heals a renamed header instead
+    // of demanding a manual migration on a live spreadsheet.
+    //
+    // Unlike Administrator (recomputed from PMS.CONFIG.ADMIN_EMAILS on every
+    // read — that cell is a display mirror only), this one is authoritative:
+    // it is read from and written to the sheet exactly like Active, because
+    // asset management is a routine, low-privilege permission meant to be
+    // grantable in-app rather than by editing Script Properties.
+    Object.freeze({ key: 'canManageAssets', label: 'Asset Manager', newColumn: true })
   ]);
 
   function columnNumber(key) {
@@ -112,6 +123,18 @@ PMS.Users = (function () {
     );
   }
 
+  /**
+   * A column may carry `newColumn: true`: it is allowed to be entirely
+   * absent from an older sheet (a blank header cell where it belongs)
+   * without failing verification. That cell is filled in with the column's
+   * label in place, the same way a `legacyLabel` rename heals an older
+   * header text into the current one in PmsRecords.js — the alternative to
+   * "a new column ships and breaks every existing PMS Users sheet the next
+   * time it's touched" is not "never add a column", it's "the reader
+   * recognises a column that hasn't been written yet and heals it in place".
+   * Once healed, the cell holds the label and this path is never hit again
+   * for that column.
+   */
   function verifyHeaders(sheet) {
     if (sheet.getMaxColumns() < COLUMNS.length) {
       sheet.insertColumnsAfter(sheet.getMaxColumns(), COLUMNS.length - sheet.getMaxColumns());
@@ -123,14 +146,26 @@ PMS.Users = (function () {
       return;
     }
     var mismatches = [];
+    var newColumns = [];
     expected.forEach(function (label, index) {
-      if (current[index] !== label) mismatches.push((index + 1) + ': ' + current[index] + ' != ' + label);
+      if (current[index] === label) return;
+      if (COLUMNS[index].newColumn && !current[index]) {
+        newColumns.push({ column: index + 1, label: label });
+        return;
+      }
+      mismatches.push((index + 1) + ': ' + current[index] + ' != ' + label);
     });
     if (mismatches.length) {
       PMS.Util.fail(
         'PMS Users header mismatch. Refusing to use the sheet: ' + mismatches.slice(0, 5).join('; '),
         'SCHEMA_MISMATCH'
       );
+    }
+    if (newColumns.length) {
+      newColumns.forEach(function (entry) {
+        sheet.getRange(1, entry.column).setValue(entry.label);
+      });
+      console.log(SHEET_NAME + ': added ' + newColumns.length + ' new header(s) to an existing sheet.');
     }
     ensurePresentation(sheet);
   }
