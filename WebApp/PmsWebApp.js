@@ -98,6 +98,7 @@ function PMS_buildBootstrap_() {
       email: context.email,
       name: context.name,
       isAdmin: context.isAdmin,
+      canManageAssets: context.canManageAssets,
       role: context.role,
       active: context.active,
       identitySource: context.identitySource
@@ -406,6 +407,63 @@ function PMS_apiYearPurgeExecute(year, backupToken, phrase) {
 
 function PMS_apiAdminSetUserSection(userEmail, sectionKey) {
   return PMS_jsonResponse_(PMS.Auth.adminSetUserSection(userEmail, sectionKey));
+}
+
+/** Administrator-only: grants or revokes the Asset Manager permission on another user. */
+function PMS_apiAdminSetAssetManager(userEmail, granted) {
+  try {
+    return PMS_jsonResponse_(PMS.Auth.adminSetAssetManager(userEmail, granted));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiAssetAdminList(sectionKey) {
+  try {
+    return PMS_jsonResponse_(PMS.AssetAdmin.list(sectionKey));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiAssetAdminCreate(request) {
+  try {
+    return PMS_jsonResponse_(PMS.AssetAdmin.create(request));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiAssetAdminUpdate(request) {
+  try {
+    return PMS_jsonResponse_(PMS.AssetAdmin.update(request));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiAssetAdminDownloadTemplate(sectionKey) {
+  try {
+    return PMS_jsonResponse_(PMS.AssetAdmin.downloadTemplate(sectionKey));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiAssetAdminBulkPreview(request) {
+  try {
+    return PMS_jsonResponse_(PMS.AssetAdmin.bulkPreview(request));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiAssetAdminBulkExecute(sectionKey, confirmationToken, phrase) {
+  try {
+    return PMS_jsonResponse_(PMS.AssetAdmin.bulkExecute(sectionKey, confirmationToken, phrase));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
 }
 
 /** Administrator-only, read-only workbook preview plus short-lived cache token. */

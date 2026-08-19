@@ -23,6 +23,12 @@ PMS.Users = (function () {
     Object.freeze({ key: 'section', label: 'IT Section' }),
     Object.freeze({ key: 'role', label: 'Role' }),
     Object.freeze({ key: 'isAdmin', label: 'Administrator' }),
+    // Unlike Administrator (recomputed from PMS.CONFIG.ADMIN_EMAILS on every
+    // read — this cell is a display mirror only), this one is authoritative:
+    // it is read from and written to the sheet exactly like Active, because
+    // asset management is a routine, low-privilege permission meant to be
+    // grantable in-app rather than by editing Script Properties.
+    Object.freeze({ key: 'canManageAssets', label: 'Asset Manager' }),
     Object.freeze({ key: 'active', label: 'Active' }),
     Object.freeze({ key: 'registeredAt', label: 'Registered At' }),
     Object.freeze({ key: 'createdAt', label: 'Created At' }),
@@ -190,6 +196,7 @@ PMS.Users = (function () {
     sheet.getRange(startRow, columnNumber('section'), rowCount, 1).setDataValidation(sectionRule);
     sheet.getRange(startRow, columnNumber('role'), rowCount, 1).setDataValidation(roleRule);
     sheet.getRange(startRow, columnNumber('isAdmin'), rowCount, 1).setDataValidation(checkboxRule);
+    sheet.getRange(startRow, columnNumber('canManageAssets'), rowCount, 1).setDataValidation(checkboxRule);
     sheet.getRange(startRow, columnNumber('active'), rowCount, 1).setDataValidation(checkboxRule);
     sheet.getRange(startRow, columnNumber('email'), rowCount, 1).setNumberFormat('@');
     sheet.getRange(startRow, columnNumber('identityKeyHash'), rowCount, 1).setNumberFormat('@');
@@ -304,6 +311,7 @@ PMS.Users = (function () {
       section: normalizeSection(raw.section, !lenient),
       role: admin ? 'ADMIN' : 'TECHNICIAN',
       isAdmin: admin,
+      canManageAssets: booleanValue(raw.canManageAssets, false),
       // A row added by hand normally leaves Active blank. Only an explicit
       // FALSE disables access, so a manually provisioned user is not locked out.
       active: booleanValue(raw.active, true),
@@ -434,6 +442,8 @@ PMS.Users = (function () {
     var admin = isConfiguredAdmin(email);
     var activeInput = value.active !== undefined ? value.active : prior.active;
     var active = booleanValue(activeInput, existing ? prior.active : true);
+    var canManageAssetsInput = value.canManageAssets !== undefined ? value.canManageAssets : prior.canManageAssets;
+    var canManageAssets = booleanValue(canManageAssetsInput, existing ? prior.canManageAssets : false);
     var identityHashInput = value.identityKeyHash !== undefined
       ? value.identityKeyHash
       : prior.identityKeyHash;
@@ -452,6 +462,7 @@ PMS.Users = (function () {
       section: section,
       role: admin ? 'ADMIN' : 'TECHNICIAN',
       isAdmin: admin,
+      canManageAssets: canManageAssets,
       active: active,
       registeredAt: registeredAt,
       createdAt: cleanStoredText(prior.createdAt || value.createdAt, 100) || registeredAt || timestamp,
@@ -526,6 +537,7 @@ PMS.Users = (function () {
         section: section,
         role: admin ? 'ADMIN' : 'TECHNICIAN',
         isAdmin: admin,
+        canManageAssets: Boolean(parsed.canManageAssets),
         active: parsed.active !== false,
         registeredAt: cleanStoredText(parsed.registeredAt, 100),
         createdAt: cleanStoredText(parsed.createdAt || parsed.registeredAt, 100) || timestamp,

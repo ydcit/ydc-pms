@@ -191,6 +191,10 @@ PMS.Auth = (function () {
         ? PMS.CONFIG.SECTIONS[profile.section].label
         : '',
       isAdmin: administrator,
+      // An administrator can already do everything asset management allows,
+      // so this is never a separate grant for them — only a technician's own
+      // roster row can turn it on.
+      canManageAssets: administrator || Boolean(profile && profile.canManageAssets),
       role: administrator ? 'ADMIN' : 'TECHNICIAN',
       identitySource: identity.source,
       registeredAt: profile ? profile.registeredAt : '',
@@ -261,6 +265,44 @@ PMS.Auth = (function () {
       PMS.Util.fail('Administrator access is required.', 'ACCESS_DENIED');
     }
     return context;
+  }
+
+  /**
+   * Guards the asset-management screen: an administrator, or a technician
+   * whose roster row has the Asset Manager checkbox on. Lower-privilege than
+   * requireAdmin on purpose — this is the permission meant to be handed to
+   * whoever actually owns the asset list, without also handing them
+   * rollover, the danger zone, or year deletion.
+   */
+  function requireAssetManager() {
+    var context = getContext();
+    if (!context.registered) {
+      PMS.Util.fail('Complete IT section registration before managing assets.', 'REGISTRATION_REQUIRED');
+    }
+    if (!context.isAdmin && !context.canManageAssets) {
+      PMS.Util.fail('Asset management access is required.', 'ACCESS_DENIED');
+    }
+    return context;
+  }
+
+  /** Grants or revokes the Asset Manager permission on another user's roster row. */
+  function adminSetAssetManager(userEmail, granted) {
+    var admin = requireAdmin();
+    var email = PMS.Util.normalizeEmail(userEmail);
+    var domain = '@' + PMS.CONFIG.ALLOWED_DOMAIN.toLowerCase();
+    if (!email || email.slice(-domain.length) !== domain) {
+      PMS.Util.fail('A valid YDC email is required.', 'VALIDATION_ERROR');
+    }
+    var updated = PMS.Users.update(email, function (existing) {
+      if (!existing) {
+        PMS.Util.fail('That user is not on the PMS roster yet. Ask them to sign in and register first.', 'NOT_FOUND');
+      }
+      existing.canManageAssets = Boolean(granted);
+      existing.updatedBy = admin.email;
+      return existing;
+    });
+    invalidateContext();
+    return { ok: true, email: email, canManageAssets: Boolean(updated && updated.canManageAssets) };
   }
 
   function adminSetUserSection(userEmail, sectionKey) {
@@ -353,9 +395,11 @@ PMS.Auth = (function () {
     register: register,
     requireProfile: requireProfile,
     requireAdmin: requireAdmin,
+    requireAssetManager: requireAssetManager,
     isAdmin: isAdmin,
     configuredAdminEmails: configuredAdminEmails,
     adminSetUserSection: adminSetUserSection,
+    adminSetAssetManager: adminSetAssetManager,
     diagnostics: diagnostics
   };
 })();

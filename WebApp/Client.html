@@ -52,6 +52,10 @@
       // deferredAssets) rather than its own paged endpoint — the list is
       // capped small (100) and exists to be looked at, not paged through.
       deferredAssets: { open: false, lastFocus: null },
+      assetAdmin: {
+        open: false, lastFocus: null, section: '', editingTag: null,
+        assets: [], statusSuggestions: [], sections: [], bulkPreview: null
+      },
       listsWarmed: false,
       legacyImport: {
         open: false,
@@ -649,6 +653,11 @@
       return Boolean(state.profile.isAdmin || state.user.isAdmin || role === 'ADMIN' || role === 'PMS_ADMIN');
     }
 
+    /** An administrator always qualifies too — see PMS.Auth's buildContext(). */
+    function userCanManageAssets() {
+      return userIsAdmin() || Boolean(pick(state.profile, ['canManageAssets'], pick(state.user, ['canManageAssets'], false)));
+    }
+
     function initializeSchema() {
       var serviceDesk = questionnaireConfig('serviceDesk');
       var infra = questionnaireConfig('infra');
@@ -951,6 +960,7 @@
       if (state.bootstrap.rolloverDeferred && userIsAdmin()) loadRolloverStatus();
       renderDangerZone();
       renderYearPurgePanel();
+      renderAssetAdminButton();
       // Ticket counts are also deferred, for the same reason.
       loadTicketSummary();
       warmListCaches();
@@ -1403,6 +1413,29 @@
       }
       if (event.key !== 'Tab') return;
       var focusable = Array.prototype.slice.call(byId('deferred-assets-modal').querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function trapAssetAdminFocus(event) {
+      if (!state.assetAdmin.open || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeAssetAdminModal();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = Array.prototype.slice.call(byId('asset-admin-modal').querySelectorAll(
         'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
       )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
       if (!focusable.length) return;
@@ -3024,7 +3057,8 @@
       var importOpen = Boolean(state.legacyImport && state.legacyImport.open);
       var ticketsOpen = Boolean(state.tickets && state.tickets.open);
       var deferredAssetsOpen = Boolean(state.deferredAssets && state.deferredAssets.open);
-      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen || deferredAssetsOpen));
+      var assetAdminOpen = Boolean(state.assetAdmin && state.assetAdmin.open);
+      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen || deferredAssetsOpen || assetAdminOpen));
     }
 
     function modalFocusable(root) {
@@ -4530,6 +4564,359 @@
           target.hidden = false;
           target.textContent = errorMessage(error);
           byId('year-purge-execute').disabled = true;
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    /* ------------------------------------------------------------------------
+       Manage assets: add/edit tag-status-location directly instead of
+       hand-editing the tracker sheet, or bulk add/update via a CSV that opens
+       and saves fine in Excel. Every write here goes through PMS.AssetAdmin,
+       which invalidates PMS.Assets' cache itself, so a status or location
+       change is visible on the very next read instead of waiting out a
+       stale cache the way a direct sheet edit would.
+       ------------------------------------------------------------------------ */
+
+    function renderAssetAdminButton() {
+      var button = byId('open-asset-admin');
+      if (!button) return;
+      button.hidden = !userCanManageAssets();
+    }
+
+    function openAssetAdminModal() {
+      if (!userCanManageAssets()) return;
+      if (state.assetAdmin.open || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      state.assetAdmin.lastFocus = document.activeElement;
+      state.assetAdmin.open = true;
+      byId('asset-admin-modal').hidden = false;
+      syncBodyModalState();
+      resetAssetAdminForm();
+      resetAssetBulkReview();
+      byId('asset-bulk-file').value = '';
+      byId('asset-bulk-filename').textContent = '';
+      byId('asset-admin-search').value = '';
+      byId('asset-admin-grant').hidden = !userIsAdmin();
+      byId('asset-admin-grant-error').hidden = true;
+      byId('asset-admin-grant-email').value = '';
+      loadAssetAdminList(state.assetAdmin.section || sectionKey());
+      window.setTimeout(function () { byId('asset-admin-search').focus(); }, 0);
+    }
+
+    function closeAssetAdminModal() {
+      if (!state.assetAdmin.open) return;
+      state.assetAdmin.open = false;
+      byId('asset-admin-modal').hidden = true;
+      syncBodyModalState();
+      var target = state.assetAdmin.lastFocus;
+      if (target && typeof target.focus === 'function') target.focus();
+    }
+
+    function loadAssetAdminList(requestedSection, options) {
+      var settings = options || {};
+      if (!settings.silent) setBusy(true, 'Loading assets…');
+      return serverCall('PMS_apiAssetAdminList', requestedSection || undefined)
+        .then(function (data) {
+          state.assetAdmin.section = data.section;
+          state.assetAdmin.assets = toArray(data.assets);
+          state.assetAdmin.statusSuggestions = toArray(data.statusSuggestions);
+          state.assetAdmin.sections = toArray(data.sections);
+          renderAssetAdminSectionOptions();
+          renderAssetAdminStatusOptions();
+          renderAssetAdminList();
+        })
+        .catch(function (error) {
+          if (!settings.silent) showToast('Could not load assets', errorMessage(error), 'danger');
+        })
+        .finally(function () { if (!settings.silent) setBusy(false); });
+    }
+
+    function renderAssetAdminSectionOptions() {
+      var wrap = byId('asset-admin-section-wrap');
+      var select = byId('asset-admin-section');
+      var sections = state.assetAdmin.sections || [];
+      wrap.hidden = sections.length === 0;
+      if (!sections.length) return;
+      select.replaceChildren();
+      sections.forEach(function (section) {
+        var option = document.createElement('option');
+        option.value = section.key;
+        option.textContent = section.label;
+        select.appendChild(option);
+      });
+      select.value = state.assetAdmin.section;
+    }
+
+    function renderAssetAdminStatusOptions() {
+      var list = byId('asset-admin-status-options');
+      list.replaceChildren();
+      (state.assetAdmin.statusSuggestions || []).forEach(function (status) {
+        var option = document.createElement('option');
+        option.value = status;
+        list.appendChild(option);
+      });
+    }
+
+    function renderAssetAdminList() {
+      var all = state.assetAdmin.assets || [];
+      var search = normalizeText(byId('asset-admin-search').value).toUpperCase();
+      var rows = !search ? all : all.filter(function (asset) {
+        return [asset.tag, asset.status, asset.location].join(' ').toUpperCase().indexOf(search) >= 0;
+      });
+
+      var body = byId('asset-admin-body');
+      body.replaceChildren();
+      byId('asset-admin-table-wrap').hidden = rows.length === 0;
+      byId('asset-admin-empty').hidden = rows.length !== 0 || all.length !== 0;
+      byId('asset-admin-empty-title').textContent = all.length ? 'No matches' : 'No assets yet';
+      byId('asset-admin-empty-message').textContent = all.length
+        ? 'No asset matches "' + normalizeText(byId('asset-admin-search').value) + '".'
+        : 'Add the first asset above, or bulk-upload a CSV below.';
+
+      rows.forEach(function (asset) {
+        var row = document.createElement('tr');
+        if (state.assetAdmin.editingTag === asset.tag) row.className = 'asset-admin-row--editing';
+
+        var tagCell = labelledCell('Asset tag');
+        var tagStrong = document.createElement('strong');
+        tagStrong.textContent = asset.tag;
+        tagCell.appendChild(tagStrong);
+        row.appendChild(tagCell);
+
+        var statusCell = labelledCell('Status');
+        statusCell.textContent = asset.status || '—';
+        row.appendChild(statusCell);
+
+        var locationCell = labelledCell('Location');
+        locationCell.textContent = asset.location || '—';
+        row.appendChild(locationCell);
+
+        var actionCell = labelledCell('');
+        var editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'text-button';
+        editButton.textContent = 'Edit';
+        editButton.addEventListener('click', function () { startEditAsset(asset); });
+        actionCell.appendChild(editButton);
+        row.appendChild(actionCell);
+
+        body.appendChild(row);
+      });
+
+      byId('asset-admin-range').textContent = all.length
+        ? formatNumber(rows.length) + ' of ' + formatNumber(all.length) + ' asset' + (all.length === 1 ? '' : 's')
+        : '';
+    }
+
+    function resetAssetAdminForm() {
+      state.assetAdmin.editingTag = null;
+      byId('asset-admin-form-title').textContent = 'Add an asset';
+      byId('asset-admin-tag').value = '';
+      byId('asset-admin-tag').disabled = false;
+      byId('asset-admin-status').value = '';
+      byId('asset-admin-location').value = '';
+      byId('asset-admin-form-error').hidden = true;
+      byId('asset-admin-form-cancel').hidden = true;
+      byId('asset-admin-form-submit').querySelector('span').textContent = 'Add asset';
+      byId('asset-admin-form-submit-icon').querySelector('use').setAttribute('href', '#i-plus');
+    }
+
+    function startEditAsset(asset) {
+      state.assetAdmin.editingTag = asset.tag;
+      byId('asset-admin-form-title').textContent = 'Edit ' + asset.tag;
+      byId('asset-admin-tag').value = asset.tag;
+      byId('asset-admin-tag').disabled = true;
+      byId('asset-admin-status').value = asset.status || '';
+      byId('asset-admin-location').value = asset.location || '';
+      byId('asset-admin-form-error').hidden = true;
+      byId('asset-admin-form-cancel').hidden = false;
+      byId('asset-admin-form-submit').querySelector('span').textContent = 'Save changes';
+      byId('asset-admin-form-submit-icon').querySelector('use').setAttribute('href', '#i-check');
+      renderAssetAdminList();
+      byId('asset-admin-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      byId('asset-admin-status').focus();
+    }
+
+    function submitAssetAdminForm(event) {
+      event.preventDefault();
+      var tag = normalizeText(byId('asset-admin-tag').value);
+      var status = normalizeText(byId('asset-admin-status').value);
+      var location = normalizeText(byId('asset-admin-location').value);
+      var errorTarget = byId('asset-admin-form-error');
+      if (!tag || !status) {
+        errorTarget.hidden = false;
+        errorTarget.textContent = 'An asset tag and status are required.';
+        return;
+      }
+      var editing = state.assetAdmin.editingTag;
+      var payload = { section: state.assetAdmin.section, tag: tag, status: status, location: location };
+      setBusy(true, editing ? 'Saving asset…' : 'Adding asset…');
+      serverCall(editing ? 'PMS_apiAssetAdminUpdate' : 'PMS_apiAssetAdminCreate', payload)
+        .then(function () {
+          showToast(editing ? 'Asset updated' : 'Asset added', tag + (editing ? ' was updated.' : ' was added.'), 'success');
+          resetAssetAdminForm();
+          return loadAssetAdminList(state.assetAdmin.section, { silent: true });
+        })
+        .catch(function (error) {
+          errorTarget.hidden = false;
+          errorTarget.textContent = errorMessage(error);
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    /* ------------------------------------------------------- bulk CSV upload */
+
+    function downloadAssetBulkTemplate() {
+      setBusy(true, 'Preparing the current asset list…');
+      serverCall('PMS_apiAssetAdminDownloadTemplate', state.assetAdmin.section)
+        .then(function (result) {
+          triggerTextDownload(result.filename, result.csvText, 'text/csv');
+          showToast('Template downloaded', result.filename + ' has ' + formatNumber(asNumber(result.assetCount, 0)) + ' current asset(s) to edit.', 'success');
+        })
+        .catch(function (error) { showToast('Could not build the template', errorMessage(error), 'danger'); })
+        .finally(function () { setBusy(false); });
+    }
+
+    /** Plain-text version of triggerBrowserDownload's Blob-and-anchor trick — no base64 round trip needed for CSV. */
+    function triggerTextDownload(filename, text, contentType) {
+      var blob = new Blob([text], { type: contentType || 'text/plain' });
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    }
+
+    function resetAssetBulkReview() {
+      state.assetAdmin.bulkPreview = null;
+      byId('asset-bulk-review').hidden = true;
+      byId('asset-bulk-confirmation').value = '';
+      byId('asset-bulk-apply').disabled = true;
+      byId('asset-bulk-error').hidden = true;
+    }
+
+    function handleAssetBulkFileChange(event) {
+      var file = event.target.files && event.target.files[0];
+      resetAssetBulkReview();
+      if (!file) {
+        byId('asset-bulk-filename').textContent = '';
+        return;
+      }
+      byId('asset-bulk-filename').textContent = file.name;
+      var reader = new FileReader();
+      reader.onload = function () {
+        runAssetBulkPreview(String(reader.result || ''));
+      };
+      reader.onerror = function () {
+        showToast('Could not read the file', 'Choose the CSV file again.', 'danger');
+      };
+      reader.readAsText(file);
+    }
+
+    function runAssetBulkPreview(csvText) {
+      setBusy(true, 'Comparing the file against the current list…');
+      serverCall('PMS_apiAssetAdminBulkPreview', { section: state.assetAdmin.section, csvText: csvText })
+        .then(function (result) {
+          state.assetAdmin.bulkPreview = result;
+          renderAssetBulkPreview(result);
+        })
+        .catch(function (error) {
+          resetAssetBulkReview();
+          showToast('Preview failed', errorMessage(error), 'danger');
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function renderAssetBulkPreview(result) {
+      var review = byId('asset-bulk-review');
+      review.hidden = false;
+      byId('asset-bulk-confirmation').value = '';
+      byId('asset-bulk-apply').disabled = true;
+      byId('asset-bulk-error').hidden = true;
+      byId('asset-bulk-confirmation-phrase').textContent = normalizeText(result.confirmationPhrase) || 'UPDATE 0';
+
+      var counts = result.counts || {};
+      byId('asset-bulk-summary-title').textContent = result.applyCount
+        ? 'Review before applying'
+        : 'Nothing to apply';
+      byId('asset-bulk-summary').textContent = result.applyCount
+        ? formatNumber(counts.newCount) + ' new and ' + formatNumber(counts.updated) + ' updated asset(s) will be written. ' +
+          formatNumber(counts.unchanged) + ' already match and ' + formatNumber(counts.invalid) + ' row(s) will be skipped as invalid. ' +
+          'This confirmation expires in ' + asNumber(result.expiresInSeconds, 0) + ' seconds.'
+        : formatNumber(counts.unchanged) + ' row(s) already match and ' + formatNumber(counts.invalid) + ' row(s) are invalid — there is nothing to write.';
+
+      var stats = byId('asset-bulk-stats');
+      stats.replaceChildren();
+      [
+        ['New', counts.newCount], ['Updated', counts.updated],
+        ['Unchanged', counts.unchanged], ['Invalid', counts.invalid]
+      ].forEach(function (pair) {
+        stats.appendChild(statTile(pair[0], formatNumber(asNumber(pair[1], 0))));
+      });
+
+      review.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function updateAssetBulkConfirmation() {
+      var preview = state.assetAdmin.bulkPreview;
+      if (!preview || !preview.applyCount) {
+        byId('asset-bulk-apply').disabled = true;
+        return;
+      }
+      var phrase = normalizeText(preview.confirmationPhrase).toUpperCase();
+      var typed = normalizeText(byId('asset-bulk-confirmation').value).toUpperCase();
+      byId('asset-bulk-apply').disabled = typed !== phrase;
+    }
+
+    function applyAssetBulkChanges() {
+      var preview = state.assetAdmin.bulkPreview;
+      if (!preview || byId('asset-bulk-apply').disabled) return;
+      var token = normalizeText(preview.confirmationToken);
+      var phrase = normalizeText(byId('asset-bulk-confirmation').value);
+      setBusy(true, 'Applying the bulk update…');
+      serverCall('PMS_apiAssetAdminBulkExecute', state.assetAdmin.section, token, phrase)
+        .then(function (result) {
+          resetAssetBulkReview();
+          byId('asset-bulk-file').value = '';
+          byId('asset-bulk-filename').textContent = '';
+          showToast('Assets updated', normalizeText(result.message) || 'The bulk update was applied.', 'success', 8000);
+          return loadAssetAdminList(state.assetAdmin.section, { silent: true });
+        })
+        .catch(function (error) {
+          var target = byId('asset-bulk-error');
+          target.hidden = false;
+          target.textContent = errorMessage(error);
+          byId('asset-bulk-apply').disabled = true;
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    /* ------------------------------------------------------- role grant */
+
+    function grantOrRevokeAssetManager(granted) {
+      var email = normalizeText(byId('asset-admin-grant-email').value);
+      var errorTarget = byId('asset-admin-grant-error');
+      errorTarget.hidden = true;
+      if (!email) {
+        errorTarget.hidden = false;
+        errorTarget.textContent = 'Enter the user’s email first.';
+        return;
+      }
+      setBusy(true, granted ? 'Granting access…' : 'Revoking access…');
+      serverCall('PMS_apiAdminSetAssetManager', email, granted)
+        .then(function () {
+          showToast(
+            granted ? 'Access granted' : 'Access revoked',
+            email + (granted ? ' can now manage assets in their own section.' : ' can no longer manage assets.'),
+            'success'
+          );
+          byId('asset-admin-grant-email').value = '';
+        })
+        .catch(function (error) {
+          errorTarget.hidden = false;
+          errorTarget.textContent = errorMessage(error);
         })
         .finally(function () { setBusy(false); });
     }
@@ -6551,6 +6938,28 @@
       byId('year-purge-execute').addEventListener('click', executeYearPurge);
       byId('retry-pending-sync').addEventListener('click', retryPendingSynchronization);
       document.addEventListener('keydown', trapLegacyImportFocus);
+      byId('open-asset-admin').addEventListener('click', openAssetAdminModal);
+      byId('asset-admin-close').addEventListener('click', closeAssetAdminModal);
+      document.querySelectorAll('[data-close-asset-admin]').forEach(function (element) {
+        element.addEventListener('click', closeAssetAdminModal);
+      });
+      byId('asset-admin-refresh').addEventListener('click', function () {
+        loadAssetAdminList(state.assetAdmin.section);
+      });
+      byId('asset-admin-search').addEventListener('input', renderAssetAdminList);
+      byId('asset-admin-section').addEventListener('change', function () {
+        resetAssetAdminForm();
+        loadAssetAdminList(byId('asset-admin-section').value);
+      });
+      byId('asset-admin-form').addEventListener('submit', submitAssetAdminForm);
+      byId('asset-admin-form-cancel').addEventListener('click', resetAssetAdminForm);
+      byId('asset-bulk-download').addEventListener('click', downloadAssetBulkTemplate);
+      byId('asset-bulk-file').addEventListener('change', handleAssetBulkFileChange);
+      byId('asset-bulk-confirmation').addEventListener('input', updateAssetBulkConfirmation);
+      byId('asset-bulk-apply').addEventListener('click', applyAssetBulkChanges);
+      byId('asset-admin-grant-button').addEventListener('click', function () { grantOrRevokeAssetManager(true); });
+      byId('asset-admin-revoke-button').addEventListener('click', function () { grantOrRevokeAssetManager(false); });
+      document.addEventListener('keydown', trapAssetAdminFocus);
       document.addEventListener('keydown', trapModalFocus);
       window.addEventListener('beforeunload', function (event) {
         var questionnaireDirty = state.modalOpen && state.dirty;

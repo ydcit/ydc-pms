@@ -4307,6 +4307,97 @@
     background: var(--surface);
   }
 
+  /* --------------------------------------------------------------------------
+     Manage assets
+     -------------------------------------------------------------------------- */
+
+  .asset-admin-section-field {
+    max-width: 200px;
+  }
+
+  .asset-admin-form {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-soft);
+  }
+
+  .asset-admin-form__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .asset-admin-form .field-error {
+    margin: -4px 0 0;
+  }
+
+  .asset-bulk {
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .asset-bulk__hint {
+    margin: 4px 0 14px;
+    max-width: 640px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .asset-bulk__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .asset-bulk__upload-label {
+    cursor: pointer;
+  }
+
+  .asset-bulk__filename {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .asset-bulk .rollover-review {
+    margin-top: 16px;
+  }
+
+  .asset-admin-grant {
+    margin-top: 22px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-soft);
+  }
+
+  .asset-admin-grant__hint {
+    margin: 4px 0 14px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .asset-admin-grant__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .asset-admin-grant__row .field {
+    flex: 1 1 240px;
+    max-width: 340px;
+  }
+
+  .asset-admin-row--editing {
+    background: var(--accent-soft);
+  }
+
   .legacy-import-dialog__footer-state,
   .legacy-import-dialog__footer-actions {
     display: flex;
