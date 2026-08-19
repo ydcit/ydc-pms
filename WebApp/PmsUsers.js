@@ -224,7 +224,7 @@ PMS.Users = (function () {
       .setAllowInvalid(false)
       .build();
     var roleRule = SpreadsheetApp.newDataValidation()
-      .requireValueInList(['ADMIN', 'TECHNICIAN'], true)
+      .requireValueInList(['ADMIN', 'ASSET_MANAGER', 'TECHNICIAN'], true)
       .setAllowInvalid(false)
       .build();
     var checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
@@ -308,6 +308,19 @@ PMS.Users = (function () {
     return Boolean(defaultValue);
   }
 
+  /**
+   * Role is a computed label, not a stored one — like Administrator, it is
+   * written for anyone reading the raw sheet but never read back. Admin
+   * outranks Asset Manager: a configured administrator already has every
+   * permission the checkbox would grant, so the label says the more
+   * privileged truth.
+   */
+  function roleFor(admin, canManageAssets) {
+    if (admin) return 'ADMIN';
+    if (canManageAssets) return 'ASSET_MANAGER';
+    return 'TECHNICIAN';
+  }
+
   function normalizeSection(value, failOnInvalid) {
     var text = PMS.Util.cleanText(value, 100);
     if (!text) return '';
@@ -339,14 +352,21 @@ PMS.Users = (function () {
     COLUMNS.forEach(function (column, index) { raw[column.key] = row[index]; });
     var email = normalizeAndValidateEmail(raw.email);
     var admin = isConfiguredAdmin(email);
+    // Two ways in: the Asset Manager checkbox, or typing ASSET_MANAGER
+    // straight into the Role cell — for an admin editing the roster by hand,
+    // Role is the column they will actually reach for. Either one is
+    // authoritative, and the very next write to this row normalizes both to
+    // agree (see roleFor / profileToRow).
+    var canManageAssets = booleanValue(raw.canManageAssets, false) ||
+      PMS.Util.cleanText(raw.role, 30).toUpperCase() === 'ASSET_MANAGER';
     return {
       _rowNumber: rowNumber,
       email: email,
       name: cleanStoredText(raw.name, 250) || displayNameFromEmail(email),
       section: normalizeSection(raw.section, !lenient),
-      role: admin ? 'ADMIN' : 'TECHNICIAN',
+      role: roleFor(admin, canManageAssets),
       isAdmin: admin,
-      canManageAssets: booleanValue(raw.canManageAssets, false),
+      canManageAssets: canManageAssets,
       // A row added by hand normally leaves Active blank. Only an explicit
       // FALSE disables access, so a manually provisioned user is not locked out.
       active: booleanValue(raw.active, true),
@@ -495,7 +515,7 @@ PMS.Users = (function () {
         250
       ) || displayNameFromEmail(email),
       section: section,
-      role: admin ? 'ADMIN' : 'TECHNICIAN',
+      role: roleFor(admin, canManageAssets),
       isAdmin: admin,
       canManageAssets: canManageAssets,
       active: active,
@@ -570,7 +590,7 @@ PMS.Users = (function () {
         email: email,
         name: cleanStoredText(parsed.name, 250) || displayNameFromEmail(email),
         section: section,
-        role: admin ? 'ADMIN' : 'TECHNICIAN',
+        role: roleFor(admin, Boolean(parsed.canManageAssets)),
         isAdmin: admin,
         canManageAssets: Boolean(parsed.canManageAssets),
         active: parsed.active !== false,

@@ -53,7 +53,7 @@
       // capped small (100) and exists to be looked at, not paged through.
       deferredAssets: { open: false, lastFocus: null },
       assetAdmin: {
-        open: false, lastFocus: null, section: '', editingTag: null,
+        open: false, lastFocus: null, section: '', editingTag: null, view: 'list',
         assets: [], statusSuggestions: [], sections: [], bulkPreview: null
       },
       listsWarmed: false,
@@ -4569,18 +4569,30 @@
     }
 
     /* ------------------------------------------------------------------------
-       Manage assets: add/edit tag-status-location directly instead of
+       Manage assets: browse/add/edit tag-status-location directly instead of
        hand-editing the tracker sheet, or bulk add/update via a CSV that opens
        and saves fine in Excel. Every write here goes through PMS.AssetAdmin,
        which invalidates PMS.Assets' cache itself, so a status or location
        change is visible on the very next read instead of waiting out a
        stale cache the way a direct sheet edit would.
+
+       Three views share one dialog body, list/form/bulk — exactly one visible
+       at a time, the same shape Tickets.html already uses for its own
+       list/detail/create views, so this modal reads as the same product
+       instead of a one-off.
        ------------------------------------------------------------------------ */
 
     function renderAssetAdminButton() {
       var button = byId('open-asset-admin');
       if (!button) return;
       button.hidden = !userCanManageAssets();
+    }
+
+    function showAssetAdminView(view) {
+      state.assetAdmin.view = view;
+      byId('asset-admin-list-view').hidden = view !== 'list';
+      byId('asset-admin-form-view').hidden = view !== 'form';
+      byId('asset-admin-bulk-view').hidden = view !== 'bulk';
     }
 
     function openAssetAdminModal() {
@@ -4590,14 +4602,9 @@
       state.assetAdmin.open = true;
       byId('asset-admin-modal').hidden = false;
       syncBodyModalState();
-      resetAssetAdminForm();
-      resetAssetBulkReview();
-      byId('asset-bulk-file').value = '';
-      byId('asset-bulk-filename').textContent = '';
+      showAssetAdminView('list');
       byId('asset-admin-search').value = '';
-      byId('asset-admin-grant').hidden = !userIsAdmin();
-      byId('asset-admin-grant-error').hidden = true;
-      byId('asset-admin-grant-email').value = '';
+      byId('asset-admin-status-filter').value = '';
       loadAssetAdminList(state.assetAdmin.section || sectionKey());
       window.setTimeout(function () { byId('asset-admin-search').focus(); }, 0);
     }
@@ -4621,7 +4628,8 @@
           state.assetAdmin.statusSuggestions = toArray(data.statusSuggestions);
           state.assetAdmin.sections = toArray(data.sections);
           renderAssetAdminSectionOptions();
-          renderAssetAdminStatusOptions();
+          renderAssetAdminStatusFilterOptions();
+          renderAssetAdminStatusSelectOptions();
           renderAssetAdminList();
         })
         .catch(function (error) {
@@ -4630,6 +4638,7 @@
         .finally(function () { if (!settings.silent) setBusy(false); });
     }
 
+    /** Only an admin ever sees this — an asset manager works in their own section only, so there is nothing to pick. */
     function renderAssetAdminSectionOptions() {
       var wrap = byId('asset-admin-section-wrap');
       var select = byId('asset-admin-section');
@@ -4646,20 +4655,50 @@
       select.value = state.assetAdmin.section;
     }
 
-    function renderAssetAdminStatusOptions() {
-      var list = byId('asset-admin-status-options');
-      list.replaceChildren();
+    function renderAssetAdminStatusFilterOptions() {
+      var select = byId('asset-admin-status-filter');
+      var current = select.value;
+      select.replaceChildren();
+      var all = document.createElement('option');
+      all.value = '';
+      all.textContent = 'All statuses';
+      select.appendChild(all);
       (state.assetAdmin.statusSuggestions || []).forEach(function (status) {
         var option = document.createElement('option');
         option.value = status;
-        list.appendChild(option);
+        option.textContent = status;
+        select.appendChild(option);
       });
+      select.value = (state.assetAdmin.statusSuggestions || []).indexOf(current) >= 0 ? current : '';
+    }
+
+    /** A real <select>, not a <datalist> text field — a datalist's suggestions are unreliable across browsers. */
+    function renderAssetAdminStatusSelectOptions() {
+      var select = byId('asset-admin-status');
+      select.replaceChildren();
+      var placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Select status';
+      select.appendChild(placeholder);
+      (state.assetAdmin.statusSuggestions || []).forEach(function (status) {
+        var option = document.createElement('option');
+        option.value = status;
+        option.textContent = status;
+        select.appendChild(option);
+      });
+      var custom = document.createElement('option');
+      custom.value = '__custom__';
+      custom.textContent = 'Other (type in)…';
+      select.appendChild(custom);
     }
 
     function renderAssetAdminList() {
       var all = state.assetAdmin.assets || [];
       var search = normalizeText(byId('asset-admin-search').value).toUpperCase();
-      var rows = !search ? all : all.filter(function (asset) {
+      var statusFilter = byId('asset-admin-status-filter').value;
+      var rows = all.filter(function (asset) {
+        if (statusFilter && asset.status !== statusFilter) return false;
+        if (!search) return true;
         return [asset.tag, asset.status, asset.location].join(' ').toUpperCase().indexOf(search) >= 0;
       });
 
@@ -4669,12 +4708,11 @@
       byId('asset-admin-empty').hidden = rows.length !== 0 || all.length !== 0;
       byId('asset-admin-empty-title').textContent = all.length ? 'No matches' : 'No assets yet';
       byId('asset-admin-empty-message').textContent = all.length
-        ? 'No asset matches "' + normalizeText(byId('asset-admin-search').value) + '".'
-        : 'Add the first asset above, or bulk-upload a CSV below.';
+        ? 'No asset matches the current search or filter.'
+        : 'Add the first asset, or bulk-upload a CSV.';
 
       rows.forEach(function (asset) {
         var row = document.createElement('tr');
-        if (state.assetAdmin.editingTag === asset.tag) row.className = 'asset-admin-row--editing';
 
         var tagCell = labelledCell('Asset tag');
         var tagStrong = document.createElement('strong');
@@ -4707,39 +4745,62 @@
         : '';
     }
 
+    function updateAssetAdminStatusCustomVisibility() {
+      var isCustom = byId('asset-admin-status').value === '__custom__';
+      byId('asset-admin-status-custom').hidden = !isCustom;
+      if (isCustom) byId('asset-admin-status-custom').focus();
+    }
+
+    function currentAssetAdminStatusValue() {
+      var selected = byId('asset-admin-status').value;
+      return selected === '__custom__' ? normalizeText(byId('asset-admin-status-custom').value) : selected;
+    }
+
     function resetAssetAdminForm() {
       state.assetAdmin.editingTag = null;
       byId('asset-admin-form-title').textContent = 'Add an asset';
       byId('asset-admin-tag').value = '';
       byId('asset-admin-tag').disabled = false;
       byId('asset-admin-status').value = '';
+      byId('asset-admin-status-custom').value = '';
+      byId('asset-admin-status-custom').hidden = true;
       byId('asset-admin-location').value = '';
       byId('asset-admin-form-error').hidden = true;
-      byId('asset-admin-form-cancel').hidden = true;
       byId('asset-admin-form-submit').querySelector('span').textContent = 'Add asset';
       byId('asset-admin-form-submit-icon').querySelector('use').setAttribute('href', '#i-plus');
     }
 
+    function startAddAsset() {
+      resetAssetAdminForm();
+      showAssetAdminView('form');
+      window.setTimeout(function () { byId('asset-admin-tag').focus(); }, 0);
+    }
+
     function startEditAsset(asset) {
+      resetAssetAdminForm();
       state.assetAdmin.editingTag = asset.tag;
       byId('asset-admin-form-title').textContent = 'Edit ' + asset.tag;
       byId('asset-admin-tag').value = asset.tag;
       byId('asset-admin-tag').disabled = true;
-      byId('asset-admin-status').value = asset.status || '';
+      var knownStatuses = Array.prototype.slice.call(byId('asset-admin-status').options).map(function (option) { return option.value; });
+      if (asset.status && knownStatuses.indexOf(asset.status) >= 0) {
+        byId('asset-admin-status').value = asset.status;
+      } else if (asset.status) {
+        byId('asset-admin-status').value = '__custom__';
+        byId('asset-admin-status-custom').value = asset.status;
+        byId('asset-admin-status-custom').hidden = false;
+      }
       byId('asset-admin-location').value = asset.location || '';
-      byId('asset-admin-form-error').hidden = true;
-      byId('asset-admin-form-cancel').hidden = false;
       byId('asset-admin-form-submit').querySelector('span').textContent = 'Save changes';
       byId('asset-admin-form-submit-icon').querySelector('use').setAttribute('href', '#i-check');
-      renderAssetAdminList();
-      byId('asset-admin-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      byId('asset-admin-status').focus();
+      showAssetAdminView('form');
+      window.setTimeout(function () { byId('asset-admin-status').focus(); }, 0);
     }
 
     function submitAssetAdminForm(event) {
       event.preventDefault();
       var tag = normalizeText(byId('asset-admin-tag').value);
-      var status = normalizeText(byId('asset-admin-status').value);
+      var status = currentAssetAdminStatusValue();
       var location = normalizeText(byId('asset-admin-location').value);
       var errorTarget = byId('asset-admin-form-error');
       if (!tag || !status) {
@@ -4753,7 +4814,7 @@
       serverCall(editing ? 'PMS_apiAssetAdminUpdate' : 'PMS_apiAssetAdminCreate', payload)
         .then(function () {
           showToast(editing ? 'Asset updated' : 'Asset added', tag + (editing ? ' was updated.' : ' was added.'), 'success');
-          resetAssetAdminForm();
+          showAssetAdminView('list');
           return loadAssetAdminList(state.assetAdmin.section, { silent: true });
         })
         .catch(function (error) {
@@ -4764,6 +4825,13 @@
     }
 
     /* ------------------------------------------------------- bulk CSV upload */
+
+    function openAssetBulkView() {
+      resetAssetBulkReview();
+      byId('asset-bulk-file').value = '';
+      byId('asset-bulk-filename').textContent = '';
+      showAssetAdminView('bulk');
+    }
 
     function downloadAssetBulkTemplate() {
       setBusy(true, 'Preparing the current asset list…');
@@ -4882,6 +4950,7 @@
           byId('asset-bulk-file').value = '';
           byId('asset-bulk-filename').textContent = '';
           showToast('Assets updated', normalizeText(result.message) || 'The bulk update was applied.', 'success', 8000);
+          showAssetAdminView('list');
           return loadAssetAdminList(state.assetAdmin.section, { silent: true });
         })
         .catch(function (error) {
@@ -4889,34 +4958,6 @@
           target.hidden = false;
           target.textContent = errorMessage(error);
           byId('asset-bulk-apply').disabled = true;
-        })
-        .finally(function () { setBusy(false); });
-    }
-
-    /* ------------------------------------------------------- role grant */
-
-    function grantOrRevokeAssetManager(granted) {
-      var email = normalizeText(byId('asset-admin-grant-email').value);
-      var errorTarget = byId('asset-admin-grant-error');
-      errorTarget.hidden = true;
-      if (!email) {
-        errorTarget.hidden = false;
-        errorTarget.textContent = 'Enter the user’s email first.';
-        return;
-      }
-      setBusy(true, granted ? 'Granting access…' : 'Revoking access…');
-      serverCall('PMS_apiAdminSetAssetManager', email, granted)
-        .then(function () {
-          showToast(
-            granted ? 'Access granted' : 'Access revoked',
-            email + (granted ? ' can now manage assets in their own section.' : ' can no longer manage assets.'),
-            'success'
-          );
-          byId('asset-admin-grant-email').value = '';
-        })
-        .catch(function (error) {
-          errorTarget.hidden = false;
-          errorTarget.textContent = errorMessage(error);
         })
         .finally(function () { setBusy(false); });
     }
@@ -6946,19 +6987,22 @@
       byId('asset-admin-refresh').addEventListener('click', function () {
         loadAssetAdminList(state.assetAdmin.section);
       });
+      byId('asset-admin-add').addEventListener('click', startAddAsset);
+      byId('asset-admin-bulk-open').addEventListener('click', openAssetBulkView);
       byId('asset-admin-search').addEventListener('input', renderAssetAdminList);
+      byId('asset-admin-status-filter').addEventListener('change', renderAssetAdminList);
       byId('asset-admin-section').addEventListener('change', function () {
-        resetAssetAdminForm();
+        showAssetAdminView('list');
         loadAssetAdminList(byId('asset-admin-section').value);
       });
       byId('asset-admin-form').addEventListener('submit', submitAssetAdminForm);
-      byId('asset-admin-form-cancel').addEventListener('click', resetAssetAdminForm);
+      byId('asset-admin-form-back').addEventListener('click', function () { showAssetAdminView('list'); });
+      byId('asset-admin-status').addEventListener('change', updateAssetAdminStatusCustomVisibility);
       byId('asset-bulk-download').addEventListener('click', downloadAssetBulkTemplate);
       byId('asset-bulk-file').addEventListener('change', handleAssetBulkFileChange);
       byId('asset-bulk-confirmation').addEventListener('input', updateAssetBulkConfirmation);
       byId('asset-bulk-apply').addEventListener('click', applyAssetBulkChanges);
-      byId('asset-admin-grant-button').addEventListener('click', function () { grantOrRevokeAssetManager(true); });
-      byId('asset-admin-revoke-button').addEventListener('click', function () { grantOrRevokeAssetManager(false); });
+      byId('asset-admin-bulk-back').addEventListener('click', function () { showAssetAdminView('list'); });
       document.addEventListener('keydown', trapAssetAdminFocus);
       document.addEventListener('keydown', trapModalFocus);
       window.addEventListener('beforeunload', function (event) {

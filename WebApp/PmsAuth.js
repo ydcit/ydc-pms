@@ -181,6 +181,10 @@ PMS.Auth = (function () {
     var profile = recordLogin(email, identity.profile || resolveProfile(email), identity.source);
     var name = profile && profile.name ? profile.name : displayNameFromEmail(email);
     var administrator = identity.source === 'GOOGLE_ACCOUNT' && isAdmin(email);
+    // An administrator can already do everything asset management allows, so
+    // this is never a separate grant for them — only a technician's own
+    // roster row can turn it on.
+    var assetManager = administrator || Boolean(profile && profile.canManageAssets);
     return {
       email: email,
       name: name,
@@ -191,11 +195,8 @@ PMS.Auth = (function () {
         ? PMS.CONFIG.SECTIONS[profile.section].label
         : '',
       isAdmin: administrator,
-      // An administrator can already do everything asset management allows,
-      // so this is never a separate grant for them — only a technician's own
-      // roster row can turn it on.
-      canManageAssets: administrator || Boolean(profile && profile.canManageAssets),
-      role: administrator ? 'ADMIN' : 'TECHNICIAN',
+      canManageAssets: assetManager,
+      role: administrator ? 'ADMIN' : (assetManager ? 'ASSET_MANAGER' : 'TECHNICIAN'),
       identitySource: identity.source,
       registeredAt: profile ? profile.registeredAt : '',
       updatedAt: profile ? profile.updatedAt : '',

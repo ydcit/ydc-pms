@@ -8,11 +8,18 @@
           <p class="eyebrow">Asset master</p>
           <h1 id="asset-admin-title">Manage assets</h1>
           <p class="archive-dialog__summary" id="asset-admin-summary">
-            Add assets and correct their status or location here — the tracker sheet's tag, status and
-            location columns update immediately, without editing the sheet directly.
+            Tag, status and location update immediately — no sheet editing required.
           </p>
         </div>
         <div class="archive-dialog__header-actions">
+          <button class="button button--primary button--small" id="asset-admin-add" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+            <span>Add asset</span>
+          </button>
+          <button class="button button--secondary button--small" id="asset-admin-bulk-open" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-database"></use></svg>
+            <span>Bulk upload</span>
+          </button>
           <button class="button button--quiet button--small" id="asset-admin-refresh" type="button">
             <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
             <span>Refresh</span>
@@ -23,140 +30,155 @@
         </div>
       </div>
 
-      <div class="archive-toolbar">
-        <div class="field asset-admin-section-field" id="asset-admin-section-wrap" hidden>
+      <div class="archive-toolbar" id="asset-admin-toolbar">
+        <div class="field archive-toolbar__search">
+          <label class="sr-only" for="asset-admin-search">Search assets</label>
+          <div class="search-input">
+            <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></span>
+            <input id="asset-admin-search" type="search" autocomplete="off" placeholder="Search asset tag or location">
+          </div>
+        </div>
+
+        <div class="field archive-toolbar__filter">
+          <label class="sr-only" for="asset-admin-status-filter">Filter by status</label>
+          <div class="select-wrap">
+            <select id="asset-admin-status-filter"><option value="">All statuses</option></select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+
+        <div class="field archive-toolbar__filter" id="asset-admin-section-wrap" hidden>
           <label class="sr-only" for="asset-admin-section">IT section</label>
           <div class="select-wrap">
             <select id="asset-admin-section"></select>
             <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
           </div>
         </div>
-        <div class="field archive-toolbar__search">
-          <label class="sr-only" for="asset-admin-search">Search assets</label>
-          <div class="search-input">
-            <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></span>
-            <input id="asset-admin-search" type="search" autocomplete="off" placeholder="Search asset tag, status, or location">
-          </div>
-        </div>
       </div>
     </header>
 
-    <div class="archive-dialog__body">
-      <form class="asset-admin-form" id="asset-admin-form">
-        <p class="eyebrow" id="asset-admin-form-title">Add an asset</p>
-        <div class="field-grid">
-          <div class="field">
-            <label for="asset-admin-tag">Asset tag</label>
-            <input id="asset-admin-tag" type="text" autocomplete="off" spellcheck="false" maxlength="100" placeholder="e.g. YDC-SD-123">
-          </div>
-          <div class="field">
-            <label for="asset-admin-status">Status</label>
-            <input id="asset-admin-status" type="text" autocomplete="off" spellcheck="false" maxlength="100" list="asset-admin-status-options" placeholder="e.g. INPROD">
-            <datalist id="asset-admin-status-options"></datalist>
-          </div>
-          <div class="field">
-            <label for="asset-admin-location">Location</label>
-            <input id="asset-admin-location" type="text" autocomplete="off" maxlength="500" placeholder="e.g. HQ 3F">
-          </div>
+    <div class="archive-dialog__body" id="asset-admin-dialog-body">
+
+      <!-- ------------------------------------------------------ list view -->
+      <div id="asset-admin-list-view">
+        <div class="table-wrap" id="asset-admin-table-wrap">
+          <table class="table--cards">
+            <thead>
+              <tr>
+                <th scope="col">Asset tag</th>
+                <th scope="col">Status</th>
+                <th scope="col">Location</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="asset-admin-body"></tbody>
+          </table>
         </div>
-        <p class="field-error" id="asset-admin-form-error" hidden></p>
-        <div class="asset-admin-form__actions">
-          <button class="button button--secondary button--small" id="asset-admin-form-cancel" type="button" hidden>
-            <span>Cancel edit</span>
-          </button>
-          <button class="button button--primary button--small" id="asset-admin-form-submit" type="submit">
+
+        <div class="empty-state" id="asset-admin-empty" hidden>
+          <span class="empty-state__art" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg>
+          </span>
+          <h3 id="asset-admin-empty-title">No assets yet</h3>
+          <p id="asset-admin-empty-message">Add the first asset, or bulk-upload a CSV.</p>
+        </div>
+      </div>
+
+      <!-- ------------------------------------------------------ form view -->
+      <div id="asset-admin-form-view" hidden>
+        <button class="text-button ticket-back" id="asset-admin-form-back" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+          <span>Back to assets</span>
+        </button>
+
+        <form class="ticket-create" id="asset-admin-form">
+          <h2 id="asset-admin-form-title">Add an asset</h2>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="asset-admin-tag">Asset tag</label>
+              <input id="asset-admin-tag" type="text" autocomplete="off" spellcheck="false" maxlength="100" placeholder="e.g. YDC-SD-123">
+            </div>
+            <div class="field">
+              <label for="asset-admin-status">Status</label>
+              <div class="select-wrap">
+                <select id="asset-admin-status">
+                  <option value="">Select status</option>
+                  <option value="__custom__">Other (type in)…</option>
+                </select>
+                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </div>
+              <input id="asset-admin-status-custom" class="asset-admin-status-custom" type="text" autocomplete="off"
+                     spellcheck="false" maxlength="100" placeholder="Enter a custom status" hidden>
+            </div>
+            <div class="field">
+              <label for="asset-admin-location">Location</label>
+              <input id="asset-admin-location" type="text" autocomplete="off" maxlength="500" placeholder="e.g. HQ 3F">
+            </div>
+          </div>
+
+          <p class="field-error" id="asset-admin-form-error" hidden></p>
+
+          <button class="button button--primary" id="asset-admin-form-submit" type="submit">
             <svg class="icon" aria-hidden="true" id="asset-admin-form-submit-icon"><use href="#i-plus"></use></svg>
             <span>Add asset</span>
           </button>
-        </div>
-      </form>
-
-      <div class="table-wrap" id="asset-admin-table-wrap">
-        <table class="table--cards">
-          <thead>
-            <tr>
-              <th scope="col">Asset tag</th>
-              <th scope="col">Status</th>
-              <th scope="col">Location</th>
-              <th scope="col"><span class="sr-only">Actions</span></th>
-            </tr>
-          </thead>
-          <tbody id="asset-admin-body"></tbody>
-        </table>
+        </form>
       </div>
 
-      <div class="empty-state" id="asset-admin-empty" hidden>
-        <span class="empty-state__art" aria-hidden="true">
-          <svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg>
-        </span>
-        <h3 id="asset-admin-empty-title">No assets yet</h3>
-        <p id="asset-admin-empty-message">Add the first asset above, or bulk-upload a CSV below.</p>
-      </div>
+      <!-- ------------------------------------------------------ bulk view -->
+      <div id="asset-admin-bulk-view" hidden>
+        <button class="text-button ticket-back" id="asset-admin-bulk-back" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+          <span>Back to assets</span>
+        </button>
 
-      <section class="asset-bulk" aria-labelledby="asset-bulk-title">
-        <p class="eyebrow" id="asset-bulk-title">Bulk add or update via CSV</p>
-        <p class="asset-bulk__hint">
-          Download the current list, edit statuses or locations in Excel, add new rows at the bottom for new
-          assets, then upload the same file. Existing tags are matched exactly; nothing already on the sheet
-          is ever removed by an upload.
-        </p>
-        <div class="asset-bulk__actions">
-          <button class="button button--secondary button--small" id="asset-bulk-download" type="button">
-            <svg class="icon" aria-hidden="true"><use href="#i-arrow-down"></use></svg>
-            <span>Download current list (CSV)</span>
-          </button>
-          <label class="button button--secondary button--small asset-bulk__upload-label" for="asset-bulk-file">
-            <svg class="icon" aria-hidden="true"><use href="#i-database"></use></svg>
-            <span>Choose a CSV to upload</span>
-          </label>
-          <input id="asset-bulk-file" type="file" accept=".csv,text/csv" hidden>
-          <span class="asset-bulk__filename" id="asset-bulk-filename"></span>
-        </div>
+        <div class="ticket-create">
+          <h2>Bulk add or update via CSV</h2>
+          <p class="ticket-update__hint">
+            Download the current list, edit statuses or locations in Excel, add new rows at the bottom for new
+            assets, then upload the same file. Existing tags are matched exactly; nothing already on the sheet
+            is ever removed by an upload.
+          </p>
 
-        <div class="rollover-review" id="asset-bulk-review" hidden>
-          <div class="notice notice--warning">
-            <span class="notice__icon" aria-hidden="true">
-              <svg class="icon" aria-hidden="true"><use href="#i-alert-triangle"></use></svg>
-            </span>
-            <div>
-              <strong id="asset-bulk-summary-title">Review before applying</strong>
-              <p id="asset-bulk-summary">Nothing has been changed yet.</p>
-            </div>
-          </div>
-          <dl class="rollover-stats" id="asset-bulk-stats"></dl>
-          <div class="confirmation-box">
-            <div class="field">
-              <label for="asset-bulk-confirmation">Type <strong id="asset-bulk-confirmation-phrase"></strong> to confirm</label>
-              <input id="asset-bulk-confirmation" type="text" autocomplete="off" spellcheck="false">
-            </div>
-            <p class="field-error" id="asset-bulk-error" hidden></p>
-            <button class="button button--primary" id="asset-bulk-apply" type="button" disabled>
-              <svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>
-              <span>Apply changes</span>
+          <div class="asset-bulk__actions">
+            <button class="button button--secondary button--small" id="asset-bulk-download" type="button">
+              <svg class="icon" aria-hidden="true"><use href="#i-arrow-down"></use></svg>
+              <span>Download current list (CSV)</span>
             </button>
+            <label class="button button--secondary button--small asset-bulk__upload-label" for="asset-bulk-file">
+              <svg class="icon" aria-hidden="true"><use href="#i-database"></use></svg>
+              <span>Choose a CSV to upload</span>
+            </label>
+            <input id="asset-bulk-file" type="file" accept=".csv,text/csv" hidden>
+            <span class="asset-bulk__filename" id="asset-bulk-filename"></span>
           </div>
-        </div>
-      </section>
 
-      <section class="asset-admin-grant" id="asset-admin-grant" hidden aria-labelledby="asset-admin-grant-title">
-        <p class="eyebrow" id="asset-admin-grant-title">Grant asset management access</p>
-        <p class="asset-admin-grant__hint">
-          Let another registered user add and edit assets in their own section without making them an administrator.
-        </p>
-        <div class="asset-admin-grant__row">
-          <div class="field">
-            <label class="sr-only" for="asset-admin-grant-email">User email</label>
-            <input id="asset-admin-grant-email" type="email" autocomplete="off" placeholder="name@ydc.com.ph">
+          <div class="rollover-review" id="asset-bulk-review" hidden>
+            <div class="notice notice--warning">
+              <span class="notice__icon" aria-hidden="true">
+                <svg class="icon" aria-hidden="true"><use href="#i-alert-triangle"></use></svg>
+              </span>
+              <div>
+                <strong id="asset-bulk-summary-title">Review before applying</strong>
+                <p id="asset-bulk-summary">Nothing has been changed yet.</p>
+              </div>
+            </div>
+            <dl class="rollover-stats" id="asset-bulk-stats"></dl>
+            <div class="confirmation-box">
+              <div class="field">
+                <label for="asset-bulk-confirmation">Type <strong id="asset-bulk-confirmation-phrase"></strong> to confirm</label>
+                <input id="asset-bulk-confirmation" type="text" autocomplete="off" spellcheck="false">
+              </div>
+              <p class="field-error" id="asset-bulk-error" hidden></p>
+              <button class="button button--primary" id="asset-bulk-apply" type="button" disabled>
+                <svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>
+                <span>Apply changes</span>
+              </button>
+            </div>
           </div>
-          <button class="button button--secondary button--small" id="asset-admin-grant-button" type="button">
-            <span>Grant</span>
-          </button>
-          <button class="button button--quiet button--small" id="asset-admin-revoke-button" type="button">
-            <span>Revoke</span>
-          </button>
         </div>
-        <p class="field-error" id="asset-admin-grant-error" hidden></p>
-      </section>
+      </div>
     </div>
 
     <footer class="archive-dialog__footer">
