@@ -2690,6 +2690,48 @@
     background: var(--danger-soft);
   }
 
+  .archived-years {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px dashed var(--line);
+  }
+
+  .archived-years__list {
+    display: grid;
+    gap: 8px;
+    margin: 10px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .archived-years__item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--surface-soft);
+  }
+
+  .archived-years__year {
+    flex: none;
+    font-weight: 640;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .archived-years__link {
+    color: var(--accent);
+    font-size: 12.5px;
+    font-weight: 550;
+    text-decoration: none;
+  }
+
+  .archived-years__link:hover {
+    text-decoration: underline;
+  }
+
   /* --------------------------------------------------------------------------
      Danger zone
 

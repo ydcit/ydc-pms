@@ -294,6 +294,90 @@
           </button>
         </div>
       </div>
+
+      <!--
+        Every year a rollover has ever closed gets a frozen copy of that
+        year's tracker sheet, so "does 2026 still exist" has a real answer:
+        yes, exactly as it looked the day it closed, one click away.
+      -->
+      <div class="archived-years" id="archived-years-panel" hidden>
+        <p class="eyebrow">Closed years still in this workbook</p>
+        <ul class="archived-years__list" id="archived-years-list"></ul>
+      </div>
+    </section>
+
+    <!--
+      Deleting a closed year outright, once its data is no longer needed and
+      a backup of it has actually been produced. Separate from the danger
+      zone below: that one clears everything for a pilot reset, this removes
+      one year at a time from an otherwise permanent, ever-growing history.
+    -->
+    <section class="panel danger-zone" id="year-purge-panel" hidden aria-labelledby="year-purge-title">
+      <div class="panel__header">
+        <div>
+          <p class="eyebrow eyebrow--danger">Danger zone</p>
+          <h2 id="year-purge-title">Delete a past year's data</h2>
+          <p>
+            Permanently removes every maintenance record, findings ticket, ticket log entry
+            and archived tracker sheet for one closed year, to reclaim space. The current PMS
+            year can never be selected, and a downloaded backup is required before deletion.
+          </p>
+        </div>
+        <span class="status-chip status-chip--danger">Irreversible</span>
+      </div>
+
+      <p class="danger-zone__last" id="year-purge-last-run" hidden></p>
+
+      <div class="rollover-form">
+        <div class="field">
+          <label for="year-purge-year">Year to delete</label>
+          <div class="select-wrap">
+            <select id="year-purge-year"></select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+        <button class="button button--secondary" id="year-purge-preview" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg>
+          <span>Show me what would be deleted</span>
+        </button>
+      </div>
+      <p class="field-error" id="year-purge-year-error" hidden></p>
+
+      <div class="rollover-review" id="year-purge-review" hidden>
+        <div class="notice notice--danger">
+          <span class="notice__icon" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-alert-triangle"></use></svg>
+          </span>
+          <div>
+            <strong id="year-purge-summary-title">This cannot be undone</strong>
+            <p id="year-purge-summary">Nothing has been changed yet.</p>
+          </div>
+        </div>
+
+        <dl class="rollover-stats" id="year-purge-stats"></dl>
+
+        <div class="confirmation-box">
+          <button class="button button--secondary" id="year-purge-download" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-arrow-down"></use></svg>
+            <span>Download backup first</span>
+          </button>
+          <p class="field-help" id="year-purge-download-status">A backup must be downloaded before deletion can be confirmed.</p>
+
+          <label class="check-control" for="year-purge-reviewed">
+            <input id="year-purge-reviewed" type="checkbox" disabled>
+            <span>I downloaded the backup and want to permanently delete this year's data.</span>
+          </label>
+          <div class="field">
+            <label for="year-purge-confirmation">Type <strong id="year-purge-confirmation-phrase"></strong> to confirm</label>
+            <input id="year-purge-confirmation" type="text" autocomplete="off" spellcheck="false" disabled>
+          </div>
+          <p class="field-error" id="year-purge-error" hidden></p>
+          <button class="button button--danger" id="year-purge-execute" type="button" disabled>
+            <svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg>
+            <span>Delete this year's data</span>
+          </button>
+        </div>
+      </div>
     </section>
 
     <!--

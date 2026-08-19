@@ -107,6 +107,81 @@ PMS.Rollover = (function () {
     return data;
   }
 
+  /** The frozen-copy name a tracker sheet gets when its year closes. */
+  function archivedSheetName(baseName, year) {
+    return baseName + ' ' + year + ' (Closed)';
+  }
+
+  /**
+   * Parses "IT-SD PMS 2026 (Closed)" back into { section, year }, or null for
+   * anything else. Driven by the live section list rather than a bare regex,
+   * so a section rename is picked up automatically and a sheet that merely
+   * happens to end in "(Closed)" for unrelated reasons is never mistaken for
+   * one of these.
+   */
+  function parseArchivedSheetName(name) {
+    var sections = Object.keys(PMS.CONFIG.SECTIONS);
+    for (var index = 0; index < sections.length; index += 1) {
+      var sectionKey = sections[index];
+      var base = PMS.CONFIG.SECTIONS[sectionKey].sheetName;
+      var prefix = base + ' ';
+      var suffix = ' (Closed)';
+      if (name.indexOf(prefix) !== 0 || name.slice(-suffix.length) !== suffix) continue;
+      var year = name.slice(prefix.length, name.length - suffix.length);
+      if (!/^\d{4}$/.test(year)) continue;
+      return { section: sectionKey, year: Number(year), sheetName: name };
+    }
+    return null;
+  }
+
+  /**
+   * Every closed-year tracker snapshot currently in the workbook, newest
+   * first. Discovered by scanning sheet names rather than kept in a
+   * property, so it can never drift out of sync with what is actually in
+   * the spreadsheet — a manually renamed or deleted archive sheet is simply
+   * absent from the list rather than a dangling reference.
+   */
+  function archivedYears() {
+    var book = PMS.Assets.spreadsheet();
+    var byYear = {};
+    book.getSheets().forEach(function (sheet) {
+      var parsed = parseArchivedSheetName(sheet.getName());
+      if (!parsed) return;
+      if (!byYear[parsed.year]) byYear[parsed.year] = { year: parsed.year, sections: [] };
+      byYear[parsed.year].sections.push({
+        section: parsed.section,
+        sectionLabel: PMS.CONFIG.SECTIONS[parsed.section].label,
+        sheetName: parsed.sheetName,
+        url: book.getUrl() + '#gid=' + sheet.getSheetId()
+      });
+    });
+    return Object.keys(byYear).map(function (year) { return byYear[year]; })
+      .sort(function (a, b) { return b.year - a.year; });
+  }
+
+  /**
+   * Freezes the tracker sheet exactly as it stands into "<name> <year>
+   * (Closed)" before the live sheet's cycle cells are wiped for the new
+   * year. This is the whole answer to "does 2026 still exist somewhere
+   * after 2027 opens": the live IT-SD PMS/IT-IS PMS sheets keep rolling
+   * forward as before, but a literal, untouched copy of how they looked at
+   * close is now a permanent, ordinary sheet in the same workbook.
+   *
+   * Skipped rather than overwritten when the name is already taken, which
+   * happens on a retried rollover after a partial failure: the first
+   * attempt already made the archive, and copying again would either
+   * collide on the name or silently double it under a "(Closed) (1)"-style
+   * name Sheets invents on its own.
+   */
+  function archiveTrackerSnapshot(sheet, year) {
+    var book = PMS.Assets.spreadsheet();
+    var name = archivedSheetName(sheet.getName(), year);
+    if (book.getSheetByName(name)) return { sheetName: name, created: false };
+    var copy = sheet.copyTo(book);
+    copy.setName(name);
+    return { sheetName: name, created: true };
+  }
+
   function resetTracker(sectionKey, oldYear, nextYear) {
     var sheet = PMS.Assets.sheetForSection(sectionKey);
     var yearCell = sheet.getRange(PMS.CONFIG.TRACKER_YEAR_ROW, PMS.CONFIG.TRACKER_YEAR_COLUMN);
@@ -115,6 +190,7 @@ PMS.Rollover = (function () {
     if (currentYear !== oldYear) {
       PMS.Util.fail(sheet.getName() + ' has unexpected tracker year ' + currentYear + '.', 'ROLLOVER_BLOCKED');
     }
+    var archive = archiveTrackerSnapshot(sheet, oldYear);
     var lastRow = sheet.getLastRow();
     if (lastRow >= PMS.CONFIG.ASSET_DATA_START_ROW) {
       var count = lastRow - PMS.CONFIG.ASSET_DATA_START_ROW + 1;
@@ -138,7 +214,7 @@ PMS.Rollover = (function () {
       });
       if (dirty) PMS.Util.fail('Tracker reset verification failed for ' + sheet.getName() + '.', 'SYNC_FAILED');
     }
-    return { sheetName: sheet.getName(), skipped: false };
+    return { sheetName: sheet.getName(), skipped: false, archivedSheetName: archive.sheetName };
   }
 
   function execute(nextYear, confirmationToken) {
@@ -341,7 +417,8 @@ PMS.Rollover = (function () {
       sections: sections,
       capacity: capacitySnapshot(),
       reconciliation: reconciliationRaw ? JSON.parse(reconciliationRaw) : null,
-      pendingSync: pendingSync
+      pendingSync: pendingSync,
+      archivedYears: archivedYears()
     };
   }
 
@@ -351,6 +428,7 @@ PMS.Rollover = (function () {
     continueReconciliation: continueReconciliation,
     retryReconciliation: retryReconciliation,
     status: status,
-    capacitySnapshot: capacitySnapshot
+    capacitySnapshot: capacitySnapshot,
+    archivedYears: archivedYears
   };
 })();

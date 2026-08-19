@@ -950,6 +950,7 @@
       // the dashboard is on screen so it never delays first paint.
       if (state.bootstrap.rolloverDeferred && userIsAdmin()) loadRolloverStatus();
       renderDangerZone();
+      renderYearPurgePanel();
       // Ticket counts are also deferred, for the same reason.
       loadTicketSummary();
       warmListCaches();
@@ -3937,6 +3938,35 @@
       byId('rollover-year').value = String(nextYear);
       renderReconciliationStatus(status, currentYear);
       resetRolloverReview();
+      renderArchivedYears(status.archivedYears);
+    }
+
+    /** The frozen tracker-sheet snapshot rollover leaves behind for every closed year. */
+    function renderArchivedYears(years) {
+      var panel = byId('archived-years-panel');
+      var list = byId('archived-years-list');
+      if (!panel || !list) return;
+      var entries = toArray(years);
+      panel.hidden = !userIsAdmin() || entries.length === 0;
+      list.replaceChildren();
+      entries.forEach(function (entry) {
+        var item = document.createElement('li');
+        item.className = 'archived-years__item';
+        var yearLabel = document.createElement('span');
+        yearLabel.className = 'archived-years__year';
+        yearLabel.textContent = entry.year;
+        item.appendChild(yearLabel);
+        toArray(entry.sections).forEach(function (section) {
+          var link = document.createElement('a');
+          link.className = 'archived-years__link';
+          link.href = section.url;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.textContent = (sectionLabel(section.section) || normalizeText(section.sheetName)) + ' ↗';
+          item.appendChild(link);
+        });
+        list.appendChild(item);
+      });
     }
 
     function reconciliationLabel(status) {
@@ -4299,6 +4329,207 @@
           target.hidden = false;
           target.textContent = errorMessage(error);
           byId('reset-execute').disabled = true;
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    /* ------------------------------------------------------------------------
+       Danger zone: deleting one closed year's data
+
+       Same preview-token-then-execute shape as reset, with one more required
+       step in between: buildBackup() only runs after consuming the preview's
+       token, and execute() only runs after consuming buildBackup()'s token.
+       The "I downloaded it" checkbox and phrase field start disabled and the
+       download button is what turns them on — skipping the download is not
+       just discouraged in this UI, the server has already made it impossible.
+       ------------------------------------------------------------------------ */
+
+    function renderYearPurgePanel() {
+      var panel = byId('year-purge-panel');
+      if (!panel) return;
+      panel.hidden = !userIsAdmin();
+      resetYearPurgeReview();
+      if (userIsAdmin()) loadYearPurgeEligibleYears();
+    }
+
+    function loadYearPurgeEligibleYears() {
+      serverCall('PMS_apiYearPurgeEligibleYears')
+        .then(function (data) {
+          var years = toArray(data && data.years);
+          var select = byId('year-purge-year');
+          select.replaceChildren();
+          years.forEach(function (year) {
+            var option = document.createElement('option');
+            option.value = String(year);
+            option.textContent = String(year);
+            select.appendChild(option);
+          });
+          var hasYears = years.length > 0;
+          byId('year-purge-preview').disabled = !hasYears;
+          select.disabled = !hasYears;
+          byId('year-purge-year-error').hidden = hasYears;
+          byId('year-purge-year-error').textContent = 'No closed year is available to delete yet.';
+        })
+        .catch(function (error) {
+          byId('year-purge-preview').disabled = true;
+          byId('year-purge-year-error').hidden = false;
+          byId('year-purge-year-error').textContent = errorMessage(error);
+        });
+    }
+
+    function resetYearPurgeReview() {
+      state.yearPurgePreview = null;
+      state.yearPurgeBackup = null;
+      var review = byId('year-purge-review');
+      if (!review) return;
+      review.hidden = true;
+      byId('year-purge-download').disabled = false;
+      byId('year-purge-download-status').textContent = 'A backup must be downloaded before deletion can be confirmed.';
+      byId('year-purge-reviewed').checked = false;
+      byId('year-purge-reviewed').disabled = true;
+      byId('year-purge-confirmation').value = '';
+      byId('year-purge-confirmation').disabled = true;
+      byId('year-purge-execute').disabled = true;
+      byId('year-purge-error').hidden = true;
+      byId('year-purge-stats').replaceChildren();
+    }
+
+    function runYearPurgePreview() {
+      var year = Number(byId('year-purge-year').value);
+      if (!Number.isInteger(year) || year < 2000 || year > 9999) {
+        showToast('Choose a year', 'Select a closed year to preview first.', 'danger');
+        return;
+      }
+      setBusy(true, 'Counting what would be deleted for ' + year + '…');
+      serverCall('PMS_apiYearPurgePreview', year)
+        .then(function (result) {
+          state.yearPurgePreview = result;
+          state.yearPurgeBackup = null;
+          renderYearPurgePreview(result);
+        })
+        .catch(function (error) {
+          resetYearPurgeReview();
+          showToast('Preview failed', errorMessage(error), 'danger');
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function renderYearPurgePreview(result) {
+      byId('year-purge-review').hidden = false;
+      byId('year-purge-confirmation-phrase').textContent = normalizeText(result.phrase) || ('DELETE ' + result.year);
+      byId('year-purge-confirmation').value = '';
+      byId('year-purge-confirmation').disabled = true;
+      byId('year-purge-reviewed').checked = false;
+      byId('year-purge-reviewed').disabled = true;
+      byId('year-purge-execute').disabled = true;
+      byId('year-purge-error').hidden = true;
+      byId('year-purge-download').disabled = false;
+      byId('year-purge-download-status').textContent = 'A backup must be downloaded before deletion can be confirmed.';
+
+      var recordRows = toArray(result.records).reduce(function (sum, entry) { return sum + asNumber(entry.rows, 0); }, 0);
+      var ticketCount = asNumber(result.ticketCount, 0);
+      var sheetCount = toArray(result.archivedTrackerSheets).length;
+      byId('year-purge-summary-title').textContent = 'This cannot be undone';
+      byId('year-purge-summary').textContent =
+        formatNumber(recordRows) + ' record row' + (recordRows === 1 ? '' : 's') + ', ' +
+        formatNumber(ticketCount) + ' ticket' + (ticketCount === 1 ? '' : 's') + ' with their full history, and ' +
+        formatNumber(sheetCount) + ' archived tracker sheet' + (sheetCount === 1 ? '' : 's') +
+        ' for ' + result.year + ' would be permanently deleted. This confirmation expires in ' +
+        asNumber(result.expiresInSeconds, 0) + ' seconds.';
+
+      var stats = byId('year-purge-stats');
+      stats.replaceChildren();
+      toArray(result.records).forEach(function (entry) {
+        stats.appendChild(statTile(normalizeText(entry.sheetName), formatNumber(asNumber(entry.rows, 0)) + ' rows'));
+      });
+      stats.appendChild(statTile('Findings tickets', formatNumber(ticketCount)));
+      stats.appendChild(statTile('Archived tracker sheets', formatNumber(sheetCount)));
+
+      renderLastYearPurge(result.lastPurge);
+      byId('year-purge-review').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function renderLastYearPurge(lastPurge) {
+      var holder = byId('year-purge-last-run');
+      if (!holder) return;
+      var entry = lastPurge || state.lastYearPurge;
+      state.lastYearPurge = entry || null;
+      var at = entry ? normalizeText(entry.at) : '';
+      holder.hidden = !at;
+      if (!at) return;
+      holder.textContent = 'Last deleted ' + formatDate(at.slice(0, 10)) + ' — ' + entry.year +
+        (entry.by ? ' by ' + normalizeText(entry.by) : '');
+    }
+
+    /** Real Blob-and-anchor download, since this page runs in an ordinary browser tab, not a sandboxed viewer. */
+    function triggerBrowserDownload(filename, base64, contentType) {
+      var binary = atob(base64);
+      var bytes = new Uint8Array(binary.length);
+      for (var i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      var blob = new Blob([bytes], { type: contentType || 'application/octet-stream' });
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    }
+
+    function downloadYearPurgeBackup() {
+      if (!state.yearPurgePreview) return;
+      var year = state.yearPurgePreview.year;
+      var token = normalizeText(state.yearPurgePreview.confirmationToken);
+      setBusy(true, 'Preparing the ' + year + ' backup…');
+      serverCall('PMS_apiYearPurgeBackup', year, token)
+        .then(function (result) {
+          state.yearPurgeBackup = result;
+          triggerBrowserDownload(result.filename, result.base64, 'application/zip');
+          byId('year-purge-download-status').textContent =
+            'Backup downloaded (' + formatBytes(asNumber(result.bytes, 0)) + ' as ' + result.filename + '). You can now confirm deletion below.';
+          byId('year-purge-reviewed').disabled = false;
+          byId('year-purge-confirmation').disabled = false;
+          showToast('Backup downloaded', result.filename + ' was saved to your downloads.', 'success');
+        })
+        .catch(function (error) {
+          state.yearPurgeBackup = null;
+          showToast('Backup failed', errorMessage(error), 'danger');
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    function updateYearPurgeConfirmation() {
+      if (!state.yearPurgePreview || !state.yearPurgeBackup) {
+        byId('year-purge-execute').disabled = true;
+        return;
+      }
+      var phrase = normalizeText(state.yearPurgePreview.phrase).toUpperCase();
+      var typed = normalizeText(byId('year-purge-confirmation').value).toUpperCase();
+      byId('year-purge-execute').disabled = !byId('year-purge-reviewed').checked || typed !== phrase;
+    }
+
+    function executeYearPurge() {
+      if (!state.yearPurgePreview || !state.yearPurgeBackup || byId('year-purge-execute').disabled) return;
+      var year = state.yearPurgePreview.year;
+      var backupToken = normalizeText(state.yearPurgeBackup.backupToken);
+      var phrase = normalizeText(byId('year-purge-confirmation').value);
+      setBusy(true, 'Deleting ' + year + ' data…');
+      serverCall('PMS_apiYearPurgeExecute', year, backupToken, phrase)
+        .then(function (result) {
+          resetYearPurgeReview();
+          renderLastYearPurge({ at: new Date().toISOString(), by: userEmail(), year: year });
+          // Everything on screen could have been built from what just went.
+          clearListCaches();
+          showToast('Year deleted', normalizeText(result.message) || (year + ' has been permanently deleted.'), 'success', 9000);
+          loadYearPurgeEligibleYears();
+          return loadBootstrap({ silent: true });
+        })
+        .catch(function (error) {
+          var target = byId('year-purge-error');
+          target.hidden = false;
+          target.textContent = errorMessage(error);
+          byId('year-purge-execute').disabled = true;
         })
         .finally(function () { setBusy(false); });
     }
@@ -6312,6 +6543,12 @@
       byId('reset-reviewed').addEventListener('change', updateResetConfirmation);
       byId('reset-confirmation').addEventListener('input', updateResetConfirmation);
       byId('reset-execute').addEventListener('click', executeReset);
+      byId('year-purge-year').addEventListener('change', resetYearPurgeReview);
+      byId('year-purge-preview').addEventListener('click', runYearPurgePreview);
+      byId('year-purge-download').addEventListener('click', downloadYearPurgeBackup);
+      byId('year-purge-reviewed').addEventListener('change', updateYearPurgeConfirmation);
+      byId('year-purge-confirmation').addEventListener('input', updateYearPurgeConfirmation);
+      byId('year-purge-execute').addEventListener('click', executeYearPurge);
       byId('retry-pending-sync').addEventListener('click', retryPendingSynchronization);
       document.addEventListener('keydown', trapLegacyImportFocus);
       document.addEventListener('keydown', trapModalFocus);

@@ -1119,6 +1119,25 @@ PMS.Tickets = (function () {
   }
 
   /**
+   * The year a ticket belongs to, for year-scoped views like the year-purge
+   * preview. Most tickets carry maintenanceYear straight from the record
+   * that raised them; a ticket filed without a source record has none, so
+   * it falls back to the year it was created in rather than being
+   * unreachable from any year view.
+   */
+  function effectiveYear(ticket) {
+    if (ticket.maintenanceYear) return Number(ticket.maintenanceYear);
+    var created = String(ticket.createdAt || '');
+    return created.length >= 4 ? Number(created.slice(0, 4)) : 0;
+  }
+
+  /** Every ticket whose effective year is the one asked for, open and closed. */
+  function ticketsForYear(year) {
+    var target = Number(year);
+    return readTickets().filter(function (ticket) { return effectiveYear(ticket) === target; });
+  }
+
+  /**
    * Unresolved tickets for a set of asset tags, keyed by tag.
    *
    * Takes a list rather than a single tag because the callers need this for a
@@ -1307,6 +1326,7 @@ PMS.Tickets = (function () {
     withRefresh: withRefresh,
     forRecord: forRecord,
     hasForRecord: hasForRecord,
+    ticketsForYear: ticketsForYear,
     openByAsset: openByAsset,
     openForAsset: openForAsset,
     ticketsByAsset: ticketsByAsset,

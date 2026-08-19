@@ -368,6 +368,42 @@ function PMS_apiExecuteReset(confirmationToken, phrase) {
   }
 }
 
+/** Years eligible to be purged: present in the workbook, not the live tracker year. */
+function PMS_apiYearPurgeEligibleYears() {
+  try {
+    return PMS_jsonResponse_({ ok: true, years: PMS.YearPurge.eligibleYears() });
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+/** What deleting one year would remove. Read-only; hands back the token buildBackup needs. */
+function PMS_apiYearPurgePreview(year) {
+  try {
+    return PMS_jsonResponse_(PMS.YearPurge.preview(year));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+/** Builds the mandatory backup and returns the token execute() requires. */
+function PMS_apiYearPurgeBackup(year, previewToken) {
+  try {
+    return PMS_jsonResponse_(PMS.YearPurge.buildBackup(year, previewToken));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+/** Deletes one year's records, tickets, ticket log and archived tracker sheets. */
+function PMS_apiYearPurgeExecute(year, backupToken, phrase) {
+  try {
+    return PMS_jsonResponse_(PMS.YearPurge.execute(year, backupToken, phrase));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
 function PMS_apiAdminSetUserSection(userEmail, sectionKey) {
   return PMS_jsonResponse_(PMS.Auth.adminSetUserSection(userEmail, sectionKey));
 }

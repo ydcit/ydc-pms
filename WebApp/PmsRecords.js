@@ -1745,6 +1745,7 @@ PMS.Records = (function () {
 
   return {
     responseSheet: responseSheet,
+    recordSheets: recordSheets,
     allRecords: allRecords,
     readRecordFields: readRecordFields,
     dashboardRecords: dashboardRecords,
