@@ -592,7 +592,15 @@ PMS.LegacyImport = (function () {
         PMS.Util.fail(row.message || 'The legacy import preview is stale.', 'IMPORT_PREVIEW_STALE');
       });
 
-      if (!state.started) {
+      // A batch small enough to finish in this one call needs no separate
+      // START marker — it is about to get a FINISH event a few lines down,
+      // and a start-and-finish pair for something that both started and
+      // finished in the same synchronous call is two audit rows saying the
+      // same thing. START only earns its place when the batch is genuinely
+      // going to span more than one execute() call, which is exactly when an
+      // admin might later want to know "did this import ever actually begin".
+      var willSpanMultipleChunks = selectedIds.length < state.remainingIds.length;
+      if (willSpanMultipleChunks && !state.started) {
         bestEffortEvent(state.batchId + '-START', 'LEGACY_IMPORT_START', {
           year: normalized.cycle.year,
           cycleId: normalized.cycle.cycleId,
