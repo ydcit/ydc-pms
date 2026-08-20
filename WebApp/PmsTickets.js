@@ -827,7 +827,8 @@ PMS.Tickets = (function () {
     ticketId: ['ticketId', 'createdAt'],
     status: ['status', 'updatedAt'],
     assetTag: ['assetTag', 'updatedAt'],
-    section: ['section', 'updatedAt']
+    section: ['section', 'updatedAt'],
+    cycleId: ['cycleId', 'updatedAt']
   });
 
   function comparator(sortKey, ascending) {

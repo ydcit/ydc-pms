@@ -51,8 +51,8 @@
             <span class="form-step__icon" aria-hidden="true">01</span>
             <div>
               <p class="eyebrow">Prepare the batch</p>
-              <h2 id="legacy-import-prepare-title">Choose the shared date and asset tags</h2>
-              <p>Every asset in this batch uses the same maintenance date and derived trimester.</p>
+              <h2 id="legacy-import-prepare-title">Choose a default date and asset tags</h2>
+              <p>Every asset uses the date below unless the uploaded file gives that tag its own date.</p>
             </div>
           </div>
 
@@ -81,18 +81,18 @@
             </div>
 
             <div class="field" id="legacy-import-maintenance-date-field">
-              <label for="legacy-import-maintenance-date">Maintenance performed on <span class="required-mark" aria-hidden="true">*</span></label>
-              <input id="legacy-import-maintenance-date" type="date" required
+              <label for="legacy-import-maintenance-date">Default maintenance date <span class="required-mark" aria-hidden="true">*</span></label>
+              <input id="legacy-import-maintenance-date" type="date"
                      aria-describedby="legacy-import-maintenance-date-help legacy-import-maintenance-date-error">
-              <p class="field-help" id="legacy-import-maintenance-date-help">Past dates and today are allowed. Future dates are not.</p>
+              <p class="field-help" id="legacy-import-maintenance-date-help">Past dates and today are allowed, future dates are not. Used for any tag that doesn't have its own date from the uploaded file.</p>
               <p class="field-error" id="legacy-import-maintenance-date-error" hidden></p>
             </div>
           </div>
 
           <div class="legacy-import-cycle" id="legacy-import-cycle" aria-live="polite">
-            <span>Derived maintenance cycle</span>
+            <span>Derived cycle for the default date</span>
             <strong id="legacy-import-cycle-value">Choose a date</strong>
-            <small id="legacy-import-cycle-detail">The server will confirm whether this updates the live tracker or creates a historical record only.</small>
+            <small id="legacy-import-cycle-detail">A tag with its own date from the uploaded file resolves its own cycle instead — check the preview for each tag's actual cycle.</small>
           </div>
 
           <div class="field" id="legacy-import-tags-field">
@@ -110,10 +110,16 @@
 
           <div class="legacy-import-file-row">
             <div class="field" id="legacy-import-file-field">
-              <label for="legacy-import-file">Load a CSV or TXT file <span class="field-optional">Optional</span></label>
+              <div class="field__label-row">
+                <label for="legacy-import-file">Load a CSV or TXT file <span class="field-optional">Optional</span></label>
+                <button class="button button--secondary button--small" id="legacy-import-download-template" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-arrow-down"></use></svg>
+                  <span>Download CSV template</span>
+                </button>
+              </div>
               <input id="legacy-import-file" type="file" accept=".csv,.txt,text/csv,text/plain"
                      aria-describedby="legacy-import-file-help legacy-import-file-error">
-              <p class="field-help" id="legacy-import-file-help">The file stays in your browser. Its first column is added to the editable tag list above.</p>
+              <p class="field-help" id="legacy-import-file-help">The file stays in your browser. Column 1 is the asset tag, added to the tag list above. An optional column 2 (YYYY-MM-DD) sets that tag's own maintenance date, overriding the default date above. Download the template to get the exact format.</p>
               <p class="field-error" id="legacy-import-file-error" hidden></p>
             </div>
             <div class="legacy-import-file-status" id="legacy-import-file-status" aria-live="polite">
@@ -178,6 +184,7 @@
               <thead>
                 <tr>
                   <th scope="col">Asset tag</th>
+                  <th scope="col">Date / Cycle</th>
                   <th scope="col">Asset details</th>
                   <th scope="col">Result</th>
                   <th scope="col">Explanation</th>

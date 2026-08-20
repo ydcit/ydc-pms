@@ -22,9 +22,7 @@ PMS.LegacyImport = (function () {
   function normalizeRequest(request) {
     var source = request && typeof request === 'object' ? request : {};
     var section = PMS.Util.section(PMS.Util.cleanText(source.section, 40).toUpperCase());
-    var date = PMS.Util.parseDateInput(source.maintenanceDate);
-    var cycle = PMS.Util.deriveCycle(date);
-    var maintenanceDate = Utilities.formatDate(date, PMS.CONFIG.TIME_ZONE, 'yyyy-MM-dd');
+    var defaultDateText = PMS.Util.cleanText(source.maintenanceDate, 10);
     var submittedTags = splitAssetTags(source.assetTags);
     if (!submittedTags.length) {
       PMS.Util.fail('Enter at least one asset tag to import.', 'VALIDATION_ERROR');
@@ -46,19 +44,43 @@ PMS.LegacyImport = (function () {
         'VALIDATION_ERROR'
       );
     }
+
+    // A bulk batch can span more than one actual maintenance date, so each
+    // tag resolves its own date: the per-tag value from an uploaded file's
+    // second column when present, otherwise the one shared date field every
+    // earlier version of this import required. A tag whose date can't be
+    // resolved or parsed is not a whole-request failure — it becomes an
+    // INVALID row later, reported the same way an unknown asset tag is.
+    var tagDatesInput = source.tagDates && typeof source.tagDates === 'object' ? source.tagDates : {};
+    var items = uniqueTags.map(function (tag) {
+      var rawDate = PMS.Util.cleanText(tagDatesInput[tag], 10) || defaultDateText;
+      var item = { tag: tag, dateText: rawDate, date: null, cycle: null, dateError: '' };
+      if (!rawDate) {
+        item.dateError = 'No maintenance date was supplied for this asset.';
+        return item;
+      }
+      try {
+        item.date = PMS.Util.parseDateInput(rawDate);
+        item.cycle = PMS.Util.deriveCycle(item.date);
+        item.dateText = Utilities.formatDate(item.date, PMS.CONFIG.TIME_ZONE, 'yyyy-MM-dd');
+      } catch (error) {
+        item.dateError = error.message;
+      }
+      return item;
+    });
+
     var sourceNote = PMS.Util.cleanText(source.sourceNote, PMS.CONFIG.MAX_TEXT_LENGTH);
     var canonical = {
       section: section.key,
-      maintenanceDate: maintenanceDate,
-      assetTags: uniqueTags.slice().sort(),
+      items: items.map(function (item) { return { tag: item.tag, date: item.dateText }; })
+        .sort(function (a, b) { return a.tag.localeCompare(b.tag); }),
       sourceNote: sourceNote
     };
     return {
       section: section,
-      maintenanceDate: maintenanceDate,
-      cycle: cycle,
       submittedTags: submittedTags,
       uniqueTags: uniqueTags,
+      items: items,
       duplicates: duplicates,
       sourceNote: sourceNote,
       requestDigest: PMS.Util.hashText(JSON.stringify(canonical))
@@ -74,28 +96,18 @@ PMS.LegacyImport = (function () {
 
   /**
    * Legacy import is open to any registered technician, not administrators
-   * only, but scoped down from what an administrator can do:
-   *
-   *   - a technician may import only into their own registered section —
-   *     they cannot backfill work for a section they don't belong to;
-   *   - a technician may import only into the currently open tracker year —
-   *     the "historical" mode that rewrites a past, already-closed year
-   *     without touching the live tracker stays administrator-only, since it
-   *     can silently create completed history for a year nobody is actively
-   *     working in.
-   *
-   * An administrator is unrestricted, exactly as before.
+   * only, but a technician may import only into their own registered
+   * section — they cannot backfill work for a section they don't belong to.
+   * An administrator is unrestricted. The other half of the old
+   * authorization split — "historical" rows for an already-closed year stay
+   * administrator-only — now happens per row inside buildPlan, since one
+   * request can mix historical and current-tracker rows once each tag
+   * carries its own date.
    */
-  function requireImportAuthorization(actor, sectionKey, historical) {
+  function requireSectionAuthorization(actor, sectionKey) {
     if (actor.isAdmin) return;
     if (sectionKey !== actor.section) {
       PMS.Util.fail('You can import legacy PMS only for your own registered IT section.', 'ACCESS_DENIED');
-    }
-    if (historical) {
-      PMS.Util.fail(
-        'Only an administrator can import legacy PMS for a year other than the current open tracker year.',
-        'ACCESS_DENIED'
-      );
     }
   }
 
@@ -122,7 +134,7 @@ PMS.LegacyImport = (function () {
     return years[0];
   }
 
-  function buildPlan(normalized, suppliedRecords) {
+  function buildPlan(normalized, suppliedRecords, actor) {
     var sectionKey = normalized.section.key;
     var sheet = PMS.Assets.sheetForSection(sectionKey);
     var trackerYear = Number(
@@ -131,15 +143,6 @@ PMS.LegacyImport = (function () {
     if (!trackerYear) {
       PMS.Util.fail(sheet.getName() + ' is missing its tracker year in D2.', 'CONFIGURATION_ERROR');
     }
-    if (Number(normalized.cycle.year) > trackerYear) {
-      PMS.Util.fail(
-        'The maintenance year ' + normalized.cycle.year +
-          ' is ahead of the open ' + trackerYear + ' tracker. Open that PMS year before importing it.',
-        'TRACKER_YEAR_MISMATCH'
-      );
-    }
-    var historical = Number(normalized.cycle.year) < trackerYear;
-    var trackerMode = historical ? 'HISTORICAL_RECORD_ONLY' : 'CURRENT_TRACKER';
 
     var assetsByTag = {};
     PMS.Assets.readAll(sectionKey).forEach(function (asset) {
@@ -166,9 +169,67 @@ PMS.LegacyImport = (function () {
     });
 
     var requestedNaturalById = {};
-    var rows = normalized.uniqueTags.map(function (tag) {
-      var recordId = PMS.Records.legacySeedRecordId(sectionKey, tag, normalized.cycle.cycleId);
-      var naturalKey = PMS.Records.completionKey(sectionKey, tag, normalized.cycle.cycleId);
+    var historicalCount = 0;
+    var currentCount = 0;
+    var rows = normalized.items.map(function (item) {
+      var tag = item.tag;
+      if (item.dateError) {
+        return {
+          assetTag: tag,
+          classification: 'INVALID',
+          ready: false,
+          recordId: '',
+          sourceRow: 0,
+          assetStatus: '',
+          location: '',
+          maintenanceDate: item.dateText,
+          cycleId: '',
+          message: item.dateError,
+          warnings: [],
+          _asset: null,
+          _existing: null
+        };
+      }
+      var cycle = item.cycle;
+      if (Number(cycle.year) > trackerYear) {
+        return {
+          assetTag: tag,
+          classification: 'INVALID',
+          ready: false,
+          recordId: '',
+          sourceRow: 0,
+          assetStatus: '',
+          location: '',
+          maintenanceDate: item.dateText,
+          cycleId: cycle.cycleId,
+          message: 'The maintenance year ' + cycle.year + ' is ahead of the open ' + trackerYear + ' tracker.',
+          warnings: [],
+          _asset: null,
+          _existing: null
+        };
+      }
+      var historical = Number(cycle.year) < trackerYear;
+      if (historical && actor && !actor.isAdmin) {
+        return {
+          assetTag: tag,
+          classification: 'INVALID',
+          ready: false,
+          recordId: '',
+          sourceRow: 0,
+          assetStatus: '',
+          location: '',
+          maintenanceDate: item.dateText,
+          cycleId: cycle.cycleId,
+          message: 'Only an administrator can import a date outside the current tracker year (' + trackerYear + ').',
+          warnings: [],
+          _asset: null,
+          _existing: null
+        };
+      }
+      if (historical) historicalCount += 1; else currentCount += 1;
+
+      var recordId = PMS.Records.legacySeedRecordId(sectionKey, tag, cycle.cycleId);
+      var naturalKey = PMS.Records.completionKey(sectionKey, tag, cycle.cycleId);
       if (requestedNaturalById[recordId] && requestedNaturalById[recordId] !== naturalKey) {
         PMS.Util.fail(
           'Two requested assets produced the same deterministic legacy import identifier.',
@@ -184,8 +245,8 @@ PMS.LegacyImport = (function () {
           'DATA_INTEGRITY_ERROR'
         );
       }
-      if (idRecord && (String(idRecord.dataQualityFlags || '').split('|').map(function (item) {
-        return item.trim();
+      if (idRecord && (String(idRecord.dataQualityFlags || '').split('|').map(function (item2) {
+        return item2.trim();
       }).indexOf('ADMIN_BULK_SEED') < 0 || PMS.Util.normalizeEmail(idRecord.technicianEmail))) {
         PMS.Util.fail(
           'The reserved legacy import record for ' + tag + ' is not a valid server-created seed row.',
@@ -203,6 +264,8 @@ PMS.LegacyImport = (function () {
           sourceRow: 0,
           assetStatus: '',
           location: '',
+          maintenanceDate: item.dateText,
+          cycleId: cycle.cycleId,
           message: matches.length
             ? 'Asset tag is duplicated in ' + sheet.getName() + '.'
             : 'Asset tag was not found in ' + sheet.getName() + '.',
@@ -222,6 +285,8 @@ PMS.LegacyImport = (function () {
           sourceRow: asset.row,
           assetStatus: asset.status,
           location: asset.location,
+          maintenanceDate: item.dateText,
+          cycleId: cycle.cycleId,
           message: 'Current-year tracker projection requires an INPROD asset.',
           warnings: [],
           _asset: asset,
@@ -246,7 +311,9 @@ PMS.LegacyImport = (function () {
           sourceRow: asset.row,
           assetStatus: asset.status,
           location: asset.location,
-          message: 'This asset already has a completed record for ' + normalized.cycle.cycleId + '.',
+          maintenanceDate: item.dateText,
+          cycleId: cycle.cycleId,
+          message: 'This asset already has a completed record for ' + cycle.cycleId + '.',
           warnings: warnings,
           _asset: asset,
           _existing: completed[completed.length - 1]
@@ -265,6 +332,8 @@ PMS.LegacyImport = (function () {
           sourceRow: asset.row,
           assetStatus: asset.status,
           location: asset.location,
+          maintenanceDate: item.dateText,
+          cycleId: cycle.cycleId,
           message: 'An incomplete non-import record already exists for this asset and cycle.',
           warnings: warnings,
           _asset: asset,
@@ -272,7 +341,7 @@ PMS.LegacyImport = (function () {
         };
       }
 
-      if (idRecord && maintenanceDateText(idRecord.maintenanceDate) !== normalized.maintenanceDate) {
+      if (idRecord && maintenanceDateText(idRecord.maintenanceDate) !== item.dateText) {
         return {
           assetTag: tag,
           classification: 'INVALID',
@@ -281,6 +350,8 @@ PMS.LegacyImport = (function () {
           sourceRow: asset.row,
           assetStatus: asset.status,
           location: asset.location,
+          maintenanceDate: item.dateText,
+          cycleId: cycle.cycleId,
           message: 'A resumable legacy import exists with a different maintenance date.',
           warnings: warnings,
           _asset: asset,
@@ -295,6 +366,8 @@ PMS.LegacyImport = (function () {
         sourceRow: asset.row,
         assetStatus: asset.status,
         location: asset.location,
+        maintenanceDate: item.dateText,
+        cycleId: cycle.cycleId,
         message: idRecord
           ? 'A previously staged legacy import will be resumed.'
           : historical
@@ -302,17 +375,12 @@ PMS.LegacyImport = (function () {
             : 'Ready for record creation and current tracker synchronization.',
         warnings: warnings,
         _asset: asset,
-        _existing: idRecord || null
+        _existing: idRecord || null,
+        _cycle: cycle,
+        _historical: historical
       };
     });
 
-    rows.forEach(function (row) {
-      row._seedRecordId = PMS.Records.legacySeedRecordId(
-        sectionKey,
-        row.assetTag,
-        normalized.cycle.cycleId
-      );
-    });
     normalized.duplicates.forEach(function (tag) {
       rows.push({
         assetTag: tag,
@@ -322,14 +390,17 @@ PMS.LegacyImport = (function () {
         sourceRow: 0,
         assetStatus: '',
         location: '',
+        maintenanceDate: '',
+        cycleId: '',
         message: 'Duplicate input was collapsed into the first occurrence.',
         warnings: []
       });
     });
+
+    var trackerMode = !historicalCount ? 'CURRENT_TRACKER' : !currentCount ? 'HISTORICAL_RECORD_ONLY' : 'MIXED';
     return {
       trackerYear: trackerYear,
       trackerMode: trackerMode,
-      historical: historical,
       rows: rows,
       recordsById: recordsById
     };
@@ -351,6 +422,8 @@ PMS.LegacyImport = (function () {
       sourceRow: row.sourceRow,
       assetStatus: row.assetStatus,
       location: row.location,
+      maintenanceDate: row.maintenanceDate,
+      cycleId: row.cycleId,
       message: row.message,
       warnings: row.warnings || []
     };
@@ -438,9 +511,7 @@ PMS.LegacyImport = (function () {
       expiresAt: state.expiresAt,
       totalReady: state.totalReady,
       section: state.section,
-      cycleId: state.cycleId,
       trackerYear: state.trackerYear,
-      trackerMode: state.trackerMode,
       started: Boolean(state.started),
       totals: state.totals || { processed: 0, imported: 0, resumed: 0, completed: 0, skipped: 0, failed: 0 },
       chunkKeys: chunkKeys
@@ -460,8 +531,8 @@ PMS.LegacyImport = (function () {
     var actor = PMS.Auth.requireProfile();
     var openYear = assertImportWindowOpen();
     var normalized = normalizeRequest(request);
-    var plan = buildPlan(normalized);
-    requireImportAuthorization(actor, normalized.section.key, plan.historical);
+    requireSectionAuthorization(actor, normalized.section.key);
+    var plan = buildPlan(normalized, null, actor);
     var confirmedOpenYear = assertImportWindowOpen();
     if (openYear !== confirmedOpenYear || Number(plan.trackerYear) !== confirmedOpenYear) {
       PMS.Util.fail('The tracker year changed while preparing the preview. Preview it again.', 'IMPORT_PREVIEW_STALE');
@@ -473,7 +544,7 @@ PMS.LegacyImport = (function () {
     if (counts.ready > 0) {
       token = Utilities.getUuid();
       batchId = [
-        'LEGACY-IMPORT', normalized.cycle.year, normalized.cycle.cycle,
+        'LEGACY-IMPORT', plan.trackerYear,
         Utilities.getUuid().replace(/-/g, '').slice(0, 16).toUpperCase()
       ].join('-');
       expiresAt = Date.now() + PMS.CONFIG.LEGACY_IMPORT_TOKEN_SECONDS * 1000;
@@ -486,9 +557,7 @@ PMS.LegacyImport = (function () {
         expiresAt: expiresAt,
         totalReady: counts.ready,
         section: normalized.section.key,
-        cycleId: normalized.cycle.cycleId,
         trackerYear: plan.trackerYear,
-        trackerMode: plan.trackerMode,
         remainingIds: plan.rows.filter(function (row) { return row.ready; }).map(function (row) { return row.recordId; }),
         started: false,
         totals: { processed: 0, imported: 0, resumed: 0, completed: 0, skipped: 0, failed: 0 }
@@ -499,10 +568,6 @@ PMS.LegacyImport = (function () {
       batchId: batchId,
       section: normalized.section.key,
       sectionLabel: normalized.section.label,
-      maintenanceDate: normalized.maintenanceDate,
-      maintenanceYear: normalized.cycle.year,
-      cycle: normalized.cycle.cycle,
-      cycleId: normalized.cycle.cycleId,
       trackerYear: plan.trackerYear,
       trackerMode: plan.trackerMode,
       sourceNote: normalized.sourceNote,
@@ -549,20 +614,18 @@ PMS.LegacyImport = (function () {
       assertImportWindowOpen();
       state = readState(confirmationToken);
       assertState(state, normalized, actor);
+      requireSectionAuthorization(actor, normalized.section.key);
       var allRecords = PMS.Records.allRecords();
-      var plan = buildPlan(normalized, allRecords);
-      requireImportAuthorization(actor, normalized.section.key, plan.historical);
-      if (state.section !== normalized.section.key || state.cycleId !== normalized.cycle.cycleId ||
-          Number(state.trackerYear) !== Number(plan.trackerYear) || state.trackerMode !== plan.trackerMode) {
+      var plan = buildPlan(normalized, allRecords, actor);
+      if (state.section !== normalized.section.key || Number(state.trackerYear) !== Number(plan.trackerYear)) {
         PMS.Util.fail(
-          'The tracker year or import mode changed after preview. Preview the import again.',
+          'The tracker year changed after preview. Preview the import again.',
           'IMPORT_PREVIEW_STALE'
         );
       }
       var rowsById = {};
       plan.rows.forEach(function (row) {
-        var seedRecordId = row._seedRecordId || row.recordId;
-        if (seedRecordId && !rowsById[seedRecordId]) rowsById[seedRecordId] = row;
+        if (row.recordId && !rowsById[row.recordId]) rowsById[row.recordId] = row;
       });
       state.remainingIds.forEach(function (recordId) {
         var row = rowsById[recordId];
@@ -602,8 +665,7 @@ PMS.LegacyImport = (function () {
       var willSpanMultipleChunks = selectedIds.length < state.remainingIds.length;
       if (willSpanMultipleChunks && !state.started) {
         bestEffortEvent(state.batchId + '-START', 'LEGACY_IMPORT_START', {
-          year: normalized.cycle.year,
-          cycleId: normalized.cycle.cycleId,
+          trackerYear: plan.trackerYear,
           section: normalized.section.key,
           batchId: state.batchId,
           adminEmail: actor.email,
@@ -620,32 +682,54 @@ PMS.LegacyImport = (function () {
           recordId: row.recordId,
           batchId: state.batchId,
           section: normalized.section.key,
-          maintenanceDate: normalized.maintenanceDate,
-          cycle: normalized.cycle,
+          maintenanceDate: row.maintenanceDate,
+          cycle: row._cycle,
           trackerYear: plan.trackerYear,
           asset: row._asset,
           sourceNote: normalized.sourceNote,
           admin: actor,
-          historical: plan.historical,
+          historical: row._historical,
           existing: row._existing || null
         };
       });
       var staged = PMS.Records.stageLegacySeedBatch(stageItems);
       var selectedById = {};
       selectedRows.forEach(function (row) { selectedById[row.recordId] = row; });
-      var finalized = staged;
-      var trackerFailure = '';
-      if (staged.length && !plan.historical) {
+
+      // Every staged record already knows its own cycle, and a historical
+      // row never touches the tracker at all. syncLegacySeedBatch refuses a
+      // call whose records cross a cycle boundary, so the current-tracker
+      // records are grouped by cycleId and synced one homogeneous group at a
+      // time instead of in a single call across the whole chunk.
+      var historicalStaged = staged.filter(function (record) {
+        return (selectedById[record.recordId] || {})._historical;
+      });
+      var currentStaged = staged.filter(function (record) {
+        return !(selectedById[record.recordId] || {})._historical;
+      });
+      var cycleGroups = {};
+      var cycleOrder = [];
+      currentStaged.forEach(function (record) {
+        if (!cycleGroups[record.cycleId]) {
+          cycleGroups[record.cycleId] = [];
+          cycleOrder.push(record.cycleId);
+        }
+        cycleGroups[record.cycleId].push(record);
+      });
+      var finalized = historicalStaged.slice();
+      cycleOrder.forEach(function (cycleId) {
+        var groupRecords = cycleGroups[cycleId];
         var syncResults = null;
+        var trackerFailure = '';
         try {
-          syncResults = PMS.Tracker.syncLegacySeedBatch(staged, function (preparedById) {
-            PMS.Records.stageLegacySeedTrackerState(staged, preparedById);
+          syncResults = PMS.Tracker.syncLegacySeedBatch(groupRecords, function (preparedById) {
+            PMS.Records.stageLegacySeedTrackerState(groupRecords, preparedById);
           });
         } catch (error) {
           trackerFailure = error.message;
         }
-        finalized = PMS.Records.finalizeLegacySeedBatch(staged, syncResults, trackerFailure);
-      }
+        finalized = finalized.concat(PMS.Records.finalizeLegacySeedBatch(groupRecords, syncResults, trackerFailure));
+      });
 
       var resultRows = [];
       skippedRows.forEach(function (row) {
@@ -659,15 +743,16 @@ PMS.LegacyImport = (function () {
       });
       finalized.forEach(function (record) {
         var completion = PMS.Util.completionState(record.pmsCompletion);
+        var sourceRow = selectedById[record.recordId] || {};
         resultRows.push({
           assetTag: record.assetTag,
           recordId: record.recordId,
           status: completion === 'COMPLETED'
-            ? ((selectedById[record.recordId] || {}).classification === 'RESUMABLE' ? 'RESUMED' : 'IMPORTED')
+            ? (sourceRow.classification === 'RESUMABLE' ? 'RESUMED' : 'IMPORTED')
             : 'SYNC_FAILED',
           pmsCompletion: record.pmsCompletion,
           message: completion === 'COMPLETED'
-            ? plan.historical
+            ? sourceRow._historical
               ? 'Historical legacy PMS imported without changing the current tracker.'
               : 'Legacy PMS imported and the current tracker was updated.'
             : record.syncError || 'Tracker synchronization failed; preview the same import to retry.'
@@ -694,8 +779,7 @@ PMS.LegacyImport = (function () {
         writeState(state);
       } else {
         bestEffortEvent(state.batchId + '-FINISH', 'LEGACY_IMPORT_FINISH', {
-          year: normalized.cycle.year,
-          cycleId: normalized.cycle.cycleId,
+          trackerYear: plan.trackerYear,
           section: normalized.section.key,
           batchId: state.batchId,
           adminEmail: actor.email,
@@ -710,7 +794,6 @@ PMS.LegacyImport = (function () {
         ok: true,
         batchId: state.batchId,
         section: normalized.section.key,
-        cycleId: normalized.cycle.cycleId,
         trackerMode: plan.trackerMode,
         hasMore: hasMore,
         confirmationToken: hasMore ? state.token : '',

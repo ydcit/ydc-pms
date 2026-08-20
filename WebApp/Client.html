@@ -2184,6 +2184,9 @@
       var sectionCell = labelledCell('IT section');
       sectionCell.textContent = sectionLabel(normalizeText(ticket.section));
 
+      var cycleCell = labelledCell('Cycle');
+      cycleCell.textContent = normalizeText(ticket.cycleId) || '—';
+
       var updatedCell = labelledCell('Last update');
       var updatedWrap = document.createElement('div');
       updatedWrap.className = 'archive-asset';
@@ -2206,7 +2209,7 @@
       actions.appendChild(open);
       actionCell.appendChild(actions);
 
-      [idCell, assetCell, statusCell, sectionCell, updatedCell, actionCell]
+      [idCell, assetCell, statusCell, sectionCell, cycleCell, updatedCell, actionCell]
         .forEach(function (cell) { row.appendChild(cell); });
       return row;
     }
@@ -3171,27 +3174,65 @@
       byId('legacy-import-cycle-detail').textContent = detail;
     }
 
+    function splitCsvLine(line) {
+      var columns = [''];
+      var quoted = false;
+      for (var index = 0; index < line.length; index += 1) {
+        var character = line.charAt(index);
+        if (character === '"') {
+          if (quoted && line.charAt(index + 1) === '"') {
+            columns[columns.length - 1] += '"';
+            index += 1;
+          } else {
+            quoted = !quoted;
+          }
+        } else if (character === ',' && !quoted) {
+          columns.push('');
+        } else {
+          columns[columns.length - 1] += character;
+        }
+      }
+      return columns.map(function (value) { return value.trim(); });
+    }
+
     function csvFirstColumn(text) {
       return String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).map(function (line) {
-        var value = '';
-        var quoted = false;
-        for (var index = 0; index < line.length; index += 1) {
-          var character = line.charAt(index);
-          if (character === '"') {
-            if (quoted && line.charAt(index + 1) === '"') {
-              value += '"';
-              index += 1;
-            } else {
-              quoted = !quoted;
-            }
-          } else if (character === ',' && !quoted) {
-            break;
-          } else {
-            value += character;
-          }
-        }
-        return value.trim();
+        return splitCsvLine(line)[0] || '';
       }).filter(function (value) { return value && !legacyImportHeader(value); }).join('\n');
+    }
+
+    /**
+     * Column 1 is the asset tag, column 2 (optional) is that tag's own
+     * maintenance date. A row's date only counts if it parses as a plain
+     * YYYY-MM-DD string \u2014 anything else (a header, a blank cell, a date
+     * Excel reformatted on save) is left for the tag to fall back to the
+     * shared default date instead of silently misreading a bad column.
+     */
+    function csvTagDateColumns(text) {
+      var tags = [];
+      var tagDates = {};
+      String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/).forEach(function (line) {
+        var columns = splitCsvLine(line);
+        var tag = normalizeTag(columns[0] || '');
+        if (!tag || legacyImportHeader(tag)) return;
+        tags.push(tag);
+        var dateValue = normalizeText(columns[1] || '');
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateValue)) tagDates[tag] = dateValue;
+      });
+      return { tags: tags, tagDates: tagDates };
+    }
+
+    function legacyImportTemplateCsv() {
+      return [
+        'Asset Tag,Maintenance Date (YYYY-MM-DD)',
+        'YDC-NU-01,2025-03-14',
+        'YDC-NU-02,2025-07-02',
+        'YDC-NU-03,'
+      ].join('\r\n');
+    }
+
+    function downloadLegacyImportTemplate() {
+      triggerTextDownload('legacy-import-template.csv', legacyImportTemplateCsv(), 'text/csv');
     }
 
     function readLocalTextFile(file) {
@@ -3235,7 +3276,8 @@
         request: null,
         preview: null,
         confirmationToken: '',
-        execution: null
+        execution: null,
+        tagDates: {}
       };
       byId('legacy-import-form').reset();
       renderLegacyImportOptions();
@@ -3348,12 +3390,23 @@
       byId('legacy-import-file-status').querySelector('span').textContent = 'Reading ' + file.name + '…';
       readLocalTextFile(file).then(function (content) {
         if (!state.legacyImport.open || fileReadToken !== state.legacyImport.requestToken) return;
-        var importedText = /\.csv$/i.test(file.name) ? csvFirstColumn(content) : String(content || '').replace(/^\uFEFF/, '');
+        var isCsv = /\.csv$/i.test(file.name);
+        var columns = isCsv ? csvTagDateColumns(content) : null;
+        var importedText = isCsv ? columns.tags.join('\n') : String(content || '').replace(/^\uFEFF/, '');
         var parsed = parseLegacyImportTags(importedText);
         if (!parsed.uniqueTags.length) throw new Error('No asset tags were found in the selected file.');
         var textarea = byId('legacy-import-tags');
         textarea.value = [textarea.value.trim(), importedText.trim()].filter(Boolean).join('\n');
-        byId('legacy-import-file-status').querySelector('span').textContent = file.name + ' · ' + parsed.uniqueTags.length + ' tag' + (parsed.uniqueTags.length === 1 ? '' : 's') + ' added';
+        var dateCount = 0;
+        if (columns) {
+          Object.keys(columns.tagDates).forEach(function (tag) {
+            state.legacyImport.tagDates[tag] = columns.tagDates[tag];
+            dateCount += 1;
+          });
+        }
+        var statusText = file.name + ' - ' + parsed.uniqueTags.length + ' tag' + (parsed.uniqueTags.length === 1 ? '' : 's') + ' added';
+        if (dateCount) statusText += ', ' + dateCount + ' with its own date';
+        byId('legacy-import-file-status').querySelector('span').textContent = statusText;
         markLegacyImportDirty();
         updateLegacyImportLocalCount();
       }).catch(function (error) {
@@ -3386,7 +3439,10 @@
       var status = normalizeText(value).toUpperCase().replace(/[\s-]+/g, '_');
       if (/DUPLICATE|REPEATED/.test(status)) return 'DUPLICATE';
       if (/ALREADY|COMPLETED|EXISTING|PREVIOUSLY_DONE/.test(status)) return 'ALREADY_COMPLETED';
-      if (/READY|RESUMABLE|VALID|ELIGIBLE|IMPORTABLE|WILL_IMPORT/.test(status)) return 'READY';
+      // Word-boundary match: "INVALID" contains "VALID" as a bare substring,
+      // and without \b that misclassifies every rejected row as READY —
+      // showing a green, importable chip on a row the server just refused.
+      if (/\b(READY|RESUMABLE|VALID|ELIGIBLE|IMPORTABLE|WILL_IMPORT)\b/.test(status)) return 'READY';
       return 'INVALID';
     }
 
@@ -3509,11 +3565,17 @@
       });
       var confirmation = legacyImportObject(response, ['confirmation', 'authorization']) || {};
       var rawMode = normalizeText(pick(response, ['mode', 'trackerMode', 'writeMode', 'impactMode'], pick(confirmation, ['mode'], ''))).toUpperCase();
-      var historical = response.historicalOnly === true || response.updatesTracker === false || /HISTORICAL|RECORD_ONLY|NO_TRACKER/.test(rawMode);
-      var tracker = response.updatesTracker === true || /TRACKER|CURRENT_CYCLE|CURRENT_YEAR/.test(rawMode);
+      var mixed = /MIXED/.test(rawMode);
+      var historical = !mixed && (response.historicalOnly === true || response.updatesTracker === false || /HISTORICAL|RECORD_ONLY|NO_TRACKER/.test(rawMode));
+      var tracker = !mixed && (response.updatesTracker === true || /TRACKER|CURRENT_CYCLE|CURRENT_YEAR/.test(rawMode));
       var counts = legacyPreviewCounts(response, rows.filter(function (row) {
         return legacyPreviewStatus(row) !== 'DUPLICATE' || !/Repeated in the pasted/.test(legacyImportReason(row));
       }), parsed.duplicateCount);
+      // A batch can now mix rows across more than one date/cycle, so there is
+      // no single authoritative cycle for the whole request any more — this
+      // is only a best-effort label for the shared default date, when one
+      // was given. Each row carries and displays its own resolved cycle.
+      var defaultCycle = request.maintenanceDate ? deriveCycle(request.maintenanceDate) : null;
       return {
         raw: response,
         request: request,
@@ -3522,9 +3584,9 @@
         counts: counts,
         confirmationToken: normalizeText(pick(response, ['confirmationToken', 'previewToken', 'token'], pick(confirmation, ['token', 'confirmationToken'], ''))),
         confirmationPhrase: normalizeText(pick(response, ['confirmationPhrase', 'phrase'], pick(confirmation, ['phrase', 'confirmationPhrase'], ''))),
-        mode: historical ? 'HISTORICAL' : tracker ? 'TRACKER' : 'UNKNOWN',
+        mode: mixed ? 'MIXED' : historical ? 'HISTORICAL' : tracker ? 'TRACKER' : 'UNKNOWN',
         modeLabel: normalizeText(pick(response, ['modeLabel', 'trackerModeLabel', 'impactLabel'], '')),
-        cycleId: normalizeText(pick(response, ['cycleId', 'maintenanceCycle', 'cycle'], deriveCycle(request.maintenanceDate).cycleId)),
+        cycleId: normalizeText(pick(response, ['cycleId', 'maintenanceCycle', 'cycle'], defaultCycle ? defaultCycle.cycleId : '')),
         trackerYear: legacyImportNumeric(response, ['trackerYear', 'currentTrackerYear', 'activeYear'])
       };
     }
@@ -3533,10 +3595,15 @@
       var status = legacyPreviewStatus(row);
       var tableRow = document.createElement('tr');
       var tagCell = labelledCell('Asset tag');
+      var dateCell = labelledCell('Date / Cycle');
       var detailCell = labelledCell('Asset details');
       var resultCell = labelledCell('Result');
       var reasonCell = labelledCell('Explanation');
       tagCell.textContent = legacyImportRowTag(row) || 'Unknown tag';
+      var rowDate = normalizeText(pick(row, ['maintenanceDate', 'date'], ''));
+      var rowCycle = normalizeText(pick(row, ['cycleId', 'cycle'], ''));
+      dateCell.textContent = [rowDate ? formatDate(rowDate) : '', rowCycle ? '(' + rowCycle + ')' : '']
+        .filter(Boolean).join(' ') || '—';
       detailCell.textContent = legacyImportAssetDetails(row);
       resultCell.appendChild(statusChip(status, false));
       reasonCell.textContent = legacyImportReason(row) || (
@@ -3544,24 +3611,29 @@
           status === 'ALREADY_COMPLETED' ? 'A completed record already exists for this cycle.' :
             status === 'DUPLICATE' ? 'Repeated input.' : 'This tag cannot be imported.'
       );
-      [tagCell, detailCell, resultCell, reasonCell].forEach(function (cell) { tableRow.appendChild(cell); });
+      [tagCell, dateCell, detailCell, resultCell, reasonCell].forEach(function (cell) { tableRow.appendChild(cell); });
       body.appendChild(tableRow);
     }
 
     function renderLegacyImportImpact(preview) {
       var notice = byId('legacy-import-impact-notice');
       notice.classList.remove('notice--info', 'notice--warning');
-      var derived = deriveCycle(preview.request.maintenanceDate);
-      if (preview.mode === 'HISTORICAL') {
+      var derived = preview.request.maintenanceDate ? deriveCycle(preview.request.maintenanceDate) : null;
+      if (preview.mode === 'MIXED') {
+        notice.classList.add('notice--warning');
+        byId('legacy-import-impact-title').textContent = preview.modeLabel || 'Records and live tracker, mixed with historical-only rows';
+        byId('legacy-import-impact-detail').textContent = 'This batch mixes rows that will update the live tracker with rows in an ' +
+          'already-closed year that will not. Check the Date / Cycle column for each row below.';
+      } else if (preview.mode === 'HISTORICAL') {
         notice.classList.add('notice--warning');
         byId('legacy-import-impact-title').textContent = preview.modeLabel || 'Historical records only';
-        byId('legacy-import-impact-detail').textContent = 'These records use ' + preview.cycleId + ', but the live ' +
-          (preview.trackerYear || derived.year) + ' tracker will not be changed.';
+        byId('legacy-import-impact-detail').textContent = 'These records use ' + (preview.cycleId || 'their own cycle') +
+          ', but the live ' + (preview.trackerYear || (derived && derived.year) || 'open') + ' tracker will not be changed.';
       } else if (preview.mode === 'TRACKER') {
         notice.classList.add('notice--info');
         byId('legacy-import-impact-title').textContent = preview.modeLabel || 'Records and live tracker';
         byId('legacy-import-impact-detail').textContent = 'Imported assets will be recorded as completed and their ' +
-          derived.cycle + ' tracker status and remarks will be synchronized.';
+          (derived ? derived.cycle : 'own') + ' tracker status and remarks will be synchronized.';
       } else {
         notice.classList.add('notice--warning');
         byId('legacy-import-impact-title').textContent = preview.modeLabel || 'Tracker impact not identified';
@@ -3574,8 +3646,10 @@
       byId('legacy-import-count-invalid').textContent = formatNumber(preview.counts.invalid);
       byId('legacy-import-count-duplicate').textContent = formatNumber(preview.counts.duplicate);
       byId('legacy-import-count-completed').textContent = formatNumber(preview.counts.completed);
-      byId('legacy-import-review-subtitle').textContent = sectionLabel(preview.request.section) + ' | ' +
-        formatDate(preview.request.maintenanceDate) + ' | ' + preview.cycleId;
+      var defaultDateText = preview.request.maintenanceDate
+        ? 'Default ' + formatDate(preview.request.maintenanceDate) + (preview.cycleId ? ' (' + preview.cycleId + ')' : '')
+        : 'Every tag has its own date';
+      byId('legacy-import-review-subtitle').textContent = sectionLabel(preview.request.section) + ' | ' + defaultDateText;
       renderLegacyImportImpact(preview);
 
       var body = byId('legacy-import-preview-body');
@@ -3592,7 +3666,7 @@
       if (!preview.rows.length) {
         var emptyRow = document.createElement('tr');
         var emptyCell = document.createElement('td');
-        emptyCell.colSpan = 4;
+        emptyCell.colSpan = 5;
         emptyCell.className = 'legacy-import-table__empty';
         emptyCell.textContent = 'The server returned summary counts without row-level details.';
         emptyRow.appendChild(emptyCell);
@@ -3636,10 +3710,10 @@
         setFieldError('legacy-import-section', 'legacy-import-section-error', 'Choose the tracker section for these assets.');
         valid = false;
       }
-      if (!parseDateParts(maintenanceDate)) {
+      if (maintenanceDate && !parseDateParts(maintenanceDate)) {
         setFieldError('legacy-import-maintenance-date', 'legacy-import-maintenance-date-error', 'Choose a valid maintenance date.');
         valid = false;
-      } else if (maintenanceDate > currentManilaDate()) {
+      } else if (maintenanceDate && maintenanceDate > currentManilaDate()) {
         setFieldError('legacy-import-maintenance-date', 'legacy-import-maintenance-date-error', 'The maintenance date cannot be in the future.');
         valid = false;
       }
@@ -3651,16 +3725,29 @@
           formatNumber(LEGACY_IMPORT_MAX_LOCAL_TAGS) + ' unique tags in one batch.');
         valid = false;
       }
+      var tagDates = state.legacyImport.tagDates || {};
+      var tagsMissingDate = parsed.uniqueTags.filter(function (tag) { return !tagDates[tag]; });
+      if (!maintenanceDate && tagsMissingDate.length) {
+        setFieldError('legacy-import-maintenance-date', 'legacy-import-maintenance-date-error',
+          'Enter a default date, or give every tag its own date from an uploaded file (' +
+            formatNumber(tagsMissingDate.length) + ' currently missing one).');
+        valid = false;
+      }
       if (!valid) {
         var firstInvalid = byId('legacy-import-form').querySelector('[aria-invalid="true"]');
         if (firstInvalid) firstInvalid.focus();
         return null;
       }
+      var requestTagDates = {};
+      parsed.uniqueTags.forEach(function (tag) {
+        if (tagDates[tag]) requestTagDates[tag] = tagDates[tag];
+      });
       return {
         request: {
           section: section,
           maintenanceDate: maintenanceDate,
           assetTags: parsed.uniqueTags.slice(),
+          tagDates: requestTagDates,
           sourceNote: sourceNote
         },
         parsed: parsed
@@ -6780,6 +6867,7 @@
       });
       byId('legacy-import-source-note').addEventListener('input', markLegacyImportDirty);
       byId('legacy-import-file').addEventListener('change', onLegacyImportFileChange);
+      byId('legacy-import-download-template').addEventListener('click', downloadLegacyImportTemplate);
       byId('legacy-import-edit').addEventListener('click', editLegacyImport);
       byId('legacy-import-review-confirm').addEventListener('change', updateLegacyImportConfirmState);
       byId('legacy-import-confirmation-input').addEventListener('input', function () {
