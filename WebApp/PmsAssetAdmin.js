@@ -37,13 +37,19 @@ PMS.AssetAdmin = (function () {
     return section;
   }
 
-  /** Every asset row as it stands right now: tag, status, location, sheet row. */
+  /**
+   * Every asset row as it stands right now: tag, status, location, its
+   * current cycle's PMS status (the T1/T2/T3 tracker cell for whichever
+   * cycle is open today - COMPLETED, FOR FIXING, IN PROGRESS, ON HOLD,
+   * DEFERRED, or blank if not yet touched this cycle), and sheet row.
+   */
   function readRows(sectionKey) {
     var sheet = sheetFor(sectionKey);
     var lastRow = sheet.getLastRow();
     if (lastRow < PMS.CONFIG.ASSET_DATA_START_ROW) return [];
     var count = lastRow - PMS.CONFIG.ASSET_DATA_START_ROW + 1;
-    var values = sheet.getRange(PMS.CONFIG.ASSET_DATA_START_ROW, 1, count, 3).getDisplayValues();
+    var pmsStatusColumn = PMS.CONFIG.CYCLES[PMS.Util.currentCycle().cycle].checkboxColumn;
+    var values = sheet.getRange(PMS.CONFIG.ASSET_DATA_START_ROW, 1, count, pmsStatusColumn).getDisplayValues();
     var rows = [];
     values.forEach(function (row, index) {
       var tag = PMS.Util.normalizeAssetTag(row[0]);
@@ -52,6 +58,7 @@ PMS.AssetAdmin = (function () {
         tag: tag,
         status: PMS.Util.cleanText(row[1], 100).toUpperCase(),
         location: PMS.Util.cleanText(row[2], 500),
+        pmsStatus: PMS.Util.cleanText(row[pmsStatusColumn - 1], 100).toUpperCase(),
         row: PMS.CONFIG.ASSET_DATA_START_ROW + index
       });
     });
@@ -77,8 +84,14 @@ PMS.AssetAdmin = (function () {
     return list.sort();
   }
 
+  /**
+   * Viewing the asset list is open to any registered user, not just an
+   * asset manager or admin - create/update/downloadTemplate/bulkPreview/
+   * bulkExecute all still gate on requireAssetManager below, unchanged, so
+   * this only widens who can look, never who can write.
+   */
   function list(sectionKey) {
-    var context = PMS.Auth.requireAssetManager();
+    var context = PMS.Auth.requireProfile();
     var section = requireSectionAccess(context, sectionKey || context.section);
     var rows = readRows(section.key);
     return {
@@ -87,8 +100,9 @@ PMS.AssetAdmin = (function () {
       sectionLabel: section.label,
       assets: rows,
       statusSuggestions: statusSuggestions(rows),
-      // Only an admin gets to switch sections; a plain asset manager only
-      // ever sees their own, so there is nothing to choose from.
+      canEdit: context.isAdmin || context.canManageAssets,
+      // Only an admin gets to switch sections; anyone else only ever sees
+      // their own, so there is nothing to choose from.
       sections: context.isAdmin ? Object.keys(PMS.CONFIG.SECTIONS).map(function (key) {
         return { key: key, label: PMS.CONFIG.SECTIONS[key].label };
       }) : []

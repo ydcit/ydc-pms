@@ -1901,6 +1901,19 @@
       return tag;
     }
 
+    /** The current cycle's tracker cell for one asset: COMPLETED, a repair state, or blank if untouched this cycle. */
+    function pmsStatusChip(value) {
+      var text = normalizeText(value).toUpperCase();
+      var tone = text === 'COMPLETED' ? 'success'
+        : text === 'DEFERRED' ? 'danger'
+          : (text === 'FOR FIXING' || text === 'IN PROGRESS' || text === 'ON HOLD') ? 'warning'
+            : 'neutral';
+      var chip = document.createElement('span');
+      chip.className = 'status-chip status-chip--' + tone;
+      chip.textContent = text || 'Not done yet';
+      return chip;
+    }
+
     /**
      * Clickable chips for the tickets raised against one asset.
      *
@@ -4833,10 +4846,18 @@
        instead of a one-off.
        ------------------------------------------------------------------------ */
 
+    /** Open to every registered user now — only the write actions inside stay asset-manager/admin only. */
     function renderAssetAdminButton() {
       var button = byId('open-asset-admin');
       if (!button) return;
-      button.hidden = !userCanManageAssets();
+      button.hidden = false;
+    }
+
+    /** Add/Edit/Bulk upload are still asset-manager/admin only; the list itself is not. */
+    function syncAssetAdminEditControls() {
+      var canEdit = userCanManageAssets();
+      byId('asset-admin-add').hidden = !canEdit;
+      byId('asset-admin-bulk-open').hidden = !canEdit;
     }
 
     function showAssetAdminView(view) {
@@ -4847,12 +4868,12 @@
     }
 
     function openAssetAdminModal() {
-      if (!userCanManageAssets()) return;
       if (state.assetAdmin.open || state.modalOpen || state.archive.open || state.legacyImport.open) return;
       state.assetAdmin.lastFocus = document.activeElement;
       state.assetAdmin.open = true;
       byId('asset-admin-modal').hidden = false;
       syncBodyModalState();
+      syncAssetAdminEditControls();
       showAssetAdminView('list');
       byId('asset-admin-search').value = '';
       byId('asset-admin-status-filter').value = '';
@@ -4979,13 +5000,19 @@
         locationCell.textContent = asset.location || '—';
         row.appendChild(locationCell);
 
+        var pmsStatusCell = labelledCell('PMS status');
+        pmsStatusCell.appendChild(pmsStatusChip(asset.pmsStatus));
+        row.appendChild(pmsStatusCell);
+
         var actionCell = labelledCell('');
-        var editButton = document.createElement('button');
-        editButton.type = 'button';
-        editButton.className = 'text-button';
-        editButton.textContent = 'Edit';
-        editButton.addEventListener('click', function () { startEditAsset(asset); });
-        actionCell.appendChild(editButton);
+        if (userCanManageAssets()) {
+          var editButton = document.createElement('button');
+          editButton.type = 'button';
+          editButton.className = 'text-button';
+          editButton.textContent = 'Edit';
+          editButton.addEventListener('click', function () { startEditAsset(asset); });
+          actionCell.appendChild(editButton);
+        }
         row.appendChild(actionCell);
 
         body.appendChild(row);
