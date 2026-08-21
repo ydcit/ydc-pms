@@ -3210,6 +3210,24 @@
       }
     }
 
+    /**
+     * Wires a "Filters & sort" toggle button to the .archive-dialog it sits
+     * inside. Only visible below the 620px breakpoint (see Styles.html) -
+     * on desktop the button is display:none and every field it would
+     * otherwise hide keeps its normal, always-open layout untouched.
+     */
+    function bindFiltersToggle(buttonId) {
+      var button = byId(buttonId);
+      if (!button) return;
+      var dialog = button.closest('.archive-dialog');
+      if (!dialog) return;
+      button.addEventListener('click', function () {
+        var open = !dialog.classList.contains('filters-open');
+        dialog.classList.toggle('filters-open', open);
+        button.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+    }
+
     function modalFocusable(root) {
       if (!root) return [];
       return Array.prototype.slice.call(root.querySelectorAll(
@@ -7186,6 +7204,8 @@
       document.querySelectorAll('[data-close-archive]').forEach(function (element) {
         element.addEventListener('click', closeArchiveModal);
       });
+      bindFiltersToggle('archive-filters-toggle');
+      bindFiltersToggle('tickets-filters-toggle');
       byId('archive-refresh').addEventListener('click', function () {
         clearListCaches();
         loadCompletedRecords({ page: 1 }, { refresh: true });

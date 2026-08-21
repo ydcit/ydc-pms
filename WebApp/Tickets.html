@@ -38,6 +38,12 @@
           </div>
         </div>
 
+        <button class="filters-toggle" id="tickets-filters-toggle" type="button"
+                aria-expanded="false" aria-controls="tickets-sort-panel">
+          <svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          <span>Filters &amp; sort</span>
+        </button>
+
         <div class="field archive-toolbar__filter" id="tickets-section-wrap">
           <label class="sr-only" for="tickets-section">IT section</label>
           <div class="select-wrap">
@@ -47,7 +53,7 @@
         </div>
       </div>
 
-      <div class="archive-toolbar archive-toolbar--secondary">
+      <div class="archive-toolbar archive-toolbar--secondary" id="tickets-sort-panel">
         <div class="archive-control">
           <label for="tickets-sort">Sort by</label>
           <div class="select-wrap">

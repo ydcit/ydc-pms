@@ -1920,6 +1920,13 @@
     gap: 10px;
   }
 
+  /* Base state: hidden. The max-width: 620px block below is what actually
+     makes it visible, so a plain <button> never falls back to its native
+     inline-block display outside that breakpoint. */
+  .filters-toggle {
+    display: none;
+  }
+
   .archive-toolbar--secondary {
     justify-content: space-between;
     margin-top: 10px;
@@ -4836,6 +4843,56 @@
 
     .archive-control--end {
       margin-left: 0;
+    }
+
+    /*
+       Search stays visible; year, cycle, section, sort, and page size all
+       collapse behind one "Filters & sort" toggle. Six stacked full-width
+       rows (four filters plus a two-part sort row plus a page-size row)
+       buried the actual asset list below the fold before this - on a real
+       phone you could open Completed assets and see nothing but controls.
+       Desktop is untouched: this whole rule only exists inside this
+       max-width: 620px block, so .filters-toggle never even renders there
+       and every field keeps its normal display.
+    */
+    .filters-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--r-sm);
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 570;
+      cursor: pointer;
+    }
+
+    .filters-toggle .icon {
+      width: 16px;
+      height: 16px;
+      transition: transform 150ms var(--ease);
+    }
+
+    .filters-toggle[aria-expanded="true"] .icon {
+      transform: rotate(180deg);
+    }
+
+    .archive-toolbar__filter,
+    .archive-toolbar--secondary {
+      display: none;
+    }
+
+    .archive-dialog.filters-open .archive-toolbar__filter {
+      display: block;
+    }
+
+    .archive-dialog.filters-open .archive-toolbar--secondary {
+      display: flex;
     }
 
     /* Paging: full-width Previous and Next with the page jump between them. */

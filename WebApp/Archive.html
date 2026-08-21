@@ -28,6 +28,12 @@
           </div>
         </div>
 
+        <button class="filters-toggle" id="archive-filters-toggle" type="button"
+                aria-expanded="false" aria-controls="archive-sort-panel">
+          <svg class="icon" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          <span>Filters &amp; sort</span>
+        </button>
+
         <div class="field archive-toolbar__filter">
           <label class="sr-only" for="archive-year">Year</label>
           <div class="select-wrap">
@@ -53,7 +59,7 @@
         </div>
       </div>
 
-      <div class="archive-toolbar archive-toolbar--secondary">
+      <div class="archive-toolbar archive-toolbar--secondary" id="archive-sort-panel">
         <div class="archive-control">
           <label for="archive-sort">Sort by</label>
           <div class="select-wrap">
