@@ -1809,14 +1809,14 @@
   }
 
   /* Deliberately tighter than the shared .notice used for legacy import and
-     asset bulk upload: this one sits directly above the step content with no
-     margin between them, so its own padding is the only thing controlling
-     how heavy it looks - shrunk here rather than on .notice itself, which
-     other, taller notices still rely on. */
+     asset bulk upload: its own padding is shrunk so the card itself stays
+     compact, but it still needs real breathing room below before "STEP 1 OF
+     4" starts - 20px matches .form-step's own internal gap so the notice
+     reads as a separate block above the step, not glued to its heading. */
   #record-readonly-notice {
     gap: 8px;
     padding: 8px 12px;
-    margin-bottom: 0;
+    margin-bottom: 20px;
   }
 
   #record-readonly-notice .notice__icon {
