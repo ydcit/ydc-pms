@@ -1808,6 +1808,36 @@
     color: var(--warning);
   }
 
+  /* Deliberately tighter than the shared .notice used for legacy import and
+     asset bulk upload: this one sits directly above the step content with no
+     margin between them, so its own padding is the only thing controlling
+     how heavy it looks - shrunk here rather than on .notice itself, which
+     other, taller notices still rely on. */
+  #record-readonly-notice {
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 0;
+  }
+
+  #record-readonly-notice .notice__icon {
+    width: 16px;
+    height: 16px;
+    margin-top: 0;
+  }
+
+  #record-readonly-notice .notice__icon .icon {
+    width: 11px;
+    height: 11px;
+  }
+
+  #record-readonly-notice strong {
+    font-size: 12px;
+  }
+
+  #record-readonly-notice p {
+    font-size: 11.5px;
+  }
+
   /* --------------------------------------------------------------------------
      Completed maintenance archive
      -------------------------------------------------------------------------- */
