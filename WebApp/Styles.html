@@ -100,6 +100,8 @@
 
   body.modal-open {
     overflow: hidden;
+    position: fixed;
+    width: 100%;
   }
 
   h1, h2, h3, h4 {
@@ -1707,6 +1709,11 @@
     justify-items: center;
     padding: 44px 24px;
     text-align: center;
+    /* A no-op in normal block flow; only takes effect as the lone child of a
+       column-flex parent (archive-dialog__body and its reuses), where it
+       centers the state vertically instead of leaving it pinned to the top
+       of a dialog a mobile breakpoint has forced to fill the screen. */
+    margin: auto 0;
   }
 
   .empty-state--compact {
@@ -1862,6 +1869,12 @@
     min-height: 0;
     overflow-y: auto;
     background: var(--surface-soft);
+    /* Column flex so a lone .empty-state child (via its margin: auto below)
+       centers in the leftover space instead of sitting at the top with a
+       big blank gap under it — the shape every sparse list took once mobile
+       forced this dialog to fill the full viewport height. */
+    display: flex;
+    flex-direction: column;
   }
 
   .archive-dialog__body .table-wrap {

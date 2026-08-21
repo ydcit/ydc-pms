@@ -718,6 +718,30 @@ PMS.Records = (function () {
         PMS.Util.fail('You cannot edit a record assigned to another IT section.', 'ACCESS_DENIED');
       }
       if (existing && PMS.Util.completionState(existing.pmsCompletion) === 'COMPLETED') {
+        // The response below stays a success on purpose - a flaky connection
+        // retrying the exact call that already completed this record must
+        // not surface as a failure. But the client no longer offers any way
+        // to reach this once a record shows as completed (Save/Complete are
+        // hidden the moment a record is read-only), so a real hit here is
+        // notable regardless: worth a durable record of who touched an
+        // already-finished PMS and when, best-effort so a logging hiccup
+        // never turns an otherwise-successful idempotent retry into one.
+        try {
+          appendSystemEvent(
+            'EDIT-ATTEMPT-' + existing.recordId + '-' + Utilities.getUuid().replace(/-/g, '').slice(0, 12).toUpperCase(),
+            'EDIT_ATTEMPT_AFTER_COMPLETION',
+            {
+              adminEmail: profile.email,
+              adminName: profile.name,
+              year: existing.maintenanceYear,
+              cycleId: existing.cycleId,
+              targetRecordId: existing.recordId,
+              mode: normalized.mode
+            }
+          );
+        } catch (error) {
+          console.warn('Edit-after-completion audit event could not be written: ' + error.message);
+        }
         var alreadyCompleted = {
           ok: true,
           recordId: existing.recordId,
@@ -913,7 +937,11 @@ PMS.Records = (function () {
       ok: true,
       recordId: record.recordId,
       idempotencyKey: record.idempotencyKey,
-      readOnly: !isOwner,
+      // Completion is meant to be final for anyone, owner included - the same
+      // rule attachEvidence already enforces ("Completed PMS evidence cannot
+      // be replaced"). Reopening your own completed record is for review,
+      // not a second pass at the answers.
+      readOnly: !isOwner || isCompleted,
       technicianName: record.technicianName,
       technicianEmail: record.technicianEmail,
       itSection: record.itSection,

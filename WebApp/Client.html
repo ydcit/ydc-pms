@@ -36,6 +36,9 @@
       dirty: false,
       modalOpen: false,
       busy: false,
+      // The page's scroll position at the moment any modal locked body
+      // scroll, restored when the last one closes (see syncBodyModalState).
+      scrollLockY: 0,
       combobox: { open: false, activeIndex: -1, matches: [] },
       tickets: {
         open: false, view: 'list', page: 1, totalPages: 1, direction: 'DESC',
@@ -377,7 +380,7 @@
           }
           button.disabled = true;
         } else if (button.dataset.wasDisabled !== undefined) {
-          button.disabled = button.dataset.wasDisabled === 'true';
+          button.disabled = button.dataset.readonlyLocked === 'true' || button.dataset.wasDisabled === 'true';
           delete button.dataset.wasDisabled;
         }
       });
@@ -3187,7 +3190,24 @@
       var deferredAssetsOpen = Boolean(state.deferredAssets && state.deferredAssets.open);
       var assetAdminOpen = Boolean(state.assetAdmin && state.assetAdmin.open);
       var draftsOpen = Boolean(state.drafts && state.drafts.open);
-      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen || deferredAssetsOpen || assetAdminOpen || draftsOpen));
+      var shouldLock = Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen || deferredAssetsOpen || assetAdminOpen || draftsOpen);
+      var alreadyLocked = document.body.classList.contains('modal-open');
+      if (shouldLock && !alreadyLocked) {
+        // overflow: hidden alone does not stop a touch-scroll from reaching
+        // the page underneath a fixed modal on iOS/Android - a swipe that
+        // starts on the backdrop, or runs past a modal's own scroll limit,
+        // drags the whole dashboard behind it and leaves the page at a
+        // different scroll position once the modal closes. Pinning the body
+        // in place with the scroll offset baked into a negative top is the
+        // standard workaround.
+        state.scrollLockY = window.scrollY || window.pageYOffset || 0;
+        document.body.style.top = '-' + state.scrollLockY + 'px';
+        document.body.classList.add('modal-open');
+      } else if (!shouldLock && alreadyLocked) {
+        document.body.classList.remove('modal-open');
+        document.body.style.top = '';
+        window.scrollTo(0, state.scrollLockY || 0);
+      }
     }
 
     function modalFocusable(root) {
@@ -6091,6 +6111,12 @@
     }
 
     function clearFormControls() {
+      // Baseline every field and button back to editable before anything
+      // else runs. populateRecord() overrides this afterward when the record
+      // being loaded actually needs it (completed, or someone else's) - a
+      // brand-new record never calls populateRecord at all, so without this
+      // it would silently stay locked from whatever was viewed last.
+      setQuestionnaireReadOnly(false, '');
       byId('questionnaire-form').reset();
       byId('maintenance-date').max = currentManilaDate();
       byId('maintenance-date').value = currentManilaDate();
@@ -6606,8 +6632,33 @@
 
     function setQuestionnaireReadOnly(isReadOnly, technicianName) {
       state.readOnly = Boolean(isReadOnly);
-      byId('questionnaire-form').querySelectorAll('input, select, textarea').forEach(function (control) {
+      var form = byId('questionnaire-form');
+      form.querySelectorAll('input, select, textarea').forEach(function (control) {
         control.disabled = state.readOnly;
+      });
+      // A disabled <input> can't be focused or typed into, but the asset
+      // combobox's dropdown toggle is a separate <button> next to it and
+      // isn't covered by that — same for every other button that mutates
+      // state (peripheral chips, checklist skip, evidence pickers). Nothing
+      // here can actually reach the server since save() rejects a write from
+      // anyone but the record's own technician, but a click that visibly
+      // "does something" on what's titled a read-only record is still worth
+      // not allowing. Step navigation is exempt on purpose - reviewing every
+      // step is the point of this view.
+      var navigationButtonIds = { 'previous-step': true, 'next-step': true, 'save-progress': true, 'complete-pms': true };
+      form.querySelectorAll('button').forEach(function (button) {
+        if (navigationButtonIds[button.id]) {
+          delete button.dataset.readonlyLocked;
+          return;
+        }
+        button.disabled = state.readOnly;
+        // setBusy() restores every button it disables back to whatever it
+        // was before, once the busy overlay clears - opening this exact
+        // record just went through that overlay ("Loading maintenance
+        // record…"), so without this marker its restore step would silently
+        // re-enable everything locked here the moment loading finishes.
+        if (state.readOnly) button.dataset.readonlyLocked = 'true';
+        else delete button.dataset.readonlyLocked;
       });
       byId('record-readonly-notice').hidden = !state.readOnly;
       byId('record-readonly-detail').textContent = state.readOnly
