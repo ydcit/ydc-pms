@@ -513,6 +513,35 @@ function PMS_adminSetup() {
 }
 
 /**
+ * Editor-visible entry point for PMS.Records.resolveDuplicateDrafts.
+ *
+ * A namespaced function like PMS.Records.resolveDuplicateDrafts never shows
+ * up in the Apps Script editor's function picker - only bare top-level
+ * functions do. Run this one directly instead. The result is logged because
+ * the editor does not render return values.
+ */
+function PMS_adminResolveDuplicateDrafts() {
+  var result = PMS.Records.resolveDuplicateDrafts();
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
+ * Editor-visible entry point for PMS.Records.deleteIncompleteRecords, run
+ * with no argument: clears every currently-open (non-completed) record
+ * across both sections. The editor's Run button cannot pass a function
+ * arguments, so deleting a specific, named list of ids still means editing
+ * this file temporarily to call PMS.Records.deleteIncompleteRecords([...])
+ * directly - this wrapper covers the "clear everything unfinished" case,
+ * which needs no arguments at all.
+ */
+function PMS_adminDeleteAllIncompleteRecords() {
+  var result = PMS.Records.deleteIncompleteRecords();
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
  * Sends a sample notification to the live recipient list.
  *
  * Run from the Apps Script editor after adding recipients. The result is logged
