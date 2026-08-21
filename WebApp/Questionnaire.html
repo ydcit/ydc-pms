@@ -60,6 +60,16 @@
 
     <form class="questionnaire__form" id="questionnaire-form" novalidate>
       <div class="questionnaire__body" id="questionnaire-body">
+        <div class="notice notice--info" id="record-readonly-notice" hidden>
+          <span class="notice__icon" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+          </span>
+          <div>
+            <strong>Viewing a completed record</strong>
+            <p id="record-readonly-detail">This record is read-only.</p>
+          </div>
+        </div>
+
         <div class="form-alert" id="form-alert" hidden tabindex="-1" role="alert">
           <span class="form-alert__icon" aria-hidden="true">
             <svg class="icon" aria-hidden="true"><use href="#i-alert-circle"></use></svg>

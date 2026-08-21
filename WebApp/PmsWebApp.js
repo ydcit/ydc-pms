@@ -113,6 +113,7 @@ function PMS_buildBootstrap_() {
     assets: [],
     metrics: null,
     recentRecords: [],
+    myDrafts: [],
     rollover: null
   };
   if (context.registered) {
@@ -121,6 +122,7 @@ function PMS_buildBootstrap_() {
     var records = PMS.Records.dashboardRecords();
     response.metrics = PMS.Metrics.dashboard({ section: context.isAdmin ? 'ALL' : context.section }, records);
     response.recentRecords = PMS.Records.recent(context, 10, records);
+    response.myDrafts = PMS.Records.myDrafts(context, records);
   }
   // Rollover status is deliberately not built here. It reads both tracker
   // sheets in full and inspects every sheet in the workbook, which is the

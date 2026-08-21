@@ -22,6 +22,11 @@
       currentStep: 1,
       recordId: '',
       idempotencyKey: '',
+      // True only while viewing another technician's completed record (an
+      // administrator opening it from Completed assets) — save() would
+      // reject a write from anyone but its owner regardless, this just keeps
+      // the form from pretending an edit here would go anywhere.
+      readOnly: false,
       selectedAsset: null,
       loadedAssetTag: '',
       // Open repairs on a loaded record's asset, read fresh from the server with
@@ -52,6 +57,7 @@
       // deferredAssets) rather than its own paged endpoint — the list is
       // capped small (100) and exists to be looked at, not paged through.
       deferredAssets: { open: false, lastFocus: null },
+      drafts: { open: false, lastFocus: null },
       assetAdmin: {
         open: false, lastFocus: null, section: '', editingTag: null, view: 'list',
         assets: [], statusSuggestions: [], sections: [], bulkPreview: null
@@ -954,6 +960,7 @@
 
       renderLocations(pick(summary, ['completionByLocation', 'byLocation', 'locations'], pick(metrics, ['completionByLocation', 'byLocation', 'locations'], [])));
       renderRecent(state.bootstrap.recentRecords || []);
+      updateDraftsBadge(state.bootstrap.myDrafts);
       renderRollover(state.bootstrap.rollover || null);
       // The server defers rollover status because it is expensive. Fetch it once
       // the dashboard is on screen so it never delays first paint.
@@ -1249,7 +1256,7 @@
     };
 
     function openArchiveModal() {
-      if (state.archive.open || state.modalOpen || state.legacyImport.open) return;
+      if (state.archive.open || state.modalOpen || state.legacyImport.open || state.drafts.open) return;
       state.archive.lastFocus = document.activeElement;
       state.archive.open = true;
       byId('archive-modal').hidden = false;
@@ -1415,6 +1422,122 @@
       var focusable = Array.prototype.slice.call(byId('deferred-assets-modal').querySelectorAll(
         'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
       )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    /* ------------------------------------------------------------------------
+       Drafts.
+
+       "Recent submissions" caps at 10 and mixes in completed work, so an old
+       unfinished draft can scroll out of view entirely. This is the uncapped,
+       drafts-only list state.bootstrap.myDrafts already carries — opening it
+       never costs a server call, same as deferred assets.
+       ------------------------------------------------------------------------ */
+
+    function draftsList() {
+      return toArray(state.bootstrap.myDrafts);
+    }
+
+    function renderDrafts() {
+      var rows = draftsList();
+      var body = byId('drafts-body');
+      body.replaceChildren();
+      byId('drafts-table-wrap').hidden = rows.length === 0;
+      byId('drafts-empty').hidden = rows.length !== 0;
+
+      rows.forEach(function (draft) {
+        var row = document.createElement('tr');
+
+        var tagCell = labelledCell('Asset tag');
+        var tagStrong = document.createElement('strong');
+        tagStrong.textContent = normalizeText(draft.assetTag) || '—';
+        tagCell.appendChild(tagStrong);
+        row.appendChild(tagCell);
+
+        var dateCell = labelledCell('Performed on');
+        dateCell.textContent = formatDate(draft.maintenanceDate);
+        row.appendChild(dateCell);
+
+        var cycleCell = labelledCell('Cycle');
+        var cycleChip = document.createElement('span');
+        cycleChip.className = 'status-chip status-chip--neutral';
+        cycleChip.textContent = normalizeText(draft.cycleId) || '—';
+        cycleCell.appendChild(cycleChip);
+        row.appendChild(cycleCell);
+
+        var progressCell = labelledCell('Progress');
+        var completionText = normalizeText(draft.pmsCompletion);
+        var decision = completionDecision(completionText);
+        var chip = document.createElement('span');
+        chip.className = 'status-chip ' + decision.className;
+        chip.textContent = decision.display;
+        chip.title = completionText;
+        progressCell.appendChild(chip);
+        row.appendChild(progressCell);
+
+        var actionCell = labelledCell('');
+        if (draft.recordId) {
+          var resume = document.createElement('button');
+          resume.className = 'table-action';
+          resume.type = 'button';
+          resume.textContent = 'Resume';
+          resume.addEventListener('click', function () {
+            closeDraftsModal();
+            openExistingRecord(draft.recordId);
+          });
+          actionCell.appendChild(resume);
+        }
+        row.appendChild(actionCell);
+
+        body.appendChild(row);
+      });
+    }
+
+    function updateDraftsBadge(drafts) {
+      var badge = byId('drafts-badge');
+      if (!badge) return;
+      var count = toArray(drafts).length;
+      badge.textContent = formatNumber(count);
+      badge.hidden = count <= 0;
+    }
+
+    function openDraftsModal() {
+      if (state.drafts.open || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      state.drafts.lastFocus = document.activeElement;
+      state.drafts.open = true;
+      byId('drafts-modal').hidden = false;
+      syncBodyModalState();
+      renderDrafts();
+      window.setTimeout(function () { byId('drafts-close').focus(); }, 0);
+    }
+
+    function closeDraftsModal() {
+      if (!state.drafts.open) return;
+      state.drafts.open = false;
+      byId('drafts-modal').hidden = true;
+      syncBodyModalState();
+      var target = state.drafts.lastFocus;
+      if (target && typeof target.focus === 'function') target.focus();
+    }
+
+    function trapDraftsFocus(event) {
+      if (!state.drafts.open || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDraftsModal();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = modalFocusable(byId('drafts-modal'));
       if (!focusable.length) return;
       var first = focusable[0];
       var last = focusable[focusable.length - 1];
@@ -1714,10 +1837,12 @@
       var actionCell = labelledCell('');
       var actions = document.createElement('div');
       actions.className = 'table-actions';
-      // The server refuses to open another technician's record, including for
-      // administrators, so only offer the action where it will succeed.
+      // The server allows opening another technician's record here only for
+      // an administrator, and only because this list is completed-only — it
+      // comes back read-only, never editable. Offer the action only where it
+      // will actually succeed.
       var ownRecord = normalizeText(record.technicianEmail).toLowerCase() === userEmail().toLowerCase();
-      if (id && ownRecord) {
+      if (id && (ownRecord || isAdmin)) {
         var open = document.createElement('button');
         open.className = 'table-action';
         open.type = 'button';
@@ -3061,7 +3186,8 @@
       var ticketsOpen = Boolean(state.tickets && state.tickets.open);
       var deferredAssetsOpen = Boolean(state.deferredAssets && state.deferredAssets.open);
       var assetAdminOpen = Boolean(state.assetAdmin && state.assetAdmin.open);
-      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen || deferredAssetsOpen || assetAdminOpen));
+      var draftsOpen = Boolean(state.drafts && state.drafts.open);
+      document.body.classList.toggle('modal-open', Boolean(state.modalOpen || state.archive.open || importOpen || ticketsOpen || deferredAssetsOpen || assetAdminOpen || draftsOpen));
     }
 
     function modalFocusable(root) {
@@ -3341,7 +3467,7 @@
     }
 
     function openLegacyImport() {
-      if (state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      if (state.modalOpen || state.archive.open || state.legacyImport.open || state.drafts.open) return;
       state.legacyImport.lastFocus = document.activeElement;
       state.legacyImport.open = true;
       resetLegacyImport();
@@ -5075,6 +5201,22 @@
       return cycles.indexOf(derived.cycleId.toUpperCase()) >= 0 || cycles.indexOf(derived.cycle.toUpperCase()) >= 0;
     }
 
+    /**
+     * The server adopts a repeated attempt on the same asset+cycle into the
+     * one existing draft rather than minting a duplicate, but that only
+     * happens once "Save progress" is actually called — this catches it one
+     * step earlier, before the technician spends time re-answering a
+     * checklist they already have an unfinished answer for.
+     */
+    function findOpenDraft(assetTag, derived) {
+      if (!derived) return null;
+      var tag = normalizeTag(assetTag);
+      var cycleId = derived.cycleId.toUpperCase();
+      return draftsList().filter(function (draft) {
+        return normalizeTag(draft.assetTag) === tag && normalizeText(draft.cycleId).toUpperCase() === cycleId;
+      })[0] || null;
+    }
+
     function inferredInfraAssetType(tag) {
       var match = /-([A-Z]+)-\d+[A-Z0-9]*$/.exec(normalizeTag(tag));
       if (!match) return '';
@@ -5932,6 +6074,7 @@
       state.currentStep = 1;
       state.recordId = '';
       state.idempotencyKey = createIdempotencyKey();
+      state.readOnly = false;
       state.selectedAsset = null;
       state.loadedAssetTag = '';
       state.recordAssetTickets = { tag: '', tickets: [] };
@@ -5990,6 +6133,7 @@
       }
       resetFormData();
       clearFormControls();
+      renderIdentity();
       byId('questionnaire-title').textContent = 'New maintenance record';
       openModal();
     }
@@ -6001,7 +6145,8 @@
           resetFormData();
           clearFormControls();
           populateRecord(record);
-          byId('questionnaire-title').textContent = 'Resume maintenance record';
+          var source = record.record || record;
+          byId('questionnaire-title').textContent = source.readOnly ? 'View completed record' : 'Resume maintenance record';
           openModal();
         })
         .catch(function (error) {
@@ -6024,6 +6169,14 @@
         tickets: source.assetTickets || []
       };
       byId('questionnaire-form').reset();
+      // Normally this strip already shows the signed-in technician (set once
+      // at bootstrap by renderIdentity()), since that person is always
+      // themselves. An administrator viewing someone else's completed record
+      // is the one case that isn't true anymore, so it is overwritten here
+      // with whoever actually performed the maintenance.
+      byId('form-technician-name').textContent = normalizeText(source.technicianName) || userName() || '—';
+      byId('form-technician-email').textContent = normalizeText(source.technicianEmail) || userEmail() || '—';
+      byId('form-technician-section').textContent = sectionLabel(source.itSection) || sectionLabel(sectionKey()) || '—';
       byId('maintenance-date').max = currentManilaDate();
       byId('maintenance-date').value = normalizeText(source.maintenanceDate);
       byId('infra-asset-type').value = normalizeText(source.assetType);
@@ -6075,11 +6228,14 @@
       updateReview();
       setStep(1, false);
       state.dirty = false;
-      byId('record-save-state').textContent = state.recordId ? 'Editing ' + state.recordId : '';
+      setQuestionnaireReadOnly(Boolean(source.readOnly), source.technicianName);
+      byId('record-save-state').textContent = state.recordId
+        ? (state.readOnly ? 'Viewing ' : 'Editing ') + state.recordId
+        : '';
     }
 
     function openModal() {
-      if (state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      if (state.modalOpen || state.archive.open || state.legacyImport.open || state.drafts.open) return;
       state.lastFocus = document.activeElement;
       state.modalOpen = true;
       state.dirty = false;
@@ -6448,8 +6604,25 @@
       return true;
     }
 
+    function setQuestionnaireReadOnly(isReadOnly, technicianName) {
+      state.readOnly = Boolean(isReadOnly);
+      byId('questionnaire-form').querySelectorAll('input, select, textarea').forEach(function (control) {
+        control.disabled = state.readOnly;
+      });
+      byId('record-readonly-notice').hidden = !state.readOnly;
+      byId('record-readonly-detail').textContent = state.readOnly
+        ? 'This is ' + (normalizeText(technicianName) || 'another technician') + '’s completed record. You can review it, but nothing here can be changed or resubmitted.'
+        : '';
+      updateFooterActions();
+    }
+
     function updateFooterActions() {
       if (!byId('complete-pms')) return;
+      byId('save-progress').hidden = state.readOnly;
+      if (state.readOnly) {
+        byId('complete-pms').hidden = true;
+        return;
+      }
       var progress = calculateFormProgress();
       // A findings assessment cannot be completed until its repair is ticketed,
       // so the button reflects that rather than failing on click.
@@ -6537,6 +6710,12 @@
         valid = false;
         first = first || byId('asset-tag');
         setFieldError('asset-tag', 'asset-error', 'Select an asset that is eligible for this cycle and asset type.');
+      } else if (state.selectedAsset.tag !== state.loadedAssetTag && findOpenDraft(state.selectedAsset.tag, derived)) {
+        var openDraft = findOpenDraft(state.selectedAsset.tag, derived);
+        valid = false;
+        first = first || byId('asset-tag');
+        setFieldError('asset-tag', 'asset-error',
+          'You already have an unfinished PMS for this asset (' + openDraft.recordId + '). Resume it from Drafts instead of starting a new one.');
       }
 
       var observedRequired = state.selectedAsset && (!state.selectedAsset.location || byId('location-incorrect').checked);
@@ -6805,6 +6984,7 @@
     function applySaveResultToDashboard(result) {
       if (result.metrics) state.bootstrap.metrics = result.metrics;
       if (Array.isArray(result.recentRecords)) state.bootstrap.recentRecords = result.recentRecords;
+      if (Array.isArray(result.myDrafts)) state.bootstrap.myDrafts = result.myDrafts;
       renderDashboard();
     }
 
@@ -6994,6 +7174,12 @@
       byId('deferred-assets-refresh').addEventListener('click', refreshDeferredAssets);
       byId('deferred-assets-search').addEventListener('input', renderDeferredAssets);
       document.addEventListener('keydown', trapDeferredAssetsFocus);
+      byId('open-drafts').addEventListener('click', openDraftsModal);
+      byId('drafts-close').addEventListener('click', closeDraftsModal);
+      document.querySelectorAll('[data-close-drafts]').forEach(function (element) {
+        element.addEventListener('click', closeDraftsModal);
+      });
+      document.addEventListener('keydown', trapDraftsFocus);
       byId('close-questionnaire').addEventListener('click', function () { requestCloseModal(false); });
       document.querySelectorAll('[data-close-modal]').forEach(function (element) {
         element.addEventListener('click', function () { requestCloseModal(false); });

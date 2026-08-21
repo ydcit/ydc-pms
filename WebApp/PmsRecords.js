@@ -257,8 +257,103 @@ PMS.Records = (function () {
       // assetFindings sits directly next to assessmentResult in every record
       // sheet, so this rides the same clustered read instead of opening a
       // second one — needed so the deferred-assets list can show a reason.
-      'assetFindings', 'pmsCompletion'
+      'assetFindings', 'pmsCompletion', 'dataQualityFlags'
     ]);
+  }
+
+  /**
+   * The caller's own unfinished maintenance records, section-scoped, for the
+   * Drafts list and for the "you already have an unfinished PMS for this
+   * asset" check on the client. "Recent submissions" caps at 10 and mixes in
+   * completed work, so an old open draft can scroll out of view entirely -
+   * this is deliberately uncapped and drafts-only.
+   */
+  function myDrafts(profile, recordSet) {
+    var records = Array.isArray(recordSet) ? recordSet : dashboardRecords();
+    return records
+      .filter(function (record) {
+        if (!isMaintenanceRecord(record) || record.recordType === 'LEGACY_SEED') return false;
+        if (record.technicianEmail !== profile.email || record.itSection !== profile.section) return false;
+        if (PMS.Util.completionState(record.pmsCompletion) === 'COMPLETED') return false;
+        if (hasDataQualityFlag(record, 'SUPERSEDED_DUPLICATE')) return false;
+        return true;
+      })
+      .map(function (record) {
+        return {
+          recordId: record.recordId,
+          maintenanceDate: maintenanceDateText(record.maintenanceDate),
+          cycleId: record.cycleId,
+          assetTag: record.assetTag,
+          assessmentResult: record.assessmentResult,
+          pmsCompletion: record.pmsCompletion,
+          updatedAt: record.updatedAt || record.createdAt || ''
+        };
+      })
+      .sort(function (a, b) { return String(b.updatedAt).localeCompare(String(a.updatedAt)); });
+  }
+
+  function completionPercentOf(record) {
+    var match = /(\d+)%/.exec(String(record.pmsCompletion || ''));
+    return match ? Number(match[1]) : 0;
+  }
+
+  /**
+   * Console-only, matching PMS.Auth.adminSetAssetManager's convention: no
+   * PMS_api* wrapper, run once from the Apps Script editor when needed.
+   *
+   * A repeated "New maintenance record" attempt on an asset that failed
+   * partway through more than once used to mint a fresh row and a fresh
+   * PMS-YYYY-T#-NNN id every time (see PMS-2026-T2-068 and -069, the case
+   * this exists to clean up) - save() no longer does that going forward, but
+   * this cleans up whatever it already left behind. For every
+   * (section, asset tag, cycle, technician) group with more than one open
+   * record, the one with the most checklist progress is kept - ties broken
+   * by whichever was updated most recently - and the rest are flagged
+   * SUPERSEDED_DUPLICATE rather than deleted, so the row stays as an audit
+   * trail but drops out of Recent submissions, Drafts, and future duplicate
+   * adoption.
+   */
+  function resolveDuplicateDrafts() {
+    PMS.Auth.requireAdmin();
+    var records = readRecordFields([
+      'recordId', 'recordType', 'itSection', 'assetTag', 'cycleId',
+      'technicianEmail', 'pmsCompletion', 'updatedAt', 'createdAt', 'dataQualityFlags'
+    ]);
+    var groups = {};
+    records.forEach(function (record) {
+      if (!isMaintenanceRecord(record) || record.recordType === 'LEGACY_SEED') return;
+      if (PMS.Util.completionState(record.pmsCompletion) === 'COMPLETED') return;
+      if (hasDataQualityFlag(record, 'SUPERSEDED_DUPLICATE')) return;
+      var key = [record.itSection, record.assetTag, record.cycleId, PMS.Util.normalizeEmail(record.technicianEmail)].join('|');
+      (groups[key] = groups[key] || []).push(record);
+    });
+
+    var resolvedGroups = [];
+    Object.keys(groups).forEach(function (key) {
+      var group = groups[key];
+      if (group.length < 2) return;
+      group.sort(function (a, b) {
+        return completionPercentOf(b) - completionPercentOf(a) ||
+          String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+      });
+      var kept = group[0];
+      var superseded = group.slice(1);
+      superseded.forEach(function (record) {
+        var full = findByRecordId(record.recordId, record.itSection);
+        if (!full) return;
+        addDataQualityFlag(full, 'SUPERSEDED_DUPLICATE');
+        full.updatedAt = PMS.Util.nowIso();
+        writeRecord(sheetForStoredRecord(full), full, full._rowNumber);
+      });
+      resolvedGroups.push({
+        assetTag: kept.assetTag,
+        itSection: kept.itSection,
+        cycleId: kept.cycleId,
+        kept: kept.recordId,
+        superseded: superseded.map(function (record) { return record.recordId; })
+      });
+    });
+    return { ok: true, groupsResolved: resolvedGroups.length, groups: resolvedGroups };
   }
 
   function findRowByColumn(sheet, key, value, columns) {
@@ -337,6 +432,31 @@ PMS.Records = (function () {
 
   function findByIdempotencyKey(idempotencyKey, sectionKey) {
     return findByColumn('idempotencyKey', idempotencyKey, sectionKey);
+  }
+
+  /**
+   * A fresh idempotencyKey with no recordId looks like a brand-new attempt,
+   * but a browser reload or a retry after an earlier failure loses both of
+   * those - the sheet still remembers the unfinished draft even though the
+   * browser forgot it. This is the natural-key fallback save() reaches for
+   * before minting a second row (and a second PMS-YYYY-T#-NNN id) for what
+   * is really the same asset being worked a second time by the same person.
+   */
+  function findOpenDraftForAsset(sectionKey, assetTag, cycleId, technicianEmail) {
+    var tag = PMS.Util.normalizeAssetTag(assetTag);
+    var email = PMS.Util.normalizeEmail(technicianEmail);
+    var match = null;
+    readRecordFields(['recordId', 'recordType', 'itSection', 'assetTag', 'cycleId', 'technicianEmail', 'pmsCompletion', 'dataQualityFlags'])
+      .forEach(function (record) {
+        if (match) return;
+        if (!isMaintenanceRecord(record) || record.recordType === 'LEGACY_SEED') return;
+        if (record.itSection !== sectionKey || record.assetTag !== tag || record.cycleId !== cycleId) return;
+        if (PMS.Util.normalizeEmail(record.technicianEmail) !== email) return;
+        if (PMS.Util.completionState(record.pmsCompletion) === 'COMPLETED') return;
+        if (hasDataQualityFlag(record, 'SUPERSEDED_DUPLICATE')) return;
+        match = record;
+      });
+    return match ? findByRecordId(match.recordId, sectionKey) : null;
   }
 
   function ensureRowCapacity(sheet, rowNumber) {
@@ -576,6 +696,21 @@ PMS.Records = (function () {
         if (!existing) PMS.Util.fail('The PMS draft was not found. Start a new questionnaire.', 'NOT_FOUND');
       }
       if (!existing) existing = findByIdempotencyKey(normalized.idempotencyKey, profile.section);
+      if (!existing) {
+        existing = findOpenDraftForAsset(profile.section, normalized.assetTag, normalized.cycle.cycleId, profile.email);
+        if (existing) {
+          // Adopting by natural key, not by the recordId/idempotencyKey the
+          // client actually sent, means the immutability check just below
+          // would otherwise reject this exact case on sight (a new attempt
+          // legitimately carries a fresh idempotencyKey, and very often a
+          // later exact date within the same cycle). Sync those two fields
+          // to what was just submitted before that check runs; section,
+          // asset tag, and cycle are already guaranteed equal by the lookup.
+          existing.idempotencyKey = normalized.idempotencyKey;
+          existing.maintenanceDate = normalized.maintenanceDate;
+          if (profile.section === 'INFRA_SECURITY') existing.assetType = normalized.assetType;
+        }
+      }
       if (existing && existing.technicianEmail !== profile.email) {
         PMS.Util.fail('You cannot edit another technician’s record.', 'ACCESS_DENIED');
       }
@@ -719,6 +854,7 @@ PMS.Records = (function () {
         var refreshedRecords = dashboardRecords();
         result.metrics = PMS.Metrics.dashboard({ section: profile.isAdmin ? 'ALL' : profile.section }, refreshedRecords);
         result.recentRecords = recent(profile, 10, refreshedRecords);
+        result.myDrafts = myDrafts(profile, refreshedRecords);
       } catch (error) {
         console.error('Post-save dashboard refresh failed: ' + error.message);
       }
@@ -743,7 +879,14 @@ PMS.Records = (function () {
     var profile = PMS.Auth.requireProfile();
     var record = findByRecordId(recordId);
     if (!record) PMS.Util.fail('PMS record was not found.', 'NOT_FOUND');
-    if (record.technicianEmail !== profile.email) {
+    var isOwner = record.technicianEmail === profile.email;
+    var isCompleted = PMS.Util.completionState(record.pmsCompletion) === 'COMPLETED';
+    // An administrator may look at a completed record without being its
+    // technician - the Completed assets archive is meant to be reviewable,
+    // not just re-openable by whoever filed it. A still-open draft stays
+    // owner-only: nobody else should be reading someone's in-progress,
+    // unpolished answers.
+    if (!isOwner && !(profile.isAdmin && isCompleted)) {
       PMS.Util.fail('You cannot open another technician’s record.', 'ACCESS_DENIED');
     }
     if (record.itSection === 'INFRA_SECURITY' && record._sheetName === PMS.CONFIG.RESPONSE_SHEET &&
@@ -770,6 +913,10 @@ PMS.Records = (function () {
       ok: true,
       recordId: record.recordId,
       idempotencyKey: record.idempotencyKey,
+      readOnly: !isOwner,
+      technicianName: record.technicianName,
+      technicianEmail: record.technicianEmail,
+      itSection: record.itSection,
       maintenanceDate: maintenanceDateText(record.maintenanceDate),
       formType: record.formType || record.itSection,
       assetType: record.assetType || '',
@@ -1749,6 +1896,8 @@ PMS.Records = (function () {
     allRecords: allRecords,
     readRecordFields: readRecordFields,
     dashboardRecords: dashboardRecords,
+    myDrafts: myDrafts,
+    resolveDuplicateDrafts: resolveDuplicateDrafts,
     findByRecordId: findByRecordId,
     findByIdempotencyKey: findByIdempotencyKey,
     save: save,

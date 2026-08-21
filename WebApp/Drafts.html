@@ -1,0 +1,44 @@
+<div class="modal-layer" id="drafts-modal" hidden>
+  <div class="modal-backdrop" data-close-drafts aria-hidden="true"></div>
+  <section class="archive-dialog" role="dialog" aria-modal="true" aria-labelledby="drafts-title" aria-describedby="drafts-summary">
+    <header class="archive-dialog__header">
+      <div class="archive-dialog__title-row">
+        <div>
+          <p class="eyebrow">Unfinished work</p>
+          <h1 id="drafts-title">Your drafts</h1>
+          <p class="archive-dialog__summary" id="drafts-summary">Maintenance you started but have not completed yet.</p>
+        </div>
+        <div class="archive-dialog__header-actions">
+          <button class="icon-button" id="drafts-close" type="button" aria-label="Close drafts">
+            <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="archive-dialog__body" id="drafts-dialog-body">
+      <div class="table-wrap" id="drafts-table-wrap">
+        <table class="table--cards">
+          <thead>
+            <tr>
+              <th scope="col">Asset tag</th>
+              <th scope="col">Performed on</th>
+              <th scope="col">Cycle</th>
+              <th scope="col">Progress</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="drafts-body"></tbody>
+        </table>
+      </div>
+
+      <div class="empty-state" id="drafts-empty" hidden>
+        <span class="empty-state__art" aria-hidden="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-clock"></use></svg>
+        </span>
+        <h3>No unfinished drafts</h3>
+        <p>A maintenance record you save but do not complete will be listed here so you can pick it back up.</p>
+      </div>
+    </div>
+  </section>
+</div>
