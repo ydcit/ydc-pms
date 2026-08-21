@@ -6679,8 +6679,14 @@
         else delete button.dataset.readonlyLocked;
       });
       byId('record-readonly-notice').hidden = !state.readOnly;
+      // Kept short on purpose: the original sentence wrapped to three lines
+      // on a phone-width screen, making the banner look far bigger than a
+      // one-line fact needed to be.
+      byId('record-readonly-title').textContent = state.readOnly
+        ? (normalizeText(technicianName) || 'Another technician') + '’s completed record'
+        : '';
       byId('record-readonly-detail').textContent = state.readOnly
-        ? 'This is ' + (normalizeText(technicianName) || 'another technician') + '’s completed record. You can review it, but nothing here can be changed or resubmitted.'
+        ? 'Read-only — nothing here can be changed.'
         : '';
       updateFooterActions();
     }
