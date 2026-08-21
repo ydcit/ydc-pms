@@ -322,7 +322,9 @@ PMS.Auth = (function () {
         name: existing.name || displayNameFromEmail(email),
         section: section.key,
         role: isAdmin(email) ? 'ADMIN' : 'TECHNICIAN',
-        active: true,
+        // Not existing.active === true: an unset value on a brand-new row
+        // must still default active, so only an explicit false carries over.
+        active: existing.active !== false,
         registeredAt: existing.registeredAt || timestamp,
         updatedAt: timestamp,
         updatedBy: admin.email,
@@ -334,6 +336,86 @@ PMS.Auth = (function () {
     });
     invalidateContext();
     return { ok: true, email: email, section: section.key, sectionLabel: section.label };
+  }
+
+  /** Safe subset of a roster row for the admin user-management screen. */
+  function summarizeUser(profile) {
+    if (!profile) return null;
+    var section = profile.section && PMS.CONFIG.SECTIONS[profile.section] ? PMS.CONFIG.SECTIONS[profile.section] : null;
+    return {
+      email: profile.email,
+      name: profile.name,
+      section: profile.section || '',
+      sectionLabel: section ? section.label : '',
+      role: profile.role,
+      isAdmin: Boolean(profile.isAdmin),
+      canManageAssets: Boolean(profile.canManageAssets),
+      active: profile.active !== false,
+      registeredAt: profile.registeredAt || '',
+      lastLoginAt: profile.lastLoginAt || ''
+    };
+  }
+
+  /** Administrator-only: the full roster for the user-management screen. */
+  function adminListUsers() {
+    requireAdmin();
+    var users = PMS.Users.listProfiles().map(summarizeUser).sort(function (a, b) {
+      return a.email.localeCompare(b.email);
+    });
+    return { ok: true, users: users };
+  }
+
+  /** Administrator-only: bare-provisions a new roster row so that email can self-register at next sign-in. */
+  function adminAddUser(userEmail) {
+    var admin = requireAdmin();
+    var email = PMS.Util.normalizeEmail(userEmail);
+    var domain = '@' + PMS.CONFIG.ALLOWED_DOMAIN.toLowerCase();
+    if (!email || email.slice(-domain.length) !== domain) {
+      PMS.Util.fail('A valid YDC email is required.', 'VALIDATION_ERROR');
+    }
+    var updated = PMS.Users.update(email, function (existing) {
+      if (existing) {
+        PMS.Util.fail('That user is already on the PMS roster.', 'ALREADY_EXISTS');
+      }
+      return { email: email, updatedBy: admin.email };
+    });
+    invalidateContext();
+    return Object.assign({ ok: true }, summarizeUser(updated));
+  }
+
+  /**
+   * Administrator-only: applies IT section, Asset Manager permission and/or
+   * active status to an existing roster row in one write. Only the fields
+   * present in `changes` are touched — everything else is left exactly as it
+   * was, so editing one field can never silently reset another (a prior bug
+   * in adminSetUserSection reactivated disabled accounts this way). This
+   * never accepts isAdmin: administrator status is always recomputed from
+   * the configured admin allowlist, never a per-user editable field.
+   */
+  function adminUpdateUser(userEmail, changes) {
+    var admin = requireAdmin();
+    var email = PMS.Util.normalizeEmail(userEmail);
+    var domain = '@' + PMS.CONFIG.ALLOWED_DOMAIN.toLowerCase();
+    if (!email || email.slice(-domain.length) !== domain) {
+      PMS.Util.fail('A valid YDC email is required.', 'VALIDATION_ERROR');
+    }
+    var request = changes || {};
+    var section = request.section !== undefined ? PMS.Util.section(request.section) : null;
+    if (request.active === false && email === admin.email) {
+      PMS.Util.fail('You cannot deactivate your own account.', 'VALIDATION_ERROR');
+    }
+    var updated = PMS.Users.update(email, function (existing) {
+      if (!existing) {
+        PMS.Util.fail('That user is not on the PMS roster yet. Add them first.', 'NOT_FOUND');
+      }
+      var patch = { email: email, updatedBy: admin.email };
+      if (section) patch.section = section.key;
+      if (request.canManageAssets !== undefined) patch.canManageAssets = Boolean(request.canManageAssets);
+      if (request.active !== undefined) patch.active = Boolean(request.active);
+      return patch;
+    });
+    invalidateContext();
+    return Object.assign({ ok: true }, summarizeUser(updated));
   }
 
   /**
@@ -401,6 +483,9 @@ PMS.Auth = (function () {
     configuredAdminEmails: configuredAdminEmails,
     adminSetUserSection: adminSetUserSection,
     adminSetAssetManager: adminSetAssetManager,
+    adminListUsers: adminListUsers,
+    adminAddUser: adminAddUser,
+    adminUpdateUser: adminUpdateUser,
     diagnostics: diagnostics
   };
 })();

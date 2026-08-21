@@ -420,6 +420,31 @@ function PMS_apiAdminSetAssetManager(userEmail, granted) {
   }
 }
 
+function PMS_apiAdminListUsers() {
+  try {
+    return PMS_jsonResponse_(PMS.Auth.adminListUsers());
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiAdminAddUser(userEmail) {
+  try {
+    return PMS_jsonResponse_(PMS.Auth.adminAddUser(userEmail));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
+function PMS_apiAdminUpdateUser(request) {
+  try {
+    var payload = request || {};
+    return PMS_jsonResponse_(PMS.Auth.adminUpdateUser(payload.email, payload));
+  } catch (error) {
+    return PMS_jsonResponse_(PMS.Util.publicError(error));
+  }
+}
+
 function PMS_apiAssetAdminList(sectionKey) {
   try {
     return PMS_jsonResponse_(PMS.AssetAdmin.list(sectionKey));

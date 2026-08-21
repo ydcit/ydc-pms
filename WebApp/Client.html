@@ -65,6 +65,9 @@
         open: false, lastFocus: null, section: '', editingTag: null, view: 'list',
         assets: [], statusSuggestions: [], sections: [], bulkPreview: null
       },
+      userAdmin: {
+        open: false, lastFocus: null, editingEmail: null, view: 'list', users: []
+      },
       listsWarmed: false,
       legacyImport: {
         open: false,
@@ -971,6 +974,7 @@
       renderDangerZone();
       renderYearPurgePanel();
       renderAssetAdminButton();
+      renderUserAdminButton();
       // Ticket counts are also deferred, for the same reason.
       loadTicketSummary();
       warmListCaches();
@@ -1562,6 +1566,29 @@
       }
       if (event.key !== 'Tab') return;
       var focusable = Array.prototype.slice.call(byId('asset-admin-modal').querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    function trapUserAdminFocus(event) {
+      if (!state.userAdmin.open || state.modalOpen || state.archive.open || state.legacyImport.open) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeUserAdminModal();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      var focusable = Array.prototype.slice.call(byId('user-admin-modal').querySelectorAll(
         'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
       )).filter(function (element) { return !element.hidden && element.offsetParent !== null; });
       if (!focusable.length) return;
@@ -5241,6 +5268,253 @@
     }
 
     /* ------------------------------------------------------------------------
+       Manage users: administrator-only screen to add a bare roster row, or
+       edit an existing one's IT section, role (Technician/Asset manager) and
+       active status — the same three writes adminSetUserSection,
+       adminSetAssetManager and a plain sheet edit used to require touching
+       the PMS Users sheet by hand for. Administrator status itself is never
+       editable here; PMS.Auth always recomputes it from the configured admin
+       allowlist, never from a roster cell.
+       ------------------------------------------------------------------------ */
+
+    function renderUserAdminButton() {
+      var button = byId('open-user-admin');
+      if (!button) return;
+      button.hidden = !userIsAdmin();
+    }
+
+    function showUserAdminView(view) {
+      state.userAdmin.view = view;
+      byId('user-admin-list-view').hidden = view !== 'list';
+      byId('user-admin-form-view').hidden = view !== 'form';
+    }
+
+    function openUserAdminModal() {
+      if (!userIsAdmin()) return;
+      if (state.userAdmin.open || state.modalOpen || state.archive.open || state.legacyImport.open || state.assetAdmin.open) return;
+      state.userAdmin.lastFocus = document.activeElement;
+      state.userAdmin.open = true;
+      byId('user-admin-modal').hidden = false;
+      syncBodyModalState();
+      renderUserAdminSectionOptions();
+      showUserAdminView('list');
+      byId('user-admin-search').value = '';
+      byId('user-admin-status-filter').value = '';
+      loadUserAdminList();
+      window.setTimeout(function () { byId('user-admin-search').focus(); }, 0);
+    }
+
+    function closeUserAdminModal() {
+      if (!state.userAdmin.open) return;
+      state.userAdmin.open = false;
+      byId('user-admin-modal').hidden = true;
+      syncBodyModalState();
+      var target = state.userAdmin.lastFocus;
+      if (target && typeof target.focus === 'function') target.focus();
+    }
+
+    function renderUserAdminSectionOptions() {
+      var select = byId('user-admin-section');
+      select.replaceChildren();
+      (state.sections || []).forEach(function (section) {
+        var option = document.createElement('option');
+        option.value = section.key;
+        option.textContent = section.label;
+        select.appendChild(option);
+      });
+    }
+
+    function loadUserAdminList(options) {
+      var settings = options || {};
+      if (!settings.silent) setBusy(true, 'Loading users…');
+      return serverCall('PMS_apiAdminListUsers')
+        .then(function (data) {
+          state.userAdmin.users = toArray(data.users);
+          renderUserAdminList();
+        })
+        .catch(function (error) {
+          if (!settings.silent) showToast('Could not load users', errorMessage(error), 'danger');
+        })
+        .finally(function () { if (!settings.silent) setBusy(false); });
+    }
+
+    function userRoleChip(user) {
+      var chip = document.createElement('span');
+      if (user.isAdmin) {
+        chip.className = 'status-chip status-chip--success';
+        chip.textContent = 'Administrator';
+      } else if (user.canManageAssets) {
+        chip.className = 'status-chip status-chip--info';
+        chip.textContent = 'Asset manager';
+      } else {
+        chip.className = 'status-chip status-chip--neutral';
+        chip.textContent = 'Technician';
+      }
+      return chip;
+    }
+
+    function userActiveChip(active) {
+      var chip = document.createElement('span');
+      chip.className = 'status-chip status-chip--' + (active ? 'success' : 'danger');
+      chip.textContent = active ? 'Active' : 'Inactive';
+      return chip;
+    }
+
+    function renderUserAdminList() {
+      var all = state.userAdmin.users || [];
+      var search = normalizeText(byId('user-admin-search').value).toUpperCase();
+      var statusFilter = byId('user-admin-status-filter').value;
+      var rows = all.filter(function (user) {
+        if (statusFilter === 'ACTIVE' && !user.active) return false;
+        if (statusFilter === 'INACTIVE' && user.active) return false;
+        if (!search) return true;
+        return [user.email, user.name, user.sectionLabel].join(' ').toUpperCase().indexOf(search) >= 0;
+      });
+
+      var body = byId('user-admin-body');
+      body.replaceChildren();
+      byId('user-admin-table-wrap').hidden = rows.length === 0;
+      byId('user-admin-empty').hidden = rows.length !== 0 || all.length !== 0;
+      byId('user-admin-empty-title').textContent = all.length ? 'No matches' : 'No users yet';
+      byId('user-admin-empty-message').textContent = all.length
+        ? 'No user matches the current search or filter.'
+        : 'Add the first user by their YDC email.';
+
+      rows.forEach(function (user) {
+        var row = document.createElement('tr');
+
+        var emailCell = labelledCell('Email');
+        var emailStrong = document.createElement('strong');
+        emailStrong.textContent = user.email;
+        emailCell.appendChild(emailStrong);
+        row.appendChild(emailCell);
+
+        var sectionCell = labelledCell('Section');
+        sectionCell.textContent = user.sectionLabel || '—';
+        row.appendChild(sectionCell);
+
+        var roleCell = labelledCell('Role');
+        roleCell.appendChild(userRoleChip(user));
+        row.appendChild(roleCell);
+
+        var statusCell = labelledCell('Status');
+        statusCell.appendChild(userActiveChip(user.active));
+        row.appendChild(statusCell);
+
+        var actionCell = labelledCell('');
+        var editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'text-button';
+        editButton.textContent = 'Edit';
+        editButton.addEventListener('click', function () { startEditUser(user); });
+        actionCell.appendChild(editButton);
+        row.appendChild(actionCell);
+
+        body.appendChild(row);
+      });
+
+      byId('user-admin-range').textContent = all.length
+        ? formatNumber(rows.length) + ' of ' + formatNumber(all.length) + ' user' + (all.length === 1 ? '' : 's')
+        : '';
+    }
+
+    function resetUserAdminForm() {
+      state.userAdmin.editingEmail = null;
+      byId('user-admin-form-title').textContent = 'Add a user';
+      byId('user-admin-email').value = '';
+      byId('user-admin-email-field').hidden = false;
+      byId('user-admin-edit-fields').hidden = true;
+      byId('user-admin-active-field').hidden = true;
+      byId('user-admin-role').disabled = false;
+      byId('user-admin-role').value = 'TECHNICIAN';
+      byId('user-admin-role-admin-note').hidden = true;
+      byId('user-admin-section').value = '';
+      byId('user-admin-active').checked = true;
+      byId('user-admin-active').disabled = false;
+      byId('user-admin-form-error').hidden = true;
+      byId('user-admin-form-submit').querySelector('span').textContent = 'Add user';
+      byId('user-admin-form-submit-icon').querySelector('use').setAttribute('href', '#i-plus');
+    }
+
+    function startAddUser() {
+      resetUserAdminForm();
+      showUserAdminView('form');
+      window.setTimeout(function () { byId('user-admin-email').focus(); }, 0);
+    }
+
+    function startEditUser(user) {
+      resetUserAdminForm();
+      state.userAdmin.editingEmail = user.email;
+      byId('user-admin-form-title').textContent = 'Edit ' + user.email;
+      byId('user-admin-email-field').hidden = true;
+      byId('user-admin-edit-fields').hidden = false;
+      byId('user-admin-active-field').hidden = false;
+      byId('user-admin-section').value = user.section || '';
+      if (user.isAdmin) {
+        byId('user-admin-role').value = 'ASSET_MANAGER';
+        byId('user-admin-role').disabled = true;
+        byId('user-admin-role-admin-note').hidden = false;
+      } else {
+        byId('user-admin-role').value = user.canManageAssets ? 'ASSET_MANAGER' : 'TECHNICIAN';
+      }
+      var isSelf = user.email === userEmail();
+      byId('user-admin-active').checked = user.active !== false;
+      byId('user-admin-active').disabled = isSelf;
+      byId('user-admin-form-submit').querySelector('span').textContent = 'Save changes';
+      byId('user-admin-form-submit-icon').querySelector('use').setAttribute('href', '#i-check');
+      showUserAdminView('form');
+      window.setTimeout(function () { byId('user-admin-section').focus(); }, 0);
+    }
+
+    function submitUserAdminForm(event) {
+      event.preventDefault();
+      var editing = state.userAdmin.editingEmail;
+      var errorTarget = byId('user-admin-form-error');
+      errorTarget.hidden = true;
+
+      if (!editing) {
+        var email = normalizeText(byId('user-admin-email').value).toLowerCase();
+        if (!email) {
+          errorTarget.hidden = false;
+          errorTarget.textContent = 'A YDC email is required.';
+          return;
+        }
+        setBusy(true, 'Adding user…');
+        serverCall('PMS_apiAdminAddUser', email)
+          .then(function () {
+            showToast('User added', email + ' can now sign in and register their section.', 'success');
+            showUserAdminView('list');
+            return loadUserAdminList({ silent: true });
+          })
+          .catch(function (error) {
+            errorTarget.hidden = false;
+            errorTarget.textContent = errorMessage(error);
+          })
+          .finally(function () { setBusy(false); });
+        return;
+      }
+
+      var payload = {
+        email: editing,
+        section: byId('user-admin-section').value,
+        canManageAssets: byId('user-admin-role').value === 'ASSET_MANAGER',
+        active: byId('user-admin-active').disabled ? undefined : byId('user-admin-active').checked
+      };
+      setBusy(true, 'Saving user…');
+      serverCall('PMS_apiAdminUpdateUser', payload)
+        .then(function () {
+          showToast('User updated', editing + ' was updated.', 'success');
+          showUserAdminView('list');
+          return loadUserAdminList({ silent: true });
+        })
+        .catch(function (error) {
+          errorTarget.hidden = false;
+          errorTarget.textContent = errorMessage(error);
+        })
+        .finally(function () { setBusy(false); });
+    }
+
+    /* ------------------------------------------------------------------------
        Asset combobox.
 
        Replaces the native <datalist>, which cannot be styled and whose popup
@@ -7382,6 +7656,18 @@
       byId('asset-bulk-apply').addEventListener('click', applyAssetBulkChanges);
       byId('asset-admin-bulk-back').addEventListener('click', function () { showAssetAdminView('list'); });
       document.addEventListener('keydown', trapAssetAdminFocus);
+      byId('open-user-admin').addEventListener('click', openUserAdminModal);
+      byId('user-admin-close').addEventListener('click', closeUserAdminModal);
+      document.querySelectorAll('[data-close-user-admin]').forEach(function (element) {
+        element.addEventListener('click', closeUserAdminModal);
+      });
+      byId('user-admin-refresh').addEventListener('click', function () { loadUserAdminList(); });
+      byId('user-admin-add').addEventListener('click', startAddUser);
+      byId('user-admin-search').addEventListener('input', renderUserAdminList);
+      byId('user-admin-status-filter').addEventListener('change', renderUserAdminList);
+      byId('user-admin-form').addEventListener('submit', submitUserAdminForm);
+      byId('user-admin-form-back').addEventListener('click', function () { showUserAdminView('list'); });
+      document.addEventListener('keydown', trapUserAdminFocus);
       document.addEventListener('keydown', trapModalFocus);
       window.addEventListener('beforeunload', function (event) {
         var questionnaireDirty = state.modalOpen && state.dirty;

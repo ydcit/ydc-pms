@@ -1,0 +1,137 @@
+<div class="modal-layer" id="user-admin-modal" hidden>
+  <div class="modal-backdrop" data-close-user-admin aria-hidden="true"></div>
+  <section class="archive-dialog" role="dialog" aria-modal="true"
+           aria-labelledby="user-admin-title" aria-describedby="user-admin-summary">
+    <header class="archive-dialog__header">
+      <div class="archive-dialog__title-row">
+        <div>
+          <p class="eyebrow">Access control</p>
+          <h1 id="user-admin-title">Manage users</h1>
+          <p class="archive-dialog__summary" id="user-admin-summary">
+            Section, role and status update immediately — no sheet editing required.
+          </p>
+        </div>
+        <div class="archive-dialog__header-actions">
+          <button class="button button--primary button--small" id="user-admin-add" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>
+            <span>Add user</span>
+          </button>
+          <button class="button button--quiet button--small" id="user-admin-refresh" type="button">
+            <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+            <span>Refresh</span>
+          </button>
+          <button class="icon-button" id="user-admin-close" type="button" aria-label="Close manage users">
+            <svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="archive-toolbar" id="user-admin-toolbar">
+        <div class="field archive-toolbar__search">
+          <label class="sr-only" for="user-admin-search">Search users</label>
+          <div class="search-input">
+            <span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg></span>
+            <input id="user-admin-search" type="search" autocomplete="off" placeholder="Search email or name">
+          </div>
+        </div>
+
+        <div class="field archive-toolbar__filter">
+          <label class="sr-only" for="user-admin-status-filter">Filter by status</label>
+          <div class="select-wrap">
+            <select id="user-admin-status-filter">
+              <option value="">All statuses</option>
+              <option value="ACTIVE">Active</option>
+              <option value="INACTIVE">Inactive</option>
+            </select>
+            <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="archive-dialog__body" id="user-admin-dialog-body">
+
+      <!-- ------------------------------------------------------ list view -->
+      <div id="user-admin-list-view">
+        <div class="table-wrap" id="user-admin-table-wrap">
+          <table class="table--cards">
+            <thead>
+              <tr>
+                <th scope="col">Email</th>
+                <th scope="col">Section</th>
+                <th scope="col">Role</th>
+                <th scope="col">Status</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="user-admin-body"></tbody>
+          </table>
+        </div>
+
+        <div class="empty-state" id="user-admin-empty" hidden>
+          <span class="empty-state__art" aria-hidden="true">
+            <svg class="icon" aria-hidden="true"><use href="#i-user-check"></use></svg>
+          </span>
+          <h3 id="user-admin-empty-title">No users yet</h3>
+          <p id="user-admin-empty-message">Add the first user by their YDC email.</p>
+        </div>
+      </div>
+
+      <!-- ------------------------------------------------------ form view -->
+      <div id="user-admin-form-view" hidden>
+        <button class="text-button ticket-back" id="user-admin-form-back" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+          <span>Back to users</span>
+        </button>
+
+        <form class="ticket-create" id="user-admin-form">
+          <h2 id="user-admin-form-title">Add a user</h2>
+
+          <div class="field" id="user-admin-email-field">
+            <label for="user-admin-email">YDC email</label>
+            <input id="user-admin-email" type="email" autocomplete="off" spellcheck="false" maxlength="254" placeholder="name@ydc.com.ph">
+          </div>
+
+          <div class="field-grid" id="user-admin-edit-fields" hidden>
+            <div class="field">
+              <label for="user-admin-section">IT section</label>
+              <div class="select-wrap">
+                <select id="user-admin-section"></select>
+                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </div>
+            </div>
+            <div class="field">
+              <label for="user-admin-role">Role</label>
+              <div class="select-wrap">
+                <select id="user-admin-role">
+                  <option value="TECHNICIAN">Technician</option>
+                  <option value="ASSET_MANAGER">Asset manager</option>
+                </select>
+                <svg class="icon select-wrap__chevron" aria-hidden="true"><use href="#i-chevron-down"></use></svg>
+              </div>
+              <p class="ticket-update__hint" id="user-admin-role-admin-note" hidden>
+                This account is an administrator, set outside the app. That already includes every asset-manager permission.
+              </p>
+            </div>
+          </div>
+
+          <label class="check-control" for="user-admin-active" id="user-admin-active-field" hidden>
+            <input id="user-admin-active" type="checkbox">
+            <span>Active — unchecking blocks sign-in without deleting their history.</span>
+          </label>
+
+          <p class="field-error" id="user-admin-form-error" hidden></p>
+
+          <button class="button button--primary" id="user-admin-form-submit" type="submit">
+            <svg class="icon" aria-hidden="true" id="user-admin-form-submit-icon"><use href="#i-plus"></use></svg>
+            <span>Add user</span>
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <footer class="archive-dialog__footer">
+      <span class="archive-pager__status" id="user-admin-range" aria-live="polite"></span>
+    </footer>
+  </section>
+</div>
