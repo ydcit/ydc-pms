@@ -12,6 +12,10 @@ var PMS = PMS || {};
 PMS.Evidence = (function () {
   var TOKEN_VERSION = '1';
   var CACHE_SECONDS = 21600;
+  // PMS-2026-T2-014: a per-cycle sequence, not the old 32-char hex id
+  // (PmsRecords.js nextRecordId). The sequence is zero-padded to 3 digits but
+  // not capped at 3 — \d{3,} so a cycle that passes 999 records keeps working.
+  var RECORD_ID_PATTERN = /^PMS-\d{4}-T[123]-\d{3,}$/;
   var DESCRIPTOR_FIELDS = [
     'tokenVersion', 'evidenceKind', 'folderId', 'fileId', 'fileName', 'url',
     'mimeType', 'sizeBytes', 'sha256', 'uploadedAt', 'uploadedBy', 'recordId',
@@ -143,7 +147,7 @@ PMS.Evidence = (function () {
         !Number.isInteger(descriptor.sizeBytes) || descriptor.sizeBytes < 1 ||
         descriptor.sizeBytes > PMS.CONFIG.MAX_EVIDENCE_BYTES ||
         !/^[a-f0-9]{64}$/.test(descriptor.sha256) ||
-        !/^PMS-\d{4}-T[123]-[A-F0-9]{32}$/.test(descriptor.recordId) ||
+        !RECORD_ID_PATTERN.test(descriptor.recordId) ||
         !descriptor.idempotencyKey || PMS.CONFIG.INFRA_ASSET_TYPES.indexOf(descriptor.assetType) < 0 ||
         !descriptor.assetTag || !/^\d{4}-\d{2}-\d{2}$/.test(descriptor.maintenanceDate) ||
         !/^\d{4}-T[123]$/.test(descriptor.cycleId) || descriptor.itSection !== 'INFRA_SECURITY') {
@@ -406,7 +410,7 @@ PMS.Evidence = (function () {
     var cycle = PMS.Util.deriveCycle(maintenanceDateValue);
     var idempotencyKey = validateIdempotencyKey(source.idempotencyKey);
     var recordId = PMS.Util.cleanText(source.recordId, 100);
-    if (!recordId || !/^PMS-\d{4}-T[123]-[A-F0-9]{32}$/.test(recordId)) {
+    if (!recordId || !RECORD_ID_PATTERN.test(recordId)) {
       PMS.Util.fail('Save the PMS draft before uploading evidence.', 'EVIDENCE_DRAFT_REQUIRED');
     }
     var assetType = PMS.Validation.normalizeInfraAssetType(source.assetType);
