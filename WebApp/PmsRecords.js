@@ -356,6 +356,54 @@ PMS.Records = (function () {
     return { ok: true, groupsResolved: resolvedGroups.length, groups: resolvedGroups };
   }
 
+  /**
+   * Console-only, matching PMS.Auth.adminSetAssetManager's convention: no
+   * PMS_api* wrapper, run once from the Apps Script editor when needed.
+   *
+   * Unlike resolveDuplicateDrafts, which only flags the losing side of a
+   * duplicate pair so a still-useful draft is never touched, this actually
+   * removes rows - built for retiring the save-progress feature entirely,
+   * where an unfinished record has no future use at all once there is no
+   * more "resume" to resume into.
+   *
+   * With no argument, deletes every currently-open (non-completed)
+   * MAINTENANCE/REINSPECTION record across both sections. Pass an explicit
+   * array of record ids to scope it to exactly those - each one is still
+   * independently re-verified as non-completed right before it is deleted,
+   * so a stale or mistaken id in the list can never take a finished PMS with
+   * it. Deletes bottom row first within each sheet so earlier deletions
+   * never shift the row number of one still queued.
+   */
+  function deleteIncompleteRecords(recordIds) {
+    PMS.Auth.requireAdmin();
+    var targetIds = Array.isArray(recordIds) && recordIds.length
+      ? recordIds.reduce(function (set, id) { set[id] = true; return set; }, {})
+      : null;
+    var records = readRecordFields(['recordId', 'recordType', 'itSection', 'pmsCompletion']);
+    var bySheet = {};
+    records.forEach(function (record) {
+      if (!isMaintenanceRecord(record) || record.recordType === 'LEGACY_SEED') return;
+      if (PMS.Util.completionState(record.pmsCompletion) === 'COMPLETED') return;
+      if (targetIds && !targetIds[record.recordId]) return;
+      var full = findByRecordId(record.recordId, record.itSection);
+      if (!full) return;
+      (bySheet[full._sheetName] = bySheet[full._sheetName] || []).push(full);
+    });
+    var deleted = [];
+    Object.keys(bySheet).forEach(function (sheetName) {
+      var sheet = PMS.Assets.spreadsheet().getSheetByName(sheetName);
+      if (!sheet) return;
+      bySheet[sheetName]
+        .sort(function (a, b) { return b._rowNumber - a._rowNumber; })
+        .forEach(function (record) {
+          sheet.deleteRow(record._rowNumber);
+          deleted.push(record.recordId);
+        });
+    });
+    markRecordsChanged();
+    return { ok: true, deletedCount: deleted.length, deletedRecordIds: deleted };
+  }
+
   function findRowByColumn(sheet, key, value, columns) {
     if (!value || sheet.getLastRow() < 2) return 0;
     var column = columnIndex(key, columns || definitionForSheet(sheet).columns) + 1;
@@ -1926,6 +1974,7 @@ PMS.Records = (function () {
     dashboardRecords: dashboardRecords,
     myDrafts: myDrafts,
     resolveDuplicateDrafts: resolveDuplicateDrafts,
+    deleteIncompleteRecords: deleteIncompleteRecords,
     findByRecordId: findByRecordId,
     findByIdempotencyKey: findByIdempotencyKey,
     save: save,
