@@ -519,6 +519,7 @@ function PMS_adminSetup() {
   var baseline = PMS.Records.ensureTrackerBaseline();
   var tickets = PMS.Tickets.ensureSheets();
   var recipients = PMS.Notify.ensureSheet();
+  var reminderTrigger = PMS.Notify.ensureReminderTrigger();
   return {
     ok: true,
     userSheetName: users.getName(),
@@ -531,8 +532,10 @@ function PMS_adminSetup() {
     baseline: baseline,
     evidence: PMS.Evidence.readiness(),
     notifications: PMS.Notify.readiness(),
+    cycleReminderTrigger: reminderTrigger,
     message: 'PMS Users, both section record sheets, ticket sheets, the notification recipients sheet, ' +
-      'and evidence folders are ready. Add recipients to the ' + PMS.Notify.sheetName() +
+      'and evidence folders are ready. The daily PMS-deadline reminder trigger is installed for ' +
+      reminderTrigger.hour + ':00 ' + reminderTrigger.timeZone + '. Add recipients to the ' + PMS.Notify.sheetName() +
       ' sheet, then run PMS_notifyTest to confirm email delivery.'
   };
 }
@@ -576,6 +579,28 @@ function PMS_notifyTest() {
   var admin = PMS.Auth.requireAdmin();
   var result = PMS.Notify.sendTest(admin);
   result.readiness = PMS.Notify.readiness();
+  console.log(JSON.stringify(result, null, 2));
+  return result;
+}
+
+/**
+ * Daily trigger handler, installed by PMS_adminSetup via
+ * PMS.Notify.ensureReminderTrigger. Not user-facing: Apps Script calls this
+ * by name at the configured hour every day. Runs unconditionally - the
+ * days-remaining window check lives inside cycleDeadlineReminder itself.
+ */
+function PMS_sendCycleReminder_() {
+  return PMS.Notify.cycleDeadlineReminder();
+}
+
+/**
+ * Sends the real "days left" reminder right now, bypassing the
+ * days-remaining window, so an administrator can check the content and
+ * delivery without waiting for the cycle to actually be closing.
+ */
+function PMS_cycleReminderTest() {
+  PMS.Auth.requireAdmin();
+  var result = PMS.Notify.cycleDeadlineReminder(true);
   console.log(JSON.stringify(result, null, 2));
   return result;
 }

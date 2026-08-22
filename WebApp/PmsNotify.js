@@ -706,6 +706,123 @@ PMS.Notify = (function () {
     return result;
   }
 
+  /* ------------------------------------------------------ cycle deadline */
+
+  var CYCLE_REMINDER_HANDLER = 'PMS_sendCycleReminder_';
+
+  /**
+   * Utilities.parseDate directly, not PMS.Util.parseDateInput - that helper
+   * rejects any date later than today, which a cycle deadline almost always
+   * is until the very last day.
+   */
+  function parseCalendarDate(text) {
+    return Utilities.parseDate(text, PMS.CONFIG.TIME_ZONE, 'yyyy-MM-dd');
+  }
+
+  function daysRemainingInCycle(cycle) {
+    try {
+      var today = parseCalendarDate(PMS.Util.todayString());
+      var deadline = parseCalendarDate(cycle.deadline);
+      return Math.ceil((deadline.getTime() - today.getTime()) / 86400000);
+    } catch (error) {
+      console.warn('Could not compute days remaining for the cycle reminder: ' + error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Every active, registered user across both sections — not the separately
+   * curated Notify sheet. pmsCompleted/ticketEvent notify whoever opted in
+   * to be cc'd on events; this has to reach everyone who still has PMS work
+   * to finish, so it reads straight from the roster instead.
+   */
+  function activeRosterRecipients() {
+    var profiles;
+    try {
+      profiles = PMS.Users.listProfiles();
+    } catch (error) {
+      console.warn('Cycle reminder could not read the roster: ' + error.message);
+      return [];
+    }
+    return profiles
+      .filter(function (profile) { return profile.active !== false && profile.section; })
+      .map(function (profile) { return { email: profile.email, name: profile.name }; });
+  }
+
+  /**
+   * Daily "days left in this cycle" nudge to the whole roster. Silent
+   * outside CYCLE_REMINDER_WINDOW_DAYS before the deadline through the
+   * deadline day itself (day 0) — the trigger calls this unconditionally
+   * every day, so the window check lives here rather than in trigger setup.
+   * `force` bypasses the window for PMS_cycleReminderTest, to preview the
+   * real content without waiting for the cycle to actually be closing.
+   */
+  function cycleDeadlineReminder(force) {
+    if (!enabled()) return skipped('DISABLED');
+    try {
+      var cycle = PMS.Util.currentCycle();
+      var daysRemaining = daysRemainingInCycle(cycle);
+      if (daysRemaining === null) return skipped('DATE_ERROR');
+      if (!force && (daysRemaining > PMS.CONFIG.CYCLE_REMINDER_WINDOW_DAYS || daysRemaining < 0)) {
+        return skipped('OUTSIDE_WINDOW');
+      }
+
+      var recipients = activeRosterRecipients();
+      if (!recipients.length) return skipped('NO_RECIPIENTS');
+
+      var dayWord = daysRemaining === 1 ? 'day' : 'days';
+      var headline = daysRemaining === 0 ? 'Today Is the Last Day' : daysRemaining + ' ' + dayWord + ' Left';
+      var subject = 'PMS ' + cycle.cycleId + ' — ' + headline;
+      var subtitle = cycle.cycleId + ' closes ' + cycle.deadline;
+
+      var daysHtml = '<div style="margin:0 0 18px;padding:16px 20px;border:1px solid #dadce0;' +
+        'border-radius:8px;background:#fef7e0;text-align:center;font-family:Arial,Helvetica,sans-serif;">' +
+        '<div style="font-size:42px;font-weight:bold;color:#b45309;line-height:1;">' + escapeHtml(daysRemaining) + '</div>' +
+        '<div style="margin-top:6px;font-size:13px;color:#3c4043;">' + escapeHtml(dayWord) + ' left in the ' +
+        escapeHtml(cycle.cycleId) + ' PMS cycle</div>' +
+        '</div>';
+      var messageHtml = '<p style="margin:0;font-size:13.5px;line-height:1.5;font-family:Arial,Helvetica,sans-serif;">' +
+        'Please make sure preventive maintenance is completed for every asset in your section before the ' +
+        escapeHtml(cycle.deadline) + ' deadline.</p>';
+
+      var plain = 'Preventive Maintenance Deadline\n\n' +
+        daysRemaining + ' ' + dayWord + ' left in the ' + cycle.cycleId + ' PMS cycle.\n' +
+        'Please make sure preventive maintenance is completed for every asset in your section before the ' +
+        cycle.deadline + ' deadline.';
+
+      return send(
+        subject,
+        wrapBody('Preventive Maintenance Deadline', subtitle, daysHtml + messageHtml,
+          'Sent automatically by YDC PMS, daily until the cycle closes.'),
+        plain,
+        recipients
+      );
+    } catch (error) {
+      console.warn('Cycle deadline reminder failed: ' + error.message);
+      return { ok: false, sent: false, reason: 'BUILD_FAILED', error: error.message };
+    }
+  }
+
+  /**
+   * Installs the daily trigger that calls PMS_sendCycleReminder_. Clears any
+   * existing one first, the same idempotent pattern PmsRollover.js uses for
+   * its own continuation trigger, so re-running setup never stacks up
+   * duplicates that would send the same reminder more than once a day.
+   */
+  function ensureReminderTrigger() {
+    ScriptApp.getProjectTriggers().forEach(function (trigger) {
+      if (trigger.getHandlerFunction() === CYCLE_REMINDER_HANDLER) ScriptApp.deleteTrigger(trigger);
+    });
+    ScriptApp.newTrigger(CYCLE_REMINDER_HANDLER)
+      .timeBased()
+      .everyDays(1)
+      .atHour(PMS.CONFIG.CYCLE_REMINDER_HOUR)
+      .nearMinute(0)
+      .inTimezone(PMS.CONFIG.TIME_ZONE)
+      .create();
+    return { ok: true, handlerFunction: CYCLE_REMINDER_HANDLER, hour: PMS.CONFIG.CYCLE_REMINDER_HOUR, timeZone: PMS.CONFIG.TIME_ZONE };
+  }
+
   return {
     ensureSheet: ensureSheet,
     sheetName: sheetName,
@@ -715,6 +832,8 @@ PMS.Notify = (function () {
     pmsCompleted: pmsCompleted,
     ticketEvent: ticketEvent,
     readiness: readiness,
-    sendTest: sendTest
+    sendTest: sendTest,
+    cycleDeadlineReminder: cycleDeadlineReminder,
+    ensureReminderTrigger: ensureReminderTrigger
   };
 })();

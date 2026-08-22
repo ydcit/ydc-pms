@@ -15,6 +15,12 @@ PMS.CONFIG = {
   NOTIFY_ENABLED: true,
   NOTIFY_SENDER_NAME: 'YDC PMS',
   NOTIFY_SUBJECT_PREFIX: '[YDC PMS]',
+  // The daily "days left in this cycle" reminder stays silent until the
+  // deadline is this close, so early in a cycle doesn't get a nag nobody
+  // can act on yet.
+  CYCLE_REMINDER_WINDOW_DAYS: 50,
+  // Local hour (Asia/Manila, 24h) the daily cycle-reminder trigger fires at.
+  CYCLE_REMINDER_HOUR: 13,
   // Findings tickets are visible to every rostered user regardless of section,
   // because repairing an asset is cross-team work and any user may move a ticket
   // along. Accountability comes from the append-only log rather than from
