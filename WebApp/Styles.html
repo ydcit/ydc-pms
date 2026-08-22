@@ -1244,9 +1244,10 @@
   }
 
   /*
-     flex-wrap here is what lets .page-heading__actions' forced 100% basis
-     (below) push itself onto its own line under the title instead of
-     overflowing the row.
+     Wrapping rather than another breakpoint. Four action buttons beside a title
+     need about 1050px, so between the dialogs' 860px breakpoint and that width
+     they used to push the page sideways. Letting them fall onto their own line
+     solves every width in between without guessing at one.
   */
   .page-heading {
     margin-bottom: 24px;
@@ -1849,15 +1850,10 @@
      Completed maintenance archive
      -------------------------------------------------------------------------- */
 
-  /* flex-basis 100% forces this onto its own line below the title every
-     time - .page-heading already wraps - so it always spans the full
-     .page-container width, edge to edge with the cycle banner below it,
-     instead of only reaching as far as its buttons need. */
   .page-heading__actions {
     display: flex;
-    flex: 1 0 100%;
+    flex: none;
     align-items: center;
-    justify-content: space-between;
     gap: 10px;
   }
 
